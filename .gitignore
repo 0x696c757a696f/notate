@@ -2,6 +2,7 @@
 .gradle
 tools/android-sdk
 app/build
+app/.cxx
 build
 reversenote
 *.apk
