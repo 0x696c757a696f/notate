@@ -3,6 +3,8 @@
 tools/android-sdk
 app/build
 app/.cxx
+ocr-runtime/build
+ocr-runtime/.cxx
 build
 reversenote
 *.apk

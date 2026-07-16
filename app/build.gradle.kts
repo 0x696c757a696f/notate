@@ -25,12 +25,6 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        externalNativeBuild {
-            cmake {
-                cppFlags += listOf("-std=c++17", "-frtti", "-fexceptions")
-                arguments += listOf("-DANDROID_PLATFORM=android-26", "-DANDROID_STL=c++_shared")
-            }
-        }
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -66,13 +60,6 @@ android {
         viewBinding = true
         compose = true
         buildConfig = true
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
     }
 
     lint {
@@ -179,6 +166,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.10.0")
 
     // Local OCR full-text index
+    implementation(project(":ocr-runtime"))
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
     ksp("androidx.room:room-compiler:2.8.4")

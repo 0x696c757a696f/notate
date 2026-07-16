@@ -56,22 +56,25 @@ flowchart TD
     DB --> FTS
 ```
 
-The manual and background paths share one process-wide [`PaddleLiteOcrEngine`](../app/src/main/java/com/alexdremov/notate/ocr/PaddleLiteOcrEngine.kt). A coroutine `Mutex` serializes all calls into the native predictor, so a background job and a manual selection cannot execute inference concurrently.
+The manual and background paths share one process-wide [`PaddleLiteOcrEngine`](../ocr-runtime/src/main/java/com/alexdremov/notate/ocr/PaddleLiteOcrEngine.kt). A coroutine `Mutex` serializes all calls into the native predictor, so a background job and a manual selection cannot execute inference concurrently.
+
+The complete inference boundary is built as the independently versioned `com.alexdremov.notate:ppocrv3-runtime:1.0.0` Android library. Notate currently consumes the sibling `:ocr-runtime` project so changes can be tested atomically; the module's Maven publication produces the same coordinate for extraction into a separate release repository. The app module owns canvas behavior, indexing, WorkManager, and UI, while the runtime AAR owns model installation, Paddle Lite invocation, native preprocessing/postprocessing, and its native dependencies.
 
 ## Source map
 
 | Area | Primary implementation |
 |---|---|
-| Kotlin OCR contract and data objects | [`OcrModels.kt`](../app/src/main/java/com/alexdremov/notate/ocr/OcrModels.kt) |
-| Model extraction and verification | [`OcrAssetManager.kt`](../app/src/main/java/com/alexdremov/notate/ocr/OcrAssetManager.kt) |
-| Shared inference engine | [`PaddleLiteOcrEngine.kt`](../app/src/main/java/com/alexdremov/notate/ocr/PaddleLiteOcrEngine.kt) |
+| Runtime AAR build and publication | [`ocr-runtime/build.gradle.kts`](../ocr-runtime/build.gradle.kts) |
+| Kotlin OCR contract and data objects | [`OcrModels.kt`](../ocr-runtime/src/main/java/com/alexdremov/notate/ocr/OcrModels.kt) |
+| Model extraction and verification | [`OcrAssetManager.kt`](../ocr-runtime/src/main/java/com/alexdremov/notate/ocr/OcrAssetManager.kt) |
+| Shared inference engine | [`PaddleLiteOcrEngine.kt`](../ocr-runtime/src/main/java/com/alexdremov/notate/ocr/PaddleLiteOcrEngine.kt) |
 | Stroke rasterization and coordinate mapping | [`StrokeOcrRasterizer.kt`](../app/src/main/java/com/alexdremov/notate/ocr/StrokeOcrRasterizer.kt) |
 | Reading order and converted-text placement | [`OcrConversionPlanner.kt`](../app/src/main/java/com/alexdremov/notate/ocr/OcrConversionPlanner.kt) |
-| Java/JNI bridge | [`OCRPredictorNative.java`](../app/src/main/java/com/baidu/paddle/lite/demo/ocr/OCRPredictorNative.java), [`native.cpp`](../app/src/main/cpp/native.cpp) |
-| Detector/recognizer orchestration | [`ocr_ppredictor.cpp`](../app/src/main/cpp/ocr_ppredictor.cpp) |
-| DB detector postprocessing | [`ocr_db_post_process.cpp`](../app/src/main/cpp/ocr_db_post_process.cpp) |
-| Crop and recognition preprocessing | [`ocr_crnn_process.cpp`](../app/src/main/cpp/ocr_crnn_process.cpp) |
-| Native build | [`CMakeLists.txt`](../app/src/main/cpp/CMakeLists.txt) |
+| Java/JNI bridge | [`OCRPredictorNative.java`](../ocr-runtime/src/main/java/com/alexdremov/notate/ocr/OCRPredictorNative.java), [`native.cpp`](../ocr-runtime/src/main/cpp/native.cpp) |
+| Detector/recognizer orchestration | [`ocr_ppredictor.cpp`](../ocr-runtime/src/main/cpp/ocr_ppredictor.cpp) |
+| DB detector postprocessing | [`ocr_db_post_process.cpp`](../ocr-runtime/src/main/cpp/ocr_db_post_process.cpp) |
+| Crop and recognition preprocessing | [`ocr_crnn_process.cpp`](../ocr-runtime/src/main/cpp/ocr_crnn_process.cpp) |
+| Native build | [`CMakeLists.txt`](../ocr-runtime/src/main/cpp/CMakeLists.txt) |
 | Room schema and DAO | [`OcrIndexDatabase.kt`](../app/src/main/java/com/alexdremov/notate/ocr/index/OcrIndexDatabase.kt), [`OcrIndexDao.kt`](../app/src/main/java/com/alexdremov/notate/ocr/index/OcrIndexDao.kt) |
 | Incremental index writer | [`OcrIndexWriter.kt`](../app/src/main/java/com/alexdremov/notate/ocr/index/OcrIndexWriter.kt) |
 | Query normalization and verification | [`OcrSearchNormalizer.kt`](../app/src/main/java/com/alexdremov/notate/ocr/index/OcrSearchNormalizer.kt), [`OcrSearchRepository.kt`](../app/src/main/java/com/alexdremov/notate/ocr/index/OcrSearchRepository.kt) |
@@ -79,17 +82,17 @@ The manual and background paths share one process-wide [`PaddleLiteOcrEngine`](.
 | Manual selection UI | [`OnyxCanvasView.kt`](../app/src/main/java/com/alexdremov/notate/ui/OnyxCanvasView.kt), [`SelectionActionPopup.kt`](../app/src/main/java/com/alexdremov/notate/ui/dialog/SelectionActionPopup.kt) |
 | Global search UI | [`MainActivity.kt`](../app/src/main/java/com/alexdremov/notate/MainActivity.kt), [`OcrSearchResultsScreen.kt`](../app/src/main/java/com/alexdremov/notate/ui/home/OcrSearchResultsScreen.kt) |
 | Settings | [`SettingsDialog.kt`](../app/src/main/java/com/alexdremov/notate/ui/home/SettingsDialog.kt) |
-| Packaged versions and checksums | [`MODEL_MANIFEST.json`](../app/src/main/assets/ocr/MODEL_MANIFEST.json) |
+| Packaged versions and checksums | [`MODEL_MANIFEST.json`](../ocr-runtime/src/main/assets/ocr/MODEL_MANIFEST.json) |
 
 ## Android packaging
 
 ### Supported ABI and toolchain
 
-The application build is restricted to `arm64-v8a` by `abiFilters` in [`app/build.gradle.kts`](../app/build.gradle.kts). The native bridge is compiled as C++17 with CMake 3.22.1 and Android NDK 28.2.13676358. The minimum application SDK is 26.
+The application and runtime builds are restricted to `arm64-v8a` by `abiFilters` in [`app/build.gradle.kts`](../app/build.gradle.kts) and [`ocr-runtime/build.gradle.kts`](../ocr-runtime/build.gradle.kts). The native bridge is compiled as C++17 with CMake 3.22.1 and Android NDK 28.2.13676358. The minimum application and library SDK is 26.
 
 Restricting the app to ARM64 is important: `PaddleLiteOcrEngine.isAvailable()` requires `arm64-v8a`, and only an ARM64 Paddle Lite shared object is bundled. This build will not install or run as an OCR-capable APK on a 32-bit-only device.
 
-The native build creates `libNative.so` and links it against:
+The runtime build creates `libnotate_ppocrv3.so` and links it against:
 
 - `libpaddle_light_api_shared.so`
 - `libopencv_java4.so`
@@ -97,7 +100,15 @@ The native build creates `libNative.so` and links it against:
 - EGL and GLESv2, although OpenCL/GPU inference is disabled by configuration
 - Android logging
 
-CMake copies the Paddle Lite and OpenCV shared objects into the native output directory so Gradle packages them with `libNative.so`. The app also packages `libc++_shared.so`. The JNI Java classes are protected from R8 renaming/removal in [`proguard-rules.pro`](../app/proguard-rules.pro) because the native entry points use class and method names.
+Paddle Lite's pinned ARM64 shared object is a runtime-module JNI asset. OpenCV is no longer copied into the repository: Gradle resolves `org.opencv:opencv:4.13.0`, and Android Prefab exposes its headers and `OpenCV::opencv_java4` CMake target. Gradle packages those libraries with `libnotate_ppocrv3.so` and `libc++_shared.so` in the AAR. The module's [`consumer-rules.pro`](../ocr-runtime/consumer-rules.pro) protects the name-based JNI bridge when a consuming app enables R8.
+
+Build the reusable artifact with:
+
+```bash
+./gradlew :ocr-runtime:assembleRelease
+```
+
+This creates `ocr-runtime/build/outputs/aar/ocr-runtime-release.aar`. `publishReleasePublicationToMavenLocal` publishes `com.alexdremov.notate:ppocrv3-runtime:1.0.0` to the local Maven repository; a remote release repository can use the same publication without changing the library contents.
 
 ### Bundled runtime and models
 
@@ -109,11 +120,12 @@ The installed APK contains all inference dependencies. No runtime network access
 | `rec_crnn.nb` | `ch_PP-OCRv3_rec_infer.nb` | 10.8 MB |
 | `ppocr_keys_v1.txt` | PP-OCR Chinese dictionary with Latin symbols | 27 KB |
 | `libpaddle_light_api_shared.so` | Paddle Lite 2.10 | 3.1 MB |
-| `libopencv_java4.so` | OpenCV 4.1.0 | 18.3 MB |
+| `libopencv_java4.so` | OpenCV 4.13.0 official Maven AAR | 24.0 MB |
+| `libnotate_ppocrv3.so` | Notate JNI and OCR pipeline | 0.2 MB |
 
-These artifacts total roughly 33 MB before APK compression, `libNative.so`, the C++ runtime, and alignment overhead. Actual APK growth depends on the build type and Android packaging.
+These artifacts total roughly 39 MB before APK compression, the C++ runtime, and alignment overhead. The assembled debug runtime AAR is about 20 MB because AAR contents are compressed. Actual APK growth depends on the build type and Android packaging.
 
-[`MODEL_MANIFEST.json`](../app/src/main/assets/ocr/MODEL_MANIFEST.json) records upstream locations, versions, SHA-256 values, and a packaging note for the Paddle Lite ELF metadata normalization needed by NDK 28. Licenses for PaddleOCR, Paddle Lite, and OpenCV are included under `app/src/main/assets/ocr/licenses/`.
+[`MODEL_MANIFEST.json`](../ocr-runtime/src/main/assets/ocr/MODEL_MANIFEST.json) records the runtime coordinate, upstream locations, versions, Maven artifact checksum, native-library checksums, and a packaging note for the Paddle Lite ELF metadata normalization needed by NDK 28. Licenses for PaddleOCR, Paddle Lite, and OpenCV are included under `ocr-runtime/src/main/assets/ocr/licenses/`.
 
 The model and dictionary files are packaged as Android assets. Paddle Lite needs filesystem paths, so they cannot be used directly from the compressed asset stream.
 
@@ -202,7 +214,7 @@ It then recomputes an axis-aligned `RectF` from the mapped quadrilateral. These 
 
 ### JNI boundary
 
-`OCRPredictorNative` loads `libNative.so` and initializes a native `OCR_PPredictor`. A `long` stores the native pointer in Java. Each call passes an Android `Bitmap` and the flags `run_det=1`, `run_cls=0`, and `run_rec=1`.
+`OCRPredictorNative` loads `libnotate_ppocrv3.so` and initializes a native `OCR_PPredictor`. A `long` stores the native pointer in Java. Each call passes an Android `Bitmap` and the flags `run_det=1`, `run_cls=0`, and `run_rec=1`.
 
 The bridge converts the ARGB_8888 bitmap to an OpenCV BGR matrix. Native results are serialized into a flat `float[]` with this repeated record layout:
 
@@ -526,7 +538,7 @@ Check packaged artifacts:
 
 ```bash
 unzip -l app/build/outputs/apk/debug/app-debug.apk \
-  | rg 'lib/arm64-v8a/(libNative|libpaddle|libopencv)|assets/ocr'
+  | rg 'lib/arm64-v8a/(libnotate_ppocrv3|libpaddle|libopencv)|assets/ocr'
 ```
 
 List the debug app's extracted model and database directories:
@@ -541,7 +553,7 @@ adb shell run-as com.alexdremov.notate ls -l databases
 Verify repository asset hashes on macOS:
 
 ```bash
-shasum -a 256 app/src/main/assets/ocr/ppocrv3/*
+shasum -a 256 ocr-runtime/src/main/assets/ocr/ppocrv3/*
 ```
 
 Compare the output with `MODEL_MANIFEST.json` and the constants in `OcrAssetManager`.
@@ -568,6 +580,7 @@ Run the repository checks with:
 
 ```bash
 ./gradlew :app:testDebugUnitTest
+./gradlew :ocr-runtime:assembleRelease
 ./gradlew :app:assembleDebug
 ./gradlew :app:lintDebug
 ```
