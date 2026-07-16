@@ -32,3 +32,7 @@
 -keep class com.google.api.services.drive.** { *; }
 -dontwarn com.google.api.client.**
 -dontwarn com.google.api.services.drive.**
+
+# The upstream PaddleOCR bridge uses name-based JNI entry points.
+-keep class com.baidu.paddle.lite.demo.ocr.OCRPredictorNative { *; }
+-keep class com.baidu.paddle.lite.demo.ocr.OcrResultModel { *; }

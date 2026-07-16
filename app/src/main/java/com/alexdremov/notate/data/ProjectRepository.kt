@@ -118,7 +118,14 @@ class ProjectRepository(
 
     suspend fun deleteItem(path: String): Boolean {
         val success = getProvider(path).deleteItem(path)
-        if (success) indexManager.updateIndex(getProvider(path))
+        if (success) {
+            indexManager.updateIndex(getProvider(path))
+            val dao = com.alexdremov.notate.ocr.index.OcrIndexDatabase.get(context).dao()
+            dao.getDocumentByPath(path)?.let { document ->
+                dao.deleteDocumentBlocks(document.documentId)
+                dao.deleteDocument(document.documentId)
+            }
+        }
         return success
     }
 
@@ -127,7 +134,16 @@ class ProjectRepository(
         newName: String,
     ): Boolean {
         val success = getProvider(path).renameItem(path, newName)
-        if (success) indexManager.updateIndex(getProvider(path))
+        if (success) {
+            indexManager.updateIndex(getProvider(path))
+            val dao = com.alexdremov.notate.ocr.index.OcrIndexDatabase.get(context).dao()
+            dao.getDocumentByPath(path)?.let { document ->
+                val moved = getAllIndexedFiles().firstOrNull { it.uuid == document.documentId }
+                if (moved != null) {
+                    dao.upsertDocument(document.copy(path = moved.path, name = moved.name, lastModified = moved.lastModified))
+                }
+            }
+        }
         return success
     }
 

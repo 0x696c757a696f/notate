@@ -74,6 +74,9 @@ interface CanvasController {
 
     suspend fun copySelection()
 
+    /** Returns the currently selected ink without mutating the selection. */
+    suspend fun getSelectedStrokesForOcr(): List<Stroke>
+
     suspend fun paste(
         x: Float,
         y: Float,

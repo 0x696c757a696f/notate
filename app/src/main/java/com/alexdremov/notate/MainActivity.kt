@@ -115,6 +115,8 @@ fun MainScreen(
     val selectedTag by viewModel.selectedTag.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
     val savingPaths by viewModel.savingPaths.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val searchResults by viewModel.searchResults.collectAsState()
 
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -141,6 +143,7 @@ fun MainScreen(
     var editingStorage by remember { mutableStateOf<com.alexdremov.notate.data.RemoteStorageConfig?>(null) }
     var showSortMenu by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var isSearchExpanded by remember { mutableStateOf(false) }
 
     // Project Actions State
     var projectToDelete by remember { mutableStateOf<com.alexdremov.notate.data.ProjectConfig?>(null) }
@@ -188,14 +191,21 @@ fun MainScreen(
     // Back Handler
     val isAtRoot = breadcrumbs.size <= 1
     val shouldHandleBack =
-        if (lockedProjectId != null) {
+        if (isSearchExpanded || searchQuery.isNotBlank()) {
+            true
+        } else if (lockedProjectId != null) {
             !isAtRoot
         } else {
             currentProject != null
         }
 
     BackHandler(enabled = shouldHandleBack) {
-        viewModel.navigateUp()
+        if (isSearchExpanded || searchQuery.isNotBlank()) {
+            viewModel.setSearchQuery("")
+            isSearchExpanded = false
+        } else {
+            viewModel.navigateUp()
+        }
     }
 
     Row(modifier = Modifier.fillMaxSize()) {
@@ -223,12 +233,30 @@ fun MainScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.headlineMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        if (isSearchExpanded && !isPickerMode) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = viewModel::setSearchQuery,
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                placeholder = { Text("Search all notes") },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                        }
+                                    }
+                                },
+                            )
+                        } else {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.headlineMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     },
                     navigationIcon = {
                         if (isPickerMode) {
@@ -238,6 +266,19 @@ fun MainScreen(
                         }
                     },
                     actions = {
+                        if (!isPickerMode) {
+                            IconButton(
+                                onClick = {
+                                    isSearchExpanded = !isSearchExpanded
+                                    if (!isSearchExpanded) viewModel.setSearchQuery("")
+                                },
+                            ) {
+                                Icon(
+                                    if (isSearchExpanded) Icons.Default.Close else Icons.Default.Search,
+                                    contentDescription = if (isSearchExpanded) "Close search" else "Search notes",
+                                )
+                            }
+                        }
                         if (currentProject != null || selectedTag != null) {
                             // Sort Action
                             IconButton(onClick = { showSortMenu = true }) {
@@ -289,7 +330,25 @@ fun MainScreen(
             },
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
-                if (currentProject == null && selectedTag == null) {
+                if (searchQuery.isNotBlank()) {
+                    OcrSearchResultsScreen(
+                        query = searchQuery,
+                        results = searchResults,
+                        projects = projects,
+                        onResultClick = { result ->
+                            val intent = Intent(context, CanvasActivity::class.java).apply {
+                                putExtra("CANVAS_PATH", result.path)
+                                result.bounds?.let { bounds ->
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_LEFT, bounds.left)
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_TOP, bounds.top)
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_RIGHT, bounds.right)
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_BOTTOM, bounds.bottom)
+                                }
+                            }
+                            context.startActivity(intent)
+                        },
+                    )
+                } else if (currentProject == null && selectedTag == null) {
                     // --- Empty State ---
                     Box(
                         modifier = Modifier.fillMaxSize(),

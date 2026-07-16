@@ -123,6 +123,7 @@ class OnyxCanvasView
 
         // Optimization: Pre-allocated RectF for sync updates
         private val selectionBoundsCache = RectF()
+        private var searchHighlightBounds: RectF? = null
 
         var onStrokeStarted: (() -> Unit)? = null
 
@@ -595,6 +596,18 @@ class OnyxCanvasView
 
                     canvasRenderer.render(cv, matrix, visibleRect, RenderQuality.HIGH, currentScale)
                     selectionOverlayDrawer.draw(cv, matrix, currentScale)
+                    searchHighlightBounds?.let { worldBounds ->
+                        val screenBounds = RectF(worldBounds)
+                        matrix.mapRect(screenBounds)
+                        val highlightPaint =
+                            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.BLACK
+                                style = Paint.Style.STROKE
+                                strokeWidth = 5f
+                                pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 10f), 0f)
+                            }
+                        cv.drawRect(screenBounds, highlightPaint)
+                    }
 
                     if (CanvasConfig.DEBUG_SHOW_RAM_USAGE) {
                         val runtime = Runtime.getRuntime()
@@ -672,6 +685,27 @@ class OnyxCanvasView
         }
 
         fun getCurrentScale() = viewportInteractor.getCurrentScale()
+
+        fun focusSearchMatch(bounds: RectF) {
+            if (width <= 0 || height <= 0) {
+                post { focusSearchMatch(bounds) }
+                return
+            }
+            val scale = viewportInteractor.getCurrentScale().coerceAtLeast(0.01f)
+            val left = bounds.centerX() - width / (2f * scale)
+            val top = bounds.centerY() - height / (2f * scale)
+            matrix.reset()
+            matrix.postScale(scale, scale)
+            matrix.postTranslate(-left * scale, -top * scale)
+            onViewportChanged?.invoke()
+            searchHighlightBounds = RectF(bounds)
+            invalidateCanvas()
+            viewScope.launch {
+                delay(2200)
+                searchHighlightBounds = null
+                invalidateCanvas()
+            }
+        }
 
         fun scrollByOffset(
             dx: Float,
@@ -797,6 +831,74 @@ class OnyxCanvasView
 
         private var actionPopup: com.alexdremov.notate.ui.dialog.SelectionActionPopup? = null
         private var actionPopupContainer: android.widget.FrameLayout? = null
+        private var isOcrRunning = false
+
+        private suspend fun recognizeSelection() {
+            if (isOcrRunning) return
+            val selectionBounds = canvasController.getSelectionManager().getTransformedBounds()
+            val strokes = canvasController.getSelectedStrokesForOcr()
+            if (strokes.isEmpty()) {
+                android.widget.Toast.makeText(context, "Select handwriting to recognize", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            isOcrRunning = true
+            android.widget.Toast.makeText(context, "Recognizing text…", android.widget.Toast.LENGTH_SHORT).show()
+            try {
+                val raster =
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        com.alexdremov.notate.ocr.StrokeOcrRasterizer.render(strokes)
+                    }
+                if (raster == null) {
+                    android.widget.Toast.makeText(context, "Selection could not be rendered", android.widget.Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val blocks =
+                    try {
+                        com.alexdremov.notate.ocr.PaddleOcrProvider.get(context).recognize(raster.bitmap)
+                    } finally {
+                        raster.bitmap.recycle()
+                    }
+                val recognizedText = com.alexdremov.notate.ocr.OcrConversionPlanner.orderedText(blocks)
+                if (recognizedText.isEmpty()) {
+                    android.widget.Toast.makeText(context, "No text recognized", android.widget.Toast.LENGTH_SHORT).show()
+                    return
+                }
+
+                val textY =
+                    com.alexdremov.notate.ocr.OcrConversionPlanner.insertionY(
+                        selection = selectionBounds,
+                        text = recognizedText,
+                        fontSize = 24f,
+                        fixedPageHeight = if (canvasModel.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES) canvasModel.pageHeight else null,
+                        pageSpacing = com.alexdremov.notate.config.CanvasConfig.PAGE_SPACING,
+                    )
+
+                com.alexdremov.notate.ui.dialog.TextEditDialog(
+                    context,
+                    recognizedText,
+                    24f,
+                    android.graphics.Color.BLACK,
+                ) { confirmedText ->
+                    if (confirmedText.isNotBlank()) {
+                        viewScope.launch {
+                            canvasController.addText(
+                                confirmedText,
+                                selectionBounds.left,
+                                textY,
+                                24f,
+                                android.graphics.Color.BLACK,
+                            )
+                        }
+                    }
+                }.show()
+            } catch (error: Throwable) {
+                com.alexdremov.notate.util.Logger.e("PaddleOCR", "Text recognition failed", error, showToUser = true)
+                android.widget.Toast.makeText(context, "Text recognition is unavailable", android.widget.Toast.LENGTH_LONG).show()
+            } finally {
+                isOcrRunning = false
+            }
+        }
 
         fun setActionPopupContainer(container: android.widget.FrameLayout) {
             actionPopup?.destroy()
@@ -814,6 +916,7 @@ class OnyxCanvasView
                             context,
                             container,
                             onCopy = { viewScope.launch { canvasController.copySelection() } },
+                            onRecognize = { viewScope.launch { recognizeSelection() } },
                             onDelete = { viewScope.launch { canvasController.deleteSelection() } },
                             onDismiss = { },
                         )

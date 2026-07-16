@@ -7,12 +7,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
     id("jacoco")
 }
 
 android {
     namespace = "com.alexdremov.notate"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "com.alexdremov.notate"
@@ -20,6 +22,15 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17", "-frtti", "-fexceptions")
+                arguments += listOf("-DANDROID_PLATFORM=android-26", "-DANDROID_STL=c++_shared")
+            }
+        }
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -55,6 +66,13 @@ android {
         viewBinding = true
         compose = true
         buildConfig = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     lint {
@@ -159,6 +177,11 @@ dependencies {
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.10.0")
+
+    // Local OCR full-text index
+    implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-ktx:2.8.4")
+    ksp("androidx.room:room-compiler:2.8.4")
 
     // Color Picker
     implementation("com.github.skydoves:colorpickerview:2.4.0")

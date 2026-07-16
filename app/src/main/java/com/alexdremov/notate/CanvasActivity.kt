@@ -3,6 +3,7 @@
 package com.alexdremov.notate
 
 import android.content.Intent
+import android.graphics.RectF
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
@@ -75,6 +76,7 @@ class CanvasActivity : AppCompatActivity() {
     private var autoSaveJob: Job? = null
 
     private var currentCanvasPath: String? = null
+    private var pendingSearchBounds: RectF? = null
     private var isFixedPageState: androidx.compose.runtime.MutableState<Boolean>? = null
 
     // Floating Window State
@@ -265,6 +267,15 @@ class CanvasActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         currentCanvasPath = intent.getStringExtra("CANVAS_PATH")
+        if (intent.hasExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_LEFT)) {
+            pendingSearchBounds =
+                RectF(
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_LEFT, 0f),
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_TOP, 0f),
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_RIGHT, 0f),
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_BOTTOM, 0f),
+                )
+        }
 
         enableImmersiveMode()
 
@@ -604,6 +615,10 @@ class CanvasActivity : AppCompatActivity() {
                                     .getModel()
                                     .initializeSession(session.regionManager, session.metadata.nextStrokeOrder)
                                 binding.canvasView.loadMetadata(session.metadata)
+                                pendingSearchBounds?.let { bounds ->
+                                    pendingSearchBounds = null
+                                    binding.canvasView.post { binding.canvasView.focusSearchMatch(bounds) }
+                                }
 
                                 val isFixed = session.metadata.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
                                 isFixedPageState?.value = isFixed

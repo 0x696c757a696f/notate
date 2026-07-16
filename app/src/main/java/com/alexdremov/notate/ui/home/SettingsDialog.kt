@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewQuilt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -32,10 +33,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +59,7 @@ import com.alexdremov.notate.ui.settings.InterfaceSettingsPanel
 import com.alexdremov.notate.ui.settings.InterfaceSettingsState
 import com.alexdremov.notate.ui.settings.PdfSettingsPanel
 import com.alexdremov.notate.ui.settings.PdfSettingsState
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsDialog(
@@ -64,6 +68,7 @@ fun SettingsDialog(
 ) {
     var currentScreen by remember { mutableStateOf(SettingsScreen.MAIN) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -94,6 +99,7 @@ fun SettingsDialog(
                             SettingsScreen.INPUT -> "Input & Gestures"
                             SettingsScreen.INTERFACE -> "Interface"
                             SettingsScreen.PDF -> "PDF Export"
+                            SettingsScreen.OCR -> "Text recognition & search"
                             SettingsScreen.ABOUT -> "About"
                         },
                 )
@@ -132,6 +138,12 @@ fun SettingsDialog(
                             subtitle = "Quality and scale settings",
                             icon = Icons.Default.PictureAsPdf,
                             onClick = { currentScreen = SettingsScreen.PDF },
+                        )
+                        SettingsMenuItem(
+                            title = "Text recognition & search",
+                            subtitle = "Offline PP-OCRv3 model and local index",
+                            icon = Icons.Default.Search,
+                            onClick = { currentScreen = SettingsScreen.OCR },
                         )
                         SettingsMenuItem(
                             title = "About",
@@ -212,6 +224,64 @@ fun SettingsDialog(
                         )
                     }
 
+                    SettingsScreen.OCR -> {
+                        var enabled by remember { mutableStateOf(PreferencesManager.isBackgroundOcrIndexingEnabled(context)) }
+                        val repository = remember { com.alexdremov.notate.ocr.index.OcrSearchRepository.get(context) }
+                        val indexedCount by repository.indexedDocumentCount.collectAsState(initial = 0)
+                        val indexingCount by repository.indexingDocumentCount.collectAsState(initial = 0)
+                        val staleCount by repository.staleDocumentCount.collectAsState(initial = 0)
+                        val model = remember { com.alexdremov.notate.ocr.OcrModelInfo() }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Background text indexing", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Runs after save; older notes run only while charging and idle.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray,
+                                )
+                            }
+                            Switch(
+                                checked = enabled,
+                                onCheckedChange = {
+                                    enabled = it
+                                    PreferencesManager.setBackgroundOcrIndexingEnabled(context, it)
+                                    if (it) com.alexdremov.notate.data.worker.OcrBackfillScheduler.schedule(context)
+                                },
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                        Text("Model: ${model.id}", fontWeight = FontWeight.SemiBold)
+                        Text("Offline ARM64 · Chinese + English · four CPU threads", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Index: $indexedCount notes" +
+                                (if (indexingCount > 0) " · $indexingCount active" else "") +
+                                (if (staleCount > 0) " · $staleCount stale" else ""),
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    repository.clear()
+                                    com.alexdremov.notate.data.worker.OcrBackfillScheduler.schedule(context, replace = true)
+                                }
+                            },
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Rebuild text index")
+                        }
+                        Text(
+                            "The index stays on this device. Converted text items remain normal synced note content.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                    }
+
                     SettingsScreen.ABOUT -> {
                         AboutSettings()
                     }
@@ -226,6 +296,7 @@ enum class SettingsScreen {
     INPUT,
     INTERFACE,
     PDF,
+    OCR,
     ABOUT,
 }
 
