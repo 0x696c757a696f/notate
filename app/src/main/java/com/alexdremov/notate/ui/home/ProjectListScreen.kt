@@ -52,7 +52,7 @@ fun ProjectListScreen(
     var projectToSync by remember { mutableStateOf<ProjectConfig?>(null) }
 
     if (projects.isEmpty()) {
-        EmptyState("No projects yet.\nTap + to add one.")
+        EmptyState(title = "No projects yet", message = "Tap + to add one.")
     } else {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 180.dp),

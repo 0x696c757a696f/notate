@@ -55,6 +55,8 @@ enum class ActionType {
     UNDO,
     REDO,
     INSERT_IMAGE,
+    ZOOM_WINDOW, // Appended: stored by ordinal
+    GUIDES, // Ruler / protractor picker
 }
 
 @Serializable

@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.ViewQuilt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -32,10 +34,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +51,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.alexdremov.notate.ui.theme.InkMuted
 import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
 import com.alexdremov.notate.data.PreferencesManager
@@ -56,6 +61,8 @@ import com.alexdremov.notate.ui.settings.InterfaceSettingsPanel
 import com.alexdremov.notate.ui.settings.InterfaceSettingsState
 import com.alexdremov.notate.ui.settings.PdfSettingsPanel
 import com.alexdremov.notate.ui.settings.PdfSettingsState
+import com.alexdremov.notate.ui.settings.SettingsToggle
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsDialog(
@@ -64,6 +71,7 @@ fun SettingsDialog(
 ) {
     var currentScreen by remember { mutableStateOf(SettingsScreen.MAIN) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -91,9 +99,11 @@ fun SettingsDialog(
                     text =
                         when (currentScreen) {
                             SettingsScreen.MAIN -> "Settings"
-                            SettingsScreen.INPUT -> "Input & Gestures"
-                            SettingsScreen.INTERFACE -> "Interface"
-                            SettingsScreen.PDF -> "PDF Export"
+                            SettingsScreen.INPUT -> "Writing & gestures"
+                            SettingsScreen.INTERFACE -> "Toolbar"
+                            SettingsScreen.STARTUP -> "Startup"
+                            SettingsScreen.PDF -> "Export"
+                            SettingsScreen.OCR -> "Text recognition & search"
                             SettingsScreen.ABOUT -> "About"
                         },
                 )
@@ -108,30 +118,43 @@ fun SettingsDialog(
                         .verticalScroll(rememberScrollState()),
             ) {
                 when (currentScreen) {
+                    // Ordered by how often people change them: writing first, accounts and info last.
                     SettingsScreen.MAIN -> {
+                        SettingsMenuItem(
+                            title = "Writing & gestures",
+                            subtitle = "Palm rejection, eraser, shapes, snapping, finger and pen buttons",
+                            icon = Icons.Default.Brush,
+                            onClick = { currentScreen = SettingsScreen.INPUT },
+                        )
+                        SettingsMenuItem(
+                            title = "Toolbar",
+                            subtitle = "Auto collapse",
+                            icon = Icons.Default.ViewQuilt,
+                            onClick = { currentScreen = SettingsScreen.INTERFACE },
+                        )
+                        SettingsMenuItem(
+                            title = "Startup",
+                            subtitle = "What opens when the app starts",
+                            icon = Icons.Default.Today,
+                            onClick = { currentScreen = SettingsScreen.STARTUP },
+                        )
+                        SettingsMenuItem(
+                            title = "Text recognition & search",
+                            subtitle = "Offline handwriting model and search index",
+                            icon = Icons.Default.Search,
+                            onClick = { currentScreen = SettingsScreen.OCR },
+                        )
+                        SettingsMenuItem(
+                            title = "Export",
+                            subtitle = "PDF quality, scale and the format used for sync",
+                            icon = Icons.Default.PictureAsPdf,
+                            onClick = { currentScreen = SettingsScreen.PDF },
+                        )
                         SettingsMenuItem(
                             title = "Synchronization",
                             subtitle = "Cloud storage and sync options",
                             icon = Icons.Default.CloudSync,
                             onClick = onOpenSync,
-                        )
-                        SettingsMenuItem(
-                            title = "Input & Gestures",
-                            subtitle = "Pen behavior, shapes, and eraser",
-                            icon = Icons.Default.Brush,
-                            onClick = { currentScreen = SettingsScreen.INPUT },
-                        )
-                        SettingsMenuItem(
-                            title = "Interface",
-                            subtitle = "Toolbar and visual settings",
-                            icon = Icons.Default.ViewQuilt,
-                            onClick = { currentScreen = SettingsScreen.INTERFACE },
-                        )
-                        SettingsMenuItem(
-                            title = "PDF Export",
-                            subtitle = "Quality and scale settings",
-                            icon = Icons.Default.PictureAsPdf,
-                            onClick = { currentScreen = SettingsScreen.PDF },
                         )
                         SettingsMenuItem(
                             title = "About",
@@ -147,12 +170,29 @@ fun SettingsDialog(
                         var angleSnapping by remember { mutableStateOf(PreferencesManager.isAngleSnappingEnabled(context)) }
                         var axisLocking by remember { mutableStateOf(PreferencesManager.isAxisLockingEnabled(context)) }
                         var shapeDelay by remember { mutableFloatStateOf(PreferencesManager.getShapePerfectionDelay(context).toFloat()) }
+                        var palmRejection by remember { mutableStateOf(PreferencesManager.isPalmRejectionEnabled(context)) }
+                        var twoFingerTapAction by remember { mutableStateOf(PreferencesManager.getTwoFingerTapAction(context)) }
+                        var stylusButtonAction by remember { mutableStateOf(PreferencesManager.getStylusButtonAction(context)) }
 
                         InputSettingsPanel(
-                            state = InputSettingsState(scribbleEnabled, shapeEnabled, angleSnapping, axisLocking, shapeDelay),
+                            state =
+                                InputSettingsState(
+                                    scribbleEnabled,
+                                    shapeEnabled,
+                                    angleSnapping,
+                                    axisLocking,
+                                    shapeDelay,
+                                    palmRejection,
+                                    twoFingerTapAction,
+                                    stylusButtonAction,
+                                ),
                             onScribbleChange = {
                                 scribbleEnabled = it
                                 PreferencesManager.setScribbleToEraseEnabled(context, it)
+                            },
+                            onPalmRejectionChange = {
+                                palmRejection = it
+                                PreferencesManager.setPalmRejectionEnabled(context, it)
                             },
                             onShapeChange = {
                                 shapeEnabled = it
@@ -169,6 +209,14 @@ fun SettingsDialog(
                             onShapeDelayChange = { shapeDelay = it },
                             onShapeDelayFinished = {
                                 PreferencesManager.setShapePerfectionDelay(context, shapeDelay.toLong())
+                            },
+                            onTwoFingerTapChange = {
+                                twoFingerTapAction = it
+                                PreferencesManager.setTwoFingerTapAction(context, it)
+                            },
+                            onStylusButtonChange = {
+                                stylusButtonAction = it
+                                PreferencesManager.setStylusButtonAction(context, it)
                             },
                         )
                     }
@@ -194,6 +242,18 @@ fun SettingsDialog(
                         )
                     }
 
+                    SettingsScreen.STARTUP -> {
+                        var openDailyOnStart by remember { mutableStateOf(PreferencesManager.isOpenDailyOnStartEnabled(context)) }
+                        SettingsToggle(
+                            title = "Open today's note on startup",
+                            checked = openDailyOnStart,
+                            onCheckedChange = {
+                                openDailyOnStart = it
+                                PreferencesManager.setOpenDailyOnStartEnabled(context, it)
+                            },
+                        )
+                    }
+
                     SettingsScreen.PDF -> {
                         var exportScale by remember { mutableFloatStateOf(PreferencesManager.getPdfExportScale(context)) }
                         var syncPdfType by remember { mutableStateOf(PreferencesManager.getSyncPdfType(context)) }
@@ -212,6 +272,64 @@ fun SettingsDialog(
                         )
                     }
 
+                    SettingsScreen.OCR -> {
+                        var enabled by remember { mutableStateOf(PreferencesManager.isBackgroundOcrIndexingEnabled(context)) }
+                        val repository = remember { com.alexdremov.notate.ocr.index.OcrSearchRepository.get(context) }
+                        val indexedCount by repository.indexedDocumentCount.collectAsState(initial = 0)
+                        val indexingCount by repository.indexingDocumentCount.collectAsState(initial = 0)
+                        val staleCount by repository.staleDocumentCount.collectAsState(initial = 0)
+                        val model = remember { com.alexdremov.notate.ocr.OcrModelInfo() }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Background text indexing", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Runs after save; older notes run only while charging.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = InkMuted,
+                                )
+                            }
+                            Switch(
+                                checked = enabled,
+                                onCheckedChange = {
+                                    enabled = it
+                                    PreferencesManager.setBackgroundOcrIndexingEnabled(context, it)
+                                    if (it) com.alexdremov.notate.data.worker.OcrBackfillScheduler.schedule(context)
+                                },
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                        Text("Model: ${model.id}", fontWeight = FontWeight.SemiBold)
+                        Text("Offline ARM64 · Chinese + English · four CPU threads", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Index: $indexedCount notes" +
+                                (if (indexingCount > 0) " · $indexingCount active" else "") +
+                                (if (staleCount > 0) " · $staleCount stale" else ""),
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    repository.clear()
+                                    com.alexdremov.notate.data.worker.OcrBackfillScheduler.schedule(context, replace = true)
+                                }
+                            },
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Rebuild text index")
+                        }
+                        Text(
+                            "The index stays on this device. Converted text items remain normal synced note content.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = InkMuted,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                    }
+
                     SettingsScreen.ABOUT -> {
                         AboutSettings()
                     }
@@ -225,7 +343,9 @@ enum class SettingsScreen {
     MAIN,
     INPUT,
     INTERFACE,
+    STARTUP,
     PDF,
+    OCR,
     ABOUT,
 }
 
@@ -260,13 +380,13 @@ private fun SettingsMenuItem(
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray,
+                color = InkMuted,
             )
         }
         Icon(
             imageVector = Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = Color.Gray,
+            tint = InkMuted,
         )
     }
 }
@@ -292,7 +412,7 @@ private fun AboutSettings() {
         Text(
             text = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color.Gray,
+            color = InkMuted,
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(

@@ -1,0 +1,43 @@
+{
+  "id": "ppocrv3-zh-en-mobile",
+  "runtime": "Paddle Lite 2.10 arm64-v8a",
+  "runtimeArtifact": "com.alexdremov.notate:ppocrv3-runtime:1.0.0",
+  "preprocessingVersion": 1,
+  "dictionaryVersion": "ppocr_keys_v1-2022-01-18",
+  "angleClassifier": false,
+  "nativeLibraries": [
+    {
+      "name": "libpaddle_light_api_shared.so",
+      "version": "2.10",
+      "upstreamArchiveSha256": "6ba2de9ea6e968cc9a0322e250d824f179d6fbba48080f3f88fcd7ffa096b66b",
+      "upstreamLibrarySha256": "5db78980001b6f221770cde9fc3e883da42722cabcb49555b57e3aeca06fe5e4",
+      "linkInputSha256": "84c18a2c2a8189819bfe150adfa138012aaf4c9e83ef4ff0133baf092f5e25c4",
+      "packagingNote": "ELF .dynsym local-count metadata normalized from 3 to 10 for NDK 28; code and dynamic exports are unchanged"
+    },
+    {
+      "name": "libopencv_java4.so",
+      "version": "4.13.0",
+      "mavenCoordinate": "org.opencv:opencv:4.13.0",
+      "upstream": "https://repo.maven.apache.org/maven2/org/opencv/opencv/4.13.0/opencv-4.13.0.aar",
+      "upstreamAarSha256": "a8c9b0929d8d6367bb476320a1f36587db2b57ea18d8f7521ce509514903ca04",
+      "arm64LibrarySha256": "d331aac20d0a76981ea652f7df7978e3b82ccc46d5926dc7c394d33c813694ab"
+    }
+  ],
+  "files": [
+    {
+      "name": "ppocrv3/det_db.nb",
+      "upstream": "https://paddleocr.bj.bcebos.com/PP-OCRv3/chinese/ch_PP-OCRv3_det_slim_infer.nb",
+      "sha256": "998632e7fc99a962a5012caaf76065ce8260e6500996b63364f243ee41b34093"
+    },
+    {
+      "name": "ppocrv3/rec_crnn.nb",
+      "upstream": "https://paddleocr.bj.bcebos.com/PP-OCRv3/chinese/ch_PP-OCRv3_rec_infer.nb",
+      "sha256": "6280cd7a336390c4c2f31f5688f4621052c450f8f3cb8e35cca7222aa47efad2"
+    },
+    {
+      "name": "ppocrv3/ppocr_keys_v1.txt",
+      "upstream": "https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppocr/utils/ppocr_keys_v1.txt",
+      "sha256": "a1c84d9bdb9ab29043c58896224d32941783eb821629618416dcb08f12886492"
+    }
+  ]
+}

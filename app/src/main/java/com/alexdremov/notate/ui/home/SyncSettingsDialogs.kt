@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.alexdremov.notate.ui.theme.InkMuted
 import com.alexdremov.notate.data.*
 import com.alexdremov.notate.util.Logger
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -256,11 +257,8 @@ fun EditRemoteStorageDialog(
                                         type == RemoteStorageType.GOOGLE_DRIVE && username.isNotBlank()
                                 ),
                     ) {
-                        if (isTesting) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Black)
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text("Test Connection")
+                        // Text instead of a spinner: animation keeps the e-ink panel refreshing.
+                        Text(if (isTesting) "Testing connection" else "Test connection")
                     }
 
                     testStatus?.let {
@@ -271,7 +269,7 @@ fun EditRemoteStorageDialog(
                             color =
                                 when {
                                     it.contains("Success") -> Color(0xFF1B5E20)
-                                    it.contains("Testing") -> Color.Gray
+                                    it.contains("Testing") -> InkMuted
                                     else -> Color.Red
                                 },
                         )

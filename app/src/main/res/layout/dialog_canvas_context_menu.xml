@@ -49,6 +49,27 @@
         android:layout_marginVertical="4dp" />
 
     <TextView
+        android:id="@+id/btn_insert_pdf"
+        android:layout_width="wrap_content"
+        android:layout_height="48dp"
+        android:minWidth="64dp"
+        android:gravity="center"
+        android:text="PDF"
+        android:drawableTop="@drawable/ic_picture_as_pdf"
+        android:textColor="@android:color/black"
+        android:textSize="@dimen/text_size_micro"
+        android:paddingHorizontal="8dp"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true" />
+
+    <View
+        android:layout_width="@dimen/ui_stroke_standard"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:layout_marginVertical="4dp" />
+
+    <TextView
         android:id="@+id/btn_insert_link"
         android:layout_width="wrap_content"
         android:layout_height="48dp"

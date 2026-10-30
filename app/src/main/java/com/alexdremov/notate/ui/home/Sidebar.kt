@@ -20,14 +20,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,6 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.alexdremov.notate.data.ProjectConfig
 import com.alexdremov.notate.model.Tag
+import com.alexdremov.notate.ui.theme.BorderWidth
+import com.alexdremov.notate.ui.theme.Ink
+import com.alexdremov.notate.ui.theme.Paper
+import com.alexdremov.notate.ui.theme.Radius
+import com.alexdremov.notate.ui.theme.Spacing
 
 @Composable
 fun Sidebar(
@@ -52,29 +60,31 @@ fun Sidebar(
     onAddProject: () -> Unit,
     onManageTags: () -> Unit,
     onSettingsClick: () -> Unit,
+    onTodayClick: () -> Unit,
+    onReadingClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = modifier.width(280.dp).fillMaxHeight(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), // Finder-like gray
-        tonalElevation = 1.dp,
-    ) {
+    // Flat white pane separated by a hairline: a translucent gray fill dithers on e-ink.
+    Row(modifier = modifier.width(280.dp).fillMaxHeight()) {
         Column(
             modifier =
                 Modifier
+                    .weight(1f)
                     .fillMaxHeight()
-                    .padding(vertical = 16.dp, horizontal = 12.dp),
+                    .background(Paper)
+                    .padding(vertical = Spacing.lg, horizontal = Spacing.md),
         ) {
             // Projects Section
             SidebarHeader(
                 title = "Projects",
                 actionIcon = Icons.Default.Add,
+                actionDescription = "Add project",
                 onActionClick = onAddProject,
             )
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
                 if (projects.isEmpty()) {
                     item {
@@ -82,7 +92,7 @@ fun Sidebar(
                             text = "No projects",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, top = 8.dp),
+                            modifier = Modifier.padding(start = Spacing.md, top = Spacing.sm),
                         )
                     }
                 }
@@ -97,10 +107,11 @@ fun Sidebar(
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(Spacing.xl))
                     SidebarHeader(
                         title = "Tags",
                         actionIcon = Icons.Default.Add,
+                        actionDescription = "Manage tags",
                         onActionClick = onManageTags,
                     )
                 }
@@ -111,7 +122,7 @@ fun Sidebar(
                             text = "No tags",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, top = 8.dp),
+                            modifier = Modifier.padding(start = Spacing.md, top = Spacing.sm),
                         )
                     }
                 }
@@ -128,7 +139,19 @@ fun Sidebar(
             }
 
             // Bottom Settings Area
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = Spacing.sm), color = Ink)
+            SidebarItem(
+                text = "Today",
+                icon = Icons.Default.Today,
+                isSelected = false,
+                onClick = onTodayClick,
+            )
+            SidebarItem(
+                text = "Reading",
+                icon = Icons.AutoMirrored.Filled.MenuBook,
+                isSelected = false,
+                onClick = onReadingClick,
+            )
             SidebarItem(
                 text = "Settings",
                 icon = Icons.Default.Settings,
@@ -136,6 +159,7 @@ fun Sidebar(
                 onClick = onSettingsClick,
             )
         }
+        VerticalDivider(color = Ink, thickness = BorderWidth)
     }
 }
 
@@ -143,13 +167,14 @@ fun Sidebar(
 private fun SidebarHeader(
     title: String,
     actionIcon: ImageVector? = null,
+    actionDescription: String? = null,
     onActionClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(start = Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -162,15 +187,15 @@ private fun SidebarHeader(
                 ),
         )
         if (actionIcon != null && onActionClick != null) {
-            Icon(
-                imageVector = actionIcon,
-                contentDescription = null,
-                modifier =
-                    Modifier
-                        .size(16.dp)
-                        .clickable(onClick = onActionClick),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Full 48dp touch target; the old 16dp icon was hard to hit with a finger or stylus.
+            IconButton(onClick = onActionClick) {
+                Icon(
+                    imageVector = actionIcon,
+                    contentDescription = actionDescription,
+                    modifier = Modifier.size(Spacing.xl),
+                    tint = Ink,
+                )
+            }
         }
     }
 }
@@ -202,21 +227,21 @@ private fun SidebarItem(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(Radius.md))
                 .background(backgroundColor)
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = onLongClick,
-                ).padding(horizontal = 12.dp, vertical = 10.dp),
+                ).padding(horizontal = Spacing.md, vertical = Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(Spacing.xl),
             tint = if (icon == Icons.Default.Circle) iconTint else contentColor,
         )
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(Spacing.md))
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium,

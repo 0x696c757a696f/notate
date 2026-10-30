@@ -8,15 +8,22 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.alexdremov.notate.config.CanvasConfig
+import com.alexdremov.notate.data.CanvasType
 import com.alexdremov.notate.model.CanvasImage
 import com.alexdremov.notate.model.CanvasItem
 import com.alexdremov.notate.model.EraserType
 import com.alexdremov.notate.model.InfiniteCanvasModel
 import com.alexdremov.notate.model.Stroke
+import com.alexdremov.notate.model.isLocked
 import com.alexdremov.notate.ui.render.CanvasRenderer
 import com.alexdremov.notate.util.ClipboardManager
+import com.alexdremov.notate.util.Logger
+import com.alexdremov.notate.util.PdfPageImporter
 import com.alexdremov.notate.util.StrokeGeometry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -31,6 +38,8 @@ class CanvasControllerImpl(
     private val renderer: CanvasRenderer,
 ) : CanvasController {
     companion object {
+        private const val TAG = "CanvasController"
+
         // Threshold for switching to "Disk Stash" move strategy to avoid OOM.
         // Value 512 chosen based on memory profiling of 500+ items selection.
         private const val LARGE_SELECTION_THRESHOLD = 512
@@ -189,6 +198,7 @@ class CanvasControllerImpl(
             val result = ArrayList<CanvasItem>()
 
             model.visitItemsInRect(rect) { item ->
+                if (item.isLocked) return@visitItemsInRect
                 val matches =
                     if (rect.contains(item.bounds)) {
                         true
@@ -216,7 +226,7 @@ class CanvasControllerImpl(
             val result = ArrayList<CanvasItem>()
 
             model.visitItemsInRect(bounds) { item ->
-                if (!bounds.contains(item.bounds)) return@visitItemsInRect
+                if (item.isLocked || !bounds.contains(item.bounds)) return@visitItemsInRect
 
                 val matches =
                     if (StrokeGeometry.isRectFullyInPolygon(item.bounds, pathPoints)) {
@@ -337,6 +347,9 @@ class CanvasControllerImpl(
             ClipboardManager.copy(items)
         }
     }
+
+    override suspend fun getSelectedStrokesForOcr(): List<Stroke> =
+        fetchSelectedItems().filterIsInstance<Stroke>()
 
     override suspend fun paste(
         x: Float,
@@ -473,6 +486,106 @@ class CanvasControllerImpl(
             }
         }
     }
+
+    override suspend fun importPdf(uri: Uri): Int =
+        operationMutex.withLock {
+            val tmpDir = java.io.File(context.cacheDir, "pdf_import_pages")
+            val added = ArrayList<CanvasItem>()
+            var firstSlot = 0
+            try {
+                withContext(Dispatchers.Main) {
+                    progressCallback?.invoke(true, "Importing PDF...", 0)
+                }
+                withContext(Dispatchers.IO) {
+                    PdfPageImporter.Document.open(context, uri).use { doc ->
+                        val sizes = doc.pageSizes()
+                        if (sizes.isEmpty()) return@use
+
+                        val content = model.getContentBounds()
+                        val layout =
+                            if (model.canvasType == CanvasType.FIXED_PAGES) {
+                                firstSlot = if (content.isEmpty) 0 else model.getTotalPages()
+                                PdfPageImporter.Layout.FixedSlots(
+                                    pageWidth = model.pageWidth,
+                                    pageHeight = model.pageHeight,
+                                    spacing = CanvasConfig.PAGE_SPACING,
+                                    firstSlot = firstSlot,
+                                )
+                            } else {
+                                PdfPageImporter.Layout.Stacked(
+                                    left = if (content.isEmpty) 0f else content.left,
+                                    top = if (content.isEmpty) 0f else content.bottom + CanvasConfig.PAGE_SPACING,
+                                    width = CanvasConfig.PAGE_A4_WIDTH,
+                                    spacing = CanvasConfig.PAGE_SPACING,
+                                )
+                            }
+                        val rects = PdfPageImporter.layoutPages(sizes, layout)
+
+                        // One batch so a single undo removes the whole document.
+                        model.startBatchSession()
+                        try {
+                            for (i in rects.indices) {
+                                if (!coroutineContext.isActive) break
+                                val png =
+                                    doc.renderPageToPng(
+                                        i,
+                                        CanvasConfig.PDF_IMPORT_RENDER_WIDTH_PX,
+                                        CanvasConfig.PDF_IMPORT_MAX_PIXELS,
+                                        tmpDir,
+                                    )
+                                val stored = model.importImage(Uri.fromFile(png), context)
+                                png.delete()
+                                if (stored == null) {
+                                    Logger.w(TAG, "Failed to store PDF page ${i + 1}")
+                                    continue
+                                }
+
+                                val r = rects[i]
+                                val logical = RectF(r.left, r.top, r.right, r.bottom)
+                                val page =
+                                    CanvasImage(
+                                        uri = stored,
+                                        logicalBounds = logical,
+                                        bounds = RectF(logical),
+                                        zIndex = CanvasConfig.PDF_IMPORT_PAGE_Z_INDEX,
+                                        order = 0,
+                                        locked = true,
+                                    )
+                                model.addItem(page)?.let { added.add(it) }
+
+                                val progress = ((i + 1) * 100) / rects.size
+                                withContext(Dispatchers.Main) {
+                                    progressCallback?.invoke(true, "Importing PDF... ${i + 1}/${rects.size}", progress)
+                                }
+                            }
+                        } finally {
+                            model.endBatchSession()
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SecurityException) {
+                Logger.e(TAG, "PDF is password protected: $uri", e, showToUser = true)
+            } catch (e: Exception) {
+                Logger.e(TAG, "Failed to import PDF: $uri", e, showToUser = true)
+            } finally {
+                tmpDir.deleteRecursively()
+                withContext(NonCancellable + Dispatchers.Main) {
+                    progressCallback?.invoke(false, null, 0)
+                }
+            }
+
+            if (added.isNotEmpty()) {
+                withContext(Dispatchers.Main) {
+                    renderer.updateTilesWithItems(added)
+                    renderer.invalidate()
+                    onContentChangedListener?.invoke()
+                }
+                if (model.canvasType == CanvasType.FIXED_PAGES) jumpToPage(firstSlot)
+            }
+            added.size
+        }
 
     override suspend fun addText(
         text: String,

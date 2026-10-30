@@ -24,10 +24,10 @@ appId: com.alexdremov.notate
 - assertVisible: "REMOVE TOOL"
 - pressKey: back # Close popup
 
-# === 2. TEST SETTINGS SIDEBAR (BACKGROUND) ===
+# === 2. TEST SETTINGS SIDEBAR (PAGE BACKGROUND) ===
 - tapOn: "Settings"
-- assertVisible: "Background"
-- tapOn: "Background"
+- assertVisible: "Page background"
+- tapOn: "Page background"
 - assertVisible: "Lines (Ruled)"
 - tapOn: "Grid"
 - pressKey: back # Close Sidebar

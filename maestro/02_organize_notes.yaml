@@ -2,34 +2,26 @@ appId: com.alexdremov.notate
 ---
 - launchApp:
     clearState: true
-- tapOn: "Add Project"
+# A fresh install opens the default "My Notes" project; go back to the project list
+- pressKey: back
+- tapOn: "New"
+- tapOn: "New project"
 - inputText: "Local Notes"
+# "This device" is the default location: no system file picker, the project opens right away
 - tapOn: "Create"
-# Handle the Android System File Picker (SAF)
-# Android 11+ prohibits selecting the root directory, so we must create a sub-folder first
 - extendedWaitUntil:
-    visible: "CREATE NEW FOLDER"
+    visible: "Project: Local Notes"
     timeout: 5000
-- tapOn: "CREATE NEW FOLDER"
-- inputText: "NotateTests"
-- tapOn: "OK"
-- extendedWaitUntil:
-    visible: "USE THIS FOLDER"
-    timeout: 5000
-- tapOn: "USE THIS FOLDER"
-- extendedWaitUntil:
-    visible: "Allow"
-    timeout: 5000
-- tapOn: "Allow"
-- tapOn: "Local Notes"
 # Create a folder
-- tapOn: "New Folder"
+- tapOn: "New"
+- tapOn: "New folder"
 - inputText: "Work"
 - tapOn: "Create"
 - assertVisible: "Work"
 # Enter folder and create a note
 - tapOn: "Work"
-- tapOn: "New Canvas"
+- tapOn: "New"
+- tapOn: "New canvas"
 - inputText: "My Note"
 - tapOn: "Create"
 - extendedWaitUntil:

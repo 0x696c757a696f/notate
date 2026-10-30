@@ -690,6 +690,13 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     style = MaterialTheme.typography.titleLarge,
                     color = Color.Black,
                 )
+            } else if (item.penTool.isShapeTool) {
+                // Shows the shape currently picked on this button
+                Icon(
+                    painter = painterResource(ShapeUi.iconRes(item.penTool.shapeType)),
+                    contentDescription = stringResource(ShapeUi.labelRes(item.penTool.shapeType)),
+                    tint = Color.Black,
+                )
             } else {
                 val resId =
                     when (item.penTool.strokeType) {
@@ -699,6 +706,7 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                         StrokeType.BRUSH -> R.drawable.stylus_brush_24
                         StrokeType.CHARCOAL -> R.drawable.stylus_pen_24
                         StrokeType.DASH -> R.drawable.stylus_dash_24
+                        StrokeType.DOT -> R.drawable.stylus_dot_24
                         else -> R.drawable.stylus_fountain_pen_24
                     }
                 Icon(painter = painterResource(resId), contentDescription = item.penTool.name, tint = Color.Black)
@@ -719,8 +727,18 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     ActionType.UNDO -> R.drawable.ic_undo
                     ActionType.REDO -> R.drawable.ic_redo
                     ActionType.INSERT_IMAGE -> R.drawable.ic_add
+                    ActionType.ZOOM_WINDOW -> R.drawable.ic_zoom_window
+                    ActionType.GUIDES -> R.drawable.ic_guides
                 }
-            Icon(painter = painterResource(iconRes), contentDescription = item.actionType.name, tint = Color.Black)
+            val description =
+                when (item.actionType) {
+                    ActionType.UNDO -> "Undo"
+                    ActionType.REDO -> "Redo"
+                    ActionType.INSERT_IMAGE -> "Insert"
+                    ActionType.ZOOM_WINDOW -> "Zoom box"
+                    ActionType.GUIDES -> "Ruler and protractor"
+                }
+            Icon(painter = painterResource(iconRes), contentDescription = description, tint = Color.Black)
         }
 
         is ToolbarItem.Widget -> {
@@ -789,6 +807,25 @@ fun ToolbarEditPanel(
                 label = stringResource(R.string.text_tool),
                 onClick = { viewModel.addToolbarItem(ToolbarItem.Pen(defaultText)) },
             )
+
+            // Add Shapes
+            AddItemButton(
+                item = ToolbarItem.Pen(PenTool.defaultShapeTool("shape_preview")),
+                label = stringResource(R.string.shape_tool),
+                onClick = { viewModel.addShapeTool() },
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            // Add Lines
+            AddItemButton(
+                item = ToolbarItem.Pen(PenTool.defaultShapeTool("line_preview", ShapeType.LINE)),
+                label = stringResource(R.string.line_tool),
+                onClick = { viewModel.addShapeTool(ShapeType.LINE) },
+            )
         }
 
         Row(
@@ -835,11 +872,25 @@ fun ToolbarEditPanel(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            // Add Image
+            // Add Insert (image / PDF / link / paste)
             AddItemButton(
                 item = ToolbarItem.Action(ActionType.INSERT_IMAGE),
                 label = stringResource(R.string.image_action),
                 onClick = { viewModel.addToolbarItem(ToolbarItem.Action(ActionType.INSERT_IMAGE)) },
+            )
+
+            // Add Zoom Writing Window
+            AddItemButton(
+                item = ToolbarItem.Action(ActionType.ZOOM_WINDOW),
+                label = stringResource(R.string.zoom_window_action),
+                onClick = { viewModel.addToolbarItem(ToolbarItem.Action(ActionType.ZOOM_WINDOW)) },
+            )
+
+            // Add Ruler / Protractor
+            AddItemButton(
+                item = ToolbarItem.Action(ActionType.GUIDES),
+                label = stringResource(R.string.guides_action),
+                onClick = { viewModel.addToolbarItem(ToolbarItem.Action(ActionType.GUIDES)) },
             )
 
             // Add Page Nav

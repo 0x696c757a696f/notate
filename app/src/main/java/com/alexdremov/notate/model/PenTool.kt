@@ -46,7 +46,19 @@ data class PenTool(
     var eraserType: EraserType = EraserType.STANDARD,
     @ProtoNumber(8)
     var selectionType: SelectionType = SelectionType.RECTANGLE,
+    @ProtoNumber(9)
+    val shapeType: ShapeType = ShapeType.NONE,
+    @ProtoNumber(10)
+    val polygonSides: Int = 5,
 ) {
+    /** True for pens that draw geometric shapes instead of freehand ink. */
+    val isShapeTool: Boolean
+        get() = type == ToolType.PEN && shapeType != ShapeType.NONE
+
+    /** True for shape pens whose shape is defined by dragging from a start to an end point. */
+    val isDragShapeTool: Boolean
+        get() = type == ToolType.PEN && shapeType.isDragShape
+
     val displayColor: Int
         get() {
             val alpha = (Color.alpha(color) * strokeType.alphaMultiplier).toInt()
@@ -72,6 +84,22 @@ data class PenTool(
                     SelectionType.RECTANGLE,
                 ),
                 PenTool("text_tool", "Text", ToolType.TEXT, Color.BLACK, 40f, StrokeType.FINELINER),
+                defaultShapeTool("shape_tool"),
+                defaultShapeTool("line_tool", ShapeType.LINE),
+            )
+
+        fun defaultShapeTool(
+            id: String,
+            shapeType: ShapeType = ShapeType.AUTO,
+        ): PenTool =
+            PenTool(
+                id = id,
+                name = if (shapeType.isLine) "Lines" else "Shapes",
+                type = ToolType.PEN,
+                color = Color.BLACK,
+                width = 6f,
+                strokeType = StrokeType.FINELINER,
+                shapeType = shapeType,
             )
     }
 }

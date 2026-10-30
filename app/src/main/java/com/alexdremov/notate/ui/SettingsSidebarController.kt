@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
+import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
 import com.alexdremov.notate.config.CanvasConfig
 import com.alexdremov.notate.model.BackgroundStyle
@@ -27,6 +28,7 @@ import com.alexdremov.notate.ui.settings.InputSettingsPanel
 import com.alexdremov.notate.ui.settings.InputSettingsState
 import com.alexdremov.notate.ui.settings.InterfaceSettingsPanel
 import com.alexdremov.notate.ui.settings.InterfaceSettingsState
+import com.alexdremov.notate.ui.settings.SettingsToggle
 import com.alexdremov.notate.ui.theme.NotateTheme
 import com.alexdremov.notate.vm.DrawingViewModel
 import kotlin.math.roundToInt
@@ -41,6 +43,9 @@ class SettingsSidebarController(
     private val onExportRequest: (ExportAction) -> Unit,
     private val onEditToolbar: () -> Unit,
     private val onGeneratePatterns: (com.alexdremov.notate.util.PatternGenerator.PatternType, Float) -> Unit,
+    private val onPalmRejectionChanged: (Boolean) -> Unit,
+    private val onTwoFingerTapActionChange: (com.alexdremov.notate.model.TwoFingerTapAction) -> Unit,
+    private val onStylusButtonActionChange: (com.alexdremov.notate.model.StylusButtonAction) -> Unit,
 ) {
     private val wrapperView: View = LayoutInflater.from(context).inflate(R.layout.sidebar_layout_wrapper, container, false)
     private val contentFrame: FrameLayout = wrapperView.findViewById(R.id.sidebar_content)
@@ -93,15 +98,23 @@ class SettingsSidebarController(
             onEditToolbar()
         }
 
-        mainMenuView.findViewById<View>(R.id.menu_item_debug).setOnClickListener {
-            showDebugMenu()
+        // Renderer/log switches are developer tools; release builds don't show them.
+        val debugMenuItem = mainMenuView.findViewById<View>(R.id.menu_item_debug)
+        val debugDivider = mainMenuView.findViewById<View>(R.id.divider_debug)
+        if (BuildConfig.DEBUG) {
+            debugMenuItem.setOnClickListener {
+                showDebugMenu()
+            }
+        } else {
+            debugMenuItem.visibility = View.GONE
+            debugDivider?.visibility = View.GONE
         }
     }
 
     private fun showDocumentMenu() {
         contentFrame.removeAllViews()
 
-        tvTitle.text = "Document"
+        tvTitle.text = "Page layout"
         btnBack.visibility = View.VISIBLE
 
         val composeView =
@@ -218,13 +231,51 @@ class SettingsSidebarController(
                                                 shapeDelay,
                                             )
                                     }
+                                val (localTapAction, setTapAction) =
+                                    androidx.compose.runtime.remember {
+                                        androidx.compose.runtime.mutableStateOf(
+                                            com.alexdremov.notate.data.PreferencesManager
+                                                .getTwoFingerTapAction(context),
+                                        )
+                                    }
+                                val (localButtonAction, setButtonAction) =
+                                    androidx.compose.runtime.remember {
+                                        androidx.compose.runtime.mutableStateOf(
+                                            com.alexdremov.notate.data.PreferencesManager
+                                                .getStylusButtonAction(context),
+                                        )
+                                    }
+
+                                val (localPalm, setLocalPalm) =
+                                    androidx.compose.runtime.remember {
+                                        androidx.compose.runtime.mutableStateOf(
+                                            com.alexdremov.notate.data.PreferencesManager
+                                                .isPalmRejectionEnabled(context),
+                                        )
+                                    }
 
                                 InputSettingsPanel(
-                                    state = InputSettingsState(localScribble, localShape, localAngle, localAxis, localShapeDelay),
+                                    state =
+                                        InputSettingsState(
+                                            localScribble,
+                                            localShape,
+                                            localAngle,
+                                            localAxis,
+                                            localShapeDelay,
+                                            localPalm,
+                                            localTapAction,
+                                            localButtonAction,
+                                        ),
                                     onScribbleChange = {
                                         setScribble(it)
                                         com.alexdremov.notate.data.PreferencesManager
                                             .setScribbleToEraseEnabled(context, it)
+                                    },
+                                    onPalmRejectionChange = {
+                                        setLocalPalm(it)
+                                        com.alexdremov.notate.data.PreferencesManager
+                                            .setPalmRejectionEnabled(context, it)
+                                        onPalmRejectionChanged(it)
                                     },
                                     onShapeChange = {
                                         setShape(it)
@@ -248,6 +299,18 @@ class SettingsSidebarController(
                                             localShapeDelay.toLong(),
                                         )
                                     },
+                                    onTwoFingerTapChange = {
+                                        setTapAction(it)
+                                        com.alexdremov.notate.data.PreferencesManager
+                                            .setTwoFingerTapAction(context, it)
+                                        onTwoFingerTapActionChange(it)
+                                    },
+                                    onStylusButtonChange = {
+                                        setButtonAction(it)
+                                        com.alexdremov.notate.data.PreferencesManager
+                                            .setStylusButtonAction(context, it)
+                                        onStylusButtonActionChange(it)
+                                    },
                                 )
 
                                 HorizontalDivider(
@@ -264,6 +327,17 @@ class SettingsSidebarController(
                                     onCollapsibleChange = { viewModel.setCollapsibleToolbar(it) },
                                     onTimeoutChange = { setLocalTimeout(it) },
                                     onTimeoutFinished = { viewModel.setToolbarCollapseTimeout(localTimeout.toLong()) },
+                                )
+
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 16.dp),
+                                )
+
+                                val distractionFree by viewModel.isDistractionFree.collectAsState()
+                                SettingsToggle(
+                                    title = "Distraction-free mode",
+                                    checked = distractionFree,
+                                    onCheckedChange = { viewModel.setDistractionFree(it) },
                                 )
                             }
                         }
@@ -483,7 +557,7 @@ class SettingsSidebarController(
         val bgView = LayoutInflater.from(context).inflate(R.layout.dialog_background_settings, contentFrame, false)
         contentFrame.addView(bgView)
 
-        tvTitle.text = "Background"
+        tvTitle.text = "Page background"
         btnBack.visibility = View.VISIBLE
 
         bindBackgroundSettings(bgView)

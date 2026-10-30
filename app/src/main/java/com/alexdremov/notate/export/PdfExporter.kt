@@ -23,7 +23,6 @@ import com.alexdremov.notate.util.FountainPenRenderer
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.StrokeRenderer
 import com.alexdremov.notate.util.TextRenderer
-import com.onyx.android.sdk.api.device.epd.EpdController
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.multipdf.LayerUtility
@@ -592,8 +591,7 @@ object PdfExporter {
             }
 
             else -> {
-                val hwMax = EpdController.getMaxTouchPressure()
-                if (hwMax <= 0f) 4096f else hwMax
+                StrokeRenderer.deviceMaxPressure
             }
         }
     }
@@ -666,6 +664,18 @@ object PdfExporter {
             stream.setLineWidth(stroke.width)
             stream.setLineCapStyle(1)
             stream.setLineJoinStyle(1)
+            // Match the on-screen dash patterns in StrokeRenderer (round caps turn 0-length dashes into dots).
+            when (stroke.style) {
+                com.alexdremov.notate.model.StrokeType.DASH -> {
+                    stream.setLineDashPattern(floatArrayOf(stroke.width * 2, stroke.width * 4), 0f)
+                }
+
+                com.alexdremov.notate.model.StrokeType.DOT -> {
+                    stream.setLineDashPattern(floatArrayOf(0f, stroke.width * 2.5f), 0f)
+                }
+
+                else -> {}
+            }
         }
 
         if (coords.isNotEmpty()) {
