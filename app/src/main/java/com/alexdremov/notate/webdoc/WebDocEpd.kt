@@ -36,6 +36,12 @@ class WebDocEpd(
         view.postDelayed(exitRunnable, IDLE_DELAY_MS)
     }
 
+    /** Leaves fast mode now instead of after the idle delay (the pen is about to write). */
+    fun settle() {
+        view.removeCallbacks(exitRunnable)
+        exitFast()
+    }
+
     /** Content changed without touch (e.g. scripted animation or scroll by JS). */
     fun onContentMoved() {
         onInteractionStart()

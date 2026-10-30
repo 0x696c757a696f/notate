@@ -94,6 +94,8 @@ class OnyxCanvasView
                 },
                 onInteractionEnd = {
                     canvasRenderer.setInteracting(false)
+                    // Clear the pan's screen updates while the pen is still paused, not under the next stroke.
+                    minimapDrawer?.hideNow()
                     touchHelper?.setRawDrawingEnabled(true)
                     EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
                     updateTouchHelperTool()
@@ -691,6 +693,8 @@ class OnyxCanvasView
                 }
 
                 MotionEvent.ACTION_HOVER_ENTER -> {
+                    // The pen is about to write: redraw what is pending now rather than mid-stroke.
+                    minimapDrawer?.hideNow()
                     penInputHandler.onHoverEnter()
                 }
 

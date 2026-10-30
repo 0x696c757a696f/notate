@@ -134,6 +134,7 @@ class WebDocActivity : AppCompatActivity() {
     private lateinit var content: FrameLayout
     private var rawInput: WebInkRawInput? = null
     private var fingerPaused = false
+    private var fingerDown = false
     private var focusPaused = false
     private val fingerResume = Runnable { setFingerPaused(false) }
     private var pageLoaded: CompletableDeferred<String>? = null
@@ -374,7 +375,10 @@ class WebDocActivity : AppCompatActivity() {
             inkChanged()
         }
         overlay.onShapeSnapped = { rawInput?.showOverlayNow() }
-        overlay.onPenHover = { rawInput?.onHover(it) }
+        overlay.onPenHover = {
+            rawInput?.onHover(it)
+            if (it.actionMasked != MotionEvent.ACTION_HOVER_EXIT) resumeForPen()
+        }
         overlay.onGuidesMoved = { ended -> if (ended) epd.onInteractionEnd() else epd.onInteractionStart() }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
@@ -410,6 +414,17 @@ class WebDocActivity : AppCompatActivity() {
         if (::overlay.isInitialized) overlay.nativeInput = false
     }
 
+    /**
+     * The pen came into hover range after a finger scroll: hand the screen back to the pen now
+     * instead of [WebDocEpd.IDLE_DELAY_MS] after the finger lifted, which could be mid-stroke.
+     */
+    private fun resumeForPen() {
+        if (!fingerPaused || fingerDown) return
+        overlay.removeCallbacks(fingerResume)
+        epd.settle()
+        setFingerPaused(false)
+    }
+
     private fun setFingerPaused(paused: Boolean) {
         if (paused == fingerPaused) return
         fingerPaused = paused
@@ -437,12 +452,14 @@ class WebDocActivity : AppCompatActivity() {
                 MotionEvent.ACTION_DOWN -> {
                     epd.onInteractionStart()
                     if (finger) {
+                        fingerDown = true
                         // The page must be able to redraw while the finger scrolls or drags.
                         overlay.removeCallbacks(fingerResume)
                         setFingerPaused(true)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (finger) fingerDown = false
                     epd.onInteractionEnd()
                     if (fingerPaused) {
                         overlay.removeCallbacks(fingerResume)
