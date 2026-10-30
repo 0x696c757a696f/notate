@@ -78,9 +78,10 @@ object OcrBackfillScheduler {
     ) {
         val request = OneTimeWorkRequestBuilder<OcrBackfillWorker>()
             .setConstraints(
+                // No device-idle constraint: WorkManager rejects backoff criteria on
+                // idle-mode jobs, and the batched retry() below depends on backoff.
                 Constraints.Builder()
                     .setRequiresCharging(true)
-                    .setRequiresDeviceIdle(true)
                     .build(),
             )
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
