@@ -22,7 +22,7 @@ export PATH="$PATH:$HOME/.maestro/bin"
 echo "============================================="
 echo "🧪 Running Flow 1: Organize Notes (File Management)"
 echo "============================================="
-# This flow starts with a clean slate, creates a project, handles the Android file picker, and creates folders.
+# This flow starts with a clean slate, creates an on-device project, and creates folders.
 maestro test maestro/02_organize_notes.yaml
 
 echo "============================================="

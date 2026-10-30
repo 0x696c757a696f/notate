@@ -17,11 +17,14 @@ import android.view.SurfaceView
 import com.alexdremov.notate.config.CanvasConfig
 import com.alexdremov.notate.data.CanvasData
 import com.alexdremov.notate.data.CanvasType
+import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.model.InfiniteCanvasModel
 import com.alexdremov.notate.model.PenTool
 import com.alexdremov.notate.model.Stroke
+import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.TextItem
 import com.alexdremov.notate.model.ToolType
+import com.alexdremov.notate.model.TwoFingerTapAction
 import com.alexdremov.notate.ui.controller.CanvasControllerImpl
 import com.alexdremov.notate.ui.controller.ViewportController
 import com.alexdremov.notate.ui.input.PenInputHandler
@@ -114,15 +117,38 @@ class OnyxCanvasView
         private var twoFingerPointerId1 = -1
         private var twoFingerPointerId2 = -1
 
+        // Three-Finger Tap Detection (Distraction-free toggle)
+        private var threeFingerTapDownTime = 0L
+        private var isThreeFingerTapCheck = false
+        private val threeFingerStartPts = Array(3) { floatArrayOf(0f, 0f) }
+        private val threeFingerPointerIds = intArrayOf(-1, -1, -1)
+
+        @Volatile
+        private var twoFingerTapAction: TwoFingerTapAction = PreferencesManager.getTwoFingerTapAction(context)
+
+        @Volatile
+        private var stylusButtonAction: StylusButtonAction = PreferencesManager.getStylusButtonAction(context)
+
         private var lastStrokeEndTime = 0L
 
         private var currentTool: PenTool = PenTool.defaultPens()[0]
         private var isReadOnly = false
 
+        @Volatile
+        private var palmRejectionEnabled: Boolean = PreferencesManager.isPalmRejectionEnabled(context)
+
         private val exclusionRects = ArrayList<Rect>()
+
+        // Immutable snapshot for the raw-input thread (exclusionRects is mutated on main).
+        @Volatile
+        private var exclusionSnapshot: List<Rect> = emptyList()
+
+        @Volatile
+        private var isRawDrawingActive = false
 
         // Optimization: Pre-allocated RectF for sync updates
         private val selectionBoundsCache = RectF()
+        private var searchHighlightBounds: RectF? = null
 
         var onStrokeStarted: (() -> Unit)? = null
 
@@ -131,9 +157,12 @@ class OnyxCanvasView
         var minimapDrawer: com.alexdremov.notate.ui.render.MinimapDrawer? = null
 
         var onRequestInsertImage: (() -> Unit)? = null
+        var onRequestInsertPdf: (() -> Unit)? = null
         var onBrowseFiles: ((onResult: (name: String, uuid: String) -> Unit) -> Unit)? = null
         var onSelectFile: ((onResult: (name: String, path: String) -> Unit) -> Unit)? = null
         var onLinkActivated: ((com.alexdremov.notate.model.LinkItem) -> Unit)? = null
+
+        var onThreeFingerTap: (() -> Unit)? = null
 
         private var contextMenu: com.alexdremov.notate.ui.dialog.CanvasContextMenu? = null
         private lateinit var gestureDetector: android.view.GestureDetector
@@ -265,6 +294,7 @@ class OnyxCanvasView
                                                 viewScope.launch { canvasController.paste(worldX, worldY) }
                                             },
                                             onPasteImage = { onRequestInsertImage?.invoke() },
+                                            onInsertPdf = { onRequestInsertPdf?.invoke() },
                                             onInsertLink = { showLinkDialog(worldX, worldY) },
                                         )
                                     contextMenu?.show(this@OnyxCanvasView, e.x, e.y)
@@ -401,7 +431,14 @@ class OnyxCanvasView
             val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
             if (isStylus) return false // Handled by RawInputCallback
 
+            if (palmRejectionEnabled) return true // Palm rejection: ignore finger input (stylus draws via RawInputCallback)
+
             if (!isReadOnly) detectTwoFingerTap(event)
+
+            if (!isReadOnly) detectThreeFingerTap(event)
+
+            // Reserve 3+ finger gestures for the distraction-free toggle (no pan/zoom/select).
+            if (!isReadOnly && event.pointerCount >= 3) return true
 
             // 1. Gesture Detector (Long Press, Tap)
             if (gestureDetector.onTouchEvent(event)) {
@@ -454,7 +491,22 @@ class OnyxCanvasView
                     if (duration < CanvasConfig.TWO_FINGER_TAP_MAX_DELAY) {
                         if (!isTapSlopExceeded(event)) {
                             if (now - lastTwoFingerTapTime < CanvasConfig.TWO_FINGER_TAP_DOUBLE_TIMEOUT) {
-                                viewScope.launch { undo() }
+                                when (twoFingerTapAction) {
+                                    TwoFingerTapAction.UNDO -> viewScope.launch { undo() }
+                                    TwoFingerTapAction.REDO -> viewScope.launch { redo() }
+                                    TwoFingerTapAction.PASTE -> {
+                                        val inv = Matrix()
+                                        matrix.invert(inv)
+                                        val pts =
+                                            floatArrayOf(
+                                                (twoFingerStartPt1[0] + twoFingerStartPt2[0]) / 2f,
+                                                (twoFingerStartPt1[1] + twoFingerStartPt2[1]) / 2f,
+                                            )
+                                        inv.mapPoints(pts)
+                                        viewScope.launch { canvasController.paste(pts[0], pts[1]) }
+                                    }
+                                    TwoFingerTapAction.NONE -> {}
+                                }
                                 lastTwoFingerTapTime = 0L
                             } else {
                                 lastTwoFingerTapTime = now
@@ -494,12 +546,60 @@ class OnyxCanvasView
             y2: Float,
         ) = (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2)
 
+        fun setPalmRejectionEnabled(enabled: Boolean) {
+            palmRejectionEnabled = enabled
+        }
+
+        private fun detectThreeFingerTap(event: MotionEvent) {
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_POINTER_DOWN && event.pointerCount == 3) {
+                threeFingerTapDownTime = System.currentTimeMillis()
+                isThreeFingerTapCheck = true
+                // Cancel any pending two-finger tap so 3 fingers don't also trigger undo.
+                isTwoFingerTapCheck = false
+                for (i in 0 until 3) {
+                    threeFingerPointerIds[i] = event.getPointerId(i)
+                    threeFingerStartPts[i][0] = event.getX(i)
+                    threeFingerStartPts[i][1] = event.getY(i)
+                }
+            } else if (action == MotionEvent.ACTION_POINTER_UP && event.pointerCount == 3) {
+                if (isThreeFingerTapCheck) {
+                    val duration = System.currentTimeMillis() - threeFingerTapDownTime
+                    if (duration < CanvasConfig.TWO_FINGER_TAP_MAX_DELAY && !isThreeTapSlopExceeded(event)) {
+                        onThreeFingerTap?.invoke()
+                    }
+                    isThreeFingerTapCheck = false
+                }
+            } else if (action == MotionEvent.ACTION_MOVE && isThreeFingerTapCheck) {
+                if (event.pointerCount == 3) {
+                    if (isThreeTapSlopExceeded(event)) {
+                        isThreeFingerTapCheck = false
+                    }
+                } else {
+                    isThreeFingerTapCheck = false
+                }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                isThreeFingerTapCheck = false
+            }
+        }
+
+        private fun isThreeTapSlopExceeded(event: MotionEvent): Boolean {
+            for (i in 0 until 3) {
+                val index = event.findPointerIndex(threeFingerPointerIds[i])
+                if (index == -1) return true
+                val d = distSq(event.getX(index), event.getY(index), threeFingerStartPts[i][0], threeFingerStartPts[i][1])
+                if (d > CanvasConfig.TWO_FINGER_TAP_SLOP_SQ) return true
+            }
+            return false
+        }
+
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
                     val toolType = event.getToolType(0)
                     val isEraserTail = toolType == MotionEvent.TOOL_TYPE_ERASER
-                    val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+                    val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 &&
+                        stylusButtonAction == StylusButtonAction.TEMPORARY_ERASER
                     if (isEraserTail || isStylusButton) penInputHandler.prepareEraser() else penInputHandler.finishEraser()
                     penInputHandler.onHoverMove(event)
                 }
@@ -595,6 +695,18 @@ class OnyxCanvasView
 
                     canvasRenderer.render(cv, matrix, visibleRect, RenderQuality.HIGH, currentScale)
                     selectionOverlayDrawer.draw(cv, matrix, currentScale)
+                    searchHighlightBounds?.let { worldBounds ->
+                        val screenBounds = RectF(worldBounds)
+                        matrix.mapRect(screenBounds)
+                        val highlightPaint =
+                            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.BLACK
+                                style = Paint.Style.STROKE
+                                strokeWidth = 5f
+                                pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 10f), 0f)
+                            }
+                        cv.drawRect(screenBounds, highlightPaint)
+                    }
 
                     if (CanvasConfig.DEBUG_SHOW_RAM_USAGE) {
                         val runtime = Runtime.getRuntime()
@@ -673,6 +785,27 @@ class OnyxCanvasView
 
         fun getCurrentScale() = viewportInteractor.getCurrentScale()
 
+        fun focusSearchMatch(bounds: RectF) {
+            if (width <= 0 || height <= 0) {
+                post { focusSearchMatch(bounds) }
+                return
+            }
+            val scale = viewportInteractor.getCurrentScale().coerceAtLeast(0.01f)
+            val left = bounds.centerX() - width / (2f * scale)
+            val top = bounds.centerY() - height / (2f * scale)
+            matrix.reset()
+            matrix.postScale(scale, scale)
+            matrix.postTranslate(-left * scale, -top * scale)
+            onViewportChanged?.invoke()
+            searchHighlightBounds = RectF(bounds)
+            invalidateCanvas()
+            viewScope.launch {
+                delay(2200)
+                searchHighlightBounds = null
+                invalidateCanvas()
+            }
+        }
+
         fun scrollByOffset(
             dx: Float,
             dy: Float,
@@ -724,6 +857,14 @@ class OnyxCanvasView
             penInputHandler.setCursorView(view)
         }
 
+        fun setTwoFingerTapAction(action: TwoFingerTapAction) {
+            twoFingerTapAction = action
+        }
+
+        fun setStylusButtonAction(action: StylusButtonAction) {
+            stylusButtonAction = action
+        }
+
         suspend fun setBackgroundStyle(style: com.alexdremov.notate.model.BackgroundStyle) {
             canvasModel.setBackground(style)
             invalidateCanvas()
@@ -740,6 +881,7 @@ class OnyxCanvasView
                 // Keep touchHelper active but disable hardware inking to maintain palm rejection
                 touchHelper?.setRawDrawingRenderEnabled(false)
                 touchHelper?.setRawDrawingEnabled(false)
+                isRawDrawingActive = false
                 EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
             }
         }
@@ -752,15 +894,43 @@ class OnyxCanvasView
             }
         }
 
+        /**
+         * Areas (toolbar, open sidebar) where the stylus must only click, never ink.
+         * [rects] are in screen coordinates; the TouchHelper and raw touch points use
+         * view-local coordinates, so they are translated here.
+         */
         fun setExclusionRects(rects: List<Rect>) {
+            val origin = IntArray(2)
+            getLocationOnScreen(origin)
+            val local = rects.filter { !it.isEmpty }.map { Rect(it).apply { offset(-origin[0], -origin[1]) } }
+            if (local == exclusionRects) return
+
             exclusionRects.clear()
-            exclusionRects.addAll(rects)
+            exclusionRects.addAll(local)
+            exclusionSnapshot = local
             touchHelper?.let {
                 val limit = Rect()
                 getLocalVisibleRect(limit)
-                it.setLimitRect(limit, exclusionRects)
+                if (isRawDrawingActive) {
+                    // The driver only picks up a new limit/exclude set when raw drawing restarts;
+                    // otherwise ink keeps landing on a toolbar that moved or expanded.
+                    it.setRawDrawingEnabled(false)
+                    it.setLimitRect(limit, exclusionRects)
+                    it.setRawDrawingEnabled(true)
+                } else {
+                    it.setLimitRect(limit, exclusionRects)
+                }
             }
         }
+
+        /** True if a stylus point (view coordinates) falls on the toolbar or another UI-only area. */
+        fun isInExclusionZone(
+            x: Float,
+            y: Float,
+        ): Boolean = exclusionSnapshot.any { it.contains(x.toInt(), y.toInt()) }
+
+        /** Called on the main thread after a stylus stroke on a UI-only area was discarded. */
+        var onExcludedStrokeDiscarded: (() -> Unit)? = null
 
         suspend fun clear() {
             canvasModel.clear()
@@ -797,6 +967,74 @@ class OnyxCanvasView
 
         private var actionPopup: com.alexdremov.notate.ui.dialog.SelectionActionPopup? = null
         private var actionPopupContainer: android.widget.FrameLayout? = null
+        private var isOcrRunning = false
+
+        private suspend fun recognizeSelection() {
+            if (isOcrRunning) return
+            val selectionBounds = canvasController.getSelectionManager().getTransformedBounds()
+            val strokes = canvasController.getSelectedStrokesForOcr()
+            if (strokes.isEmpty()) {
+                android.widget.Toast.makeText(context, "Select handwriting to recognize", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            isOcrRunning = true
+            android.widget.Toast.makeText(context, "Recognizing text…", android.widget.Toast.LENGTH_SHORT).show()
+            try {
+                val raster =
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        com.alexdremov.notate.ocr.StrokeOcrRasterizer.render(strokes)
+                    }
+                if (raster == null) {
+                    android.widget.Toast.makeText(context, "Selection could not be rendered", android.widget.Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val blocks =
+                    try {
+                        com.alexdremov.notate.ocr.PaddleOcrProvider.get(context).recognize(raster.bitmap)
+                    } finally {
+                        raster.bitmap.recycle()
+                    }
+                val recognizedText = com.alexdremov.notate.ocr.OcrConversionPlanner.orderedText(blocks)
+                if (recognizedText.isEmpty()) {
+                    android.widget.Toast.makeText(context, "No text recognized", android.widget.Toast.LENGTH_SHORT).show()
+                    return
+                }
+
+                val textY =
+                    com.alexdremov.notate.ocr.OcrConversionPlanner.insertionY(
+                        selection = selectionBounds,
+                        text = recognizedText,
+                        fontSize = 24f,
+                        fixedPageHeight = if (canvasModel.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES) canvasModel.pageHeight else null,
+                        pageSpacing = com.alexdremov.notate.config.CanvasConfig.PAGE_SPACING,
+                    )
+
+                com.alexdremov.notate.ui.dialog.TextEditDialog(
+                    context,
+                    recognizedText,
+                    24f,
+                    android.graphics.Color.BLACK,
+                ) { confirmedText ->
+                    if (confirmedText.isNotBlank()) {
+                        viewScope.launch {
+                            canvasController.addText(
+                                confirmedText,
+                                selectionBounds.left,
+                                textY,
+                                24f,
+                                android.graphics.Color.BLACK,
+                            )
+                        }
+                    }
+                }.show()
+            } catch (error: Throwable) {
+                com.alexdremov.notate.util.Logger.e("PaddleOCR", "Text recognition failed", error, showToUser = true)
+                android.widget.Toast.makeText(context, "Text recognition is unavailable", android.widget.Toast.LENGTH_LONG).show()
+            } finally {
+                isOcrRunning = false
+            }
+        }
 
         fun setActionPopupContainer(container: android.widget.FrameLayout) {
             actionPopup?.destroy()
@@ -814,6 +1052,7 @@ class OnyxCanvasView
                             context,
                             container,
                             onCopy = { viewScope.launch { canvasController.copySelection() } },
+                            onRecognize = { viewScope.launch { recognizeSelection() } },
                             onDelete = { viewScope.launch { canvasController.deleteSelection() } },
                             onDismiss = { },
                         )
@@ -887,6 +1126,7 @@ class OnyxCanvasView
                 openRawDrawing()
                 setRawDrawingEnabled(true)
                 setRawDrawingRenderEnabled(true)
+                isRawDrawingActive = true
 
                 // Mode 2 ignores enableFingerTouch(), so we don't need to call it.
                 // Instead, we use setSingleRegionMode() which is crucial for fast stroke capture in SFTouchRender.

@@ -27,3 +27,10 @@ interface CanvasItem {
         y: Float,
     ): Float
 }
+
+/**
+ * True for items that must not be erased, selected or picked by hit-testing
+ * (currently only locked background images such as imported PDF pages).
+ */
+val CanvasItem.isLocked: Boolean
+    get() = this is CanvasImage && locked

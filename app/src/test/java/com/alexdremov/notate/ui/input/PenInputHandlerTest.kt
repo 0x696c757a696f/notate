@@ -128,4 +128,34 @@ class PenInputHandlerTest {
             assertEquals(20f, s2.points[0].x, 0.01f)
             assertEquals(30f, s2.points[1].x, 0.01f)
         }
+
+    @Test
+    fun `stylus stroke starting on the toolbar is discarded`() =
+        runTest {
+            val canvasView = mockk<com.alexdremov.notate.ui.OnyxCanvasView>(relaxed = true)
+            every { canvasView.context } returns org.robolectric.RuntimeEnvironment.getApplication()
+            every { canvasView.isInExclusionZone(any(), any()) } answers { secondArg<Float>() < 50f }
+            val handler =
+                PenInputHandler(
+                    controller = controller,
+                    view = canvasView,
+                    scope = testScope,
+                    matrix = Matrix(),
+                    inverseMatrix = Matrix(),
+                    onStrokeFinished = {},
+                )
+
+            handler.onBeginRawDrawing(false, TouchPoint(10f, 10f, 0.5f, 1f, 1000L))
+            handler.onRawDrawingTouchPointMoveReceived(TouchPoint(200f, 200f, 0.5f, 1f, 1500L))
+            handler.onEndRawDrawing(false, TouchPoint(300f, 300f, 0.5f, 1f, 2000L))
+
+            coVerify(exactly = 0) { controller.commitStroke(any()) }
+            coVerify(exactly = 0) { controller.clearSelection() }
+
+            // The next stroke on the canvas is drawn normally.
+            handler.onBeginRawDrawing(false, TouchPoint(100f, 100f, 0.5f, 1f, 3000L))
+            handler.onRawDrawingTouchPointMoveReceived(TouchPoint(150f, 150f, 0.5f, 1f, 3500L))
+            handler.onEndRawDrawing(false, TouchPoint(200f, 200f, 0.5f, 1f, 4000L))
+            coVerify(exactly = 1) { controller.commitStroke(any()) }
+        }
 }

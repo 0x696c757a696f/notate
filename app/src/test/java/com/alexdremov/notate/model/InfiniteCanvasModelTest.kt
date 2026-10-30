@@ -196,6 +196,47 @@ class InfiniteCanvasModelTest {
         }
 
     @Test
+    fun `erase never removes locked images such as imported PDF pages`() =
+        runBlocking<Unit> {
+            model.initializeSession(regionManager)
+            val pageBounds = RectF(0f, 0f, 100f, 100f)
+            val pdfPage =
+                CanvasImage(
+                    uri = "/tmp/page.png",
+                    logicalBounds = RectF(pageBounds),
+                    bounds = RectF(pageBounds),
+                    zIndex = -1f,
+                    order = 1,
+                    locked = true,
+                )
+            val photo =
+                CanvasImage(
+                    uri = "/tmp/photo.png",
+                    logicalBounds = RectF(pageBounds),
+                    bounds = RectF(pageBounds),
+                    order = 2,
+                )
+
+            val region =
+                com.alexdremov.notate.data.region
+                    .RegionData(com.alexdremov.notate.data.region.RegionId(0, 0))
+            val quadtree =
+                com.alexdremov.notate.util
+                    .Quadtree(0, RectF(0f, 0f, 100f, 100f))
+            region.quadtree = quadtree
+            quadtree.insert(pdfPage)
+            quadtree.insert(photo)
+
+            coEvery { regionManager.getRegionsInRect(any()) } returns listOf(region)
+            val removed = slot<List<CanvasItem>>()
+            coEvery { regionManager.removeItems(capture(removed)) } just Runs
+
+            model.erase(createTestStroke(bounds = RectF(40f, 40f, 60f, 60f)), EraserType.STROKE)
+
+            assertThat(removed.captured).containsExactly(photo)
+        }
+
+    @Test
     fun `deleteItems should remove items via regionManager`() =
         runTest {
             model.initializeSession(regionManager)

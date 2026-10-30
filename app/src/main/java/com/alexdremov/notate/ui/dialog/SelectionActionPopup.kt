@@ -19,6 +19,7 @@ class SelectionActionPopup(
     private val context: Context,
     private val container: FrameLayout,
     private val onCopy: () -> Unit,
+    private val onRecognize: () -> Unit,
     private val onDelete: () -> Unit,
     private val onDismiss: () -> Unit,
 ) {
@@ -39,6 +40,11 @@ class SelectionActionPopup(
 
         binding.btnCopy.setOnClickListener {
             onCopy()
+            dismiss()
+        }
+
+        binding.btnRecognize.setOnClickListener {
+            onRecognize()
             dismiss()
         }
 

@@ -27,7 +27,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.alexdremov.notate.CanvasActivity
+import androidx.lifecycle.lifecycleScope
 import com.alexdremov.notate.data.CanvasItem
+import com.alexdremov.notate.data.DailyNotesManager
+import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.data.ProjectItem
 import com.alexdremov.notate.data.RemoteStorageType
 import com.alexdremov.notate.data.SortOption
@@ -42,6 +45,10 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val viewModel: HomeViewModel by viewModels()
 
+    companion object {
+        private var didAutoOpenDaily = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -50,6 +57,23 @@ class MainActivity : ComponentActivity() {
 
         // Handle incoming intent (e.g. from File Manager)
         handleIntent(intent)
+
+        if (savedInstanceState == null &&
+            !didAutoOpenDaily &&
+            PreferencesManager.isOpenDailyOnStartEnabled(this)
+        ) {
+            didAutoOpenDaily = true
+            lifecycleScope.launch {
+                val path = DailyNotesManager.openOrCreateTodayNote(this@MainActivity)
+                if (path != null) {
+                    startActivity(
+                        Intent(this@MainActivity, CanvasActivity::class.java).apply {
+                            putExtra("CANVAS_PATH", path)
+                        },
+                    )
+                }
+            }
+        }
 
         setContent {
             NotateTheme {
@@ -115,8 +139,13 @@ fun MainScreen(
     val selectedTag by viewModel.selectedTag.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
     val savingPaths by viewModel.savingPaths.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val searchResults by viewModel.searchResults.collectAsState()
+    val favorites by viewModel.favorites.collectAsState()
+    val recents by viewModel.recents.collectAsState()
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
     val activity = androidx.activity.compose.LocalActivity.current as? ComponentActivity
@@ -141,6 +170,7 @@ fun MainScreen(
     var editingStorage by remember { mutableStateOf<com.alexdremov.notate.data.RemoteStorageConfig?>(null) }
     var showSortMenu by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var isSearchExpanded by remember { mutableStateOf(false) }
 
     // Project Actions State
     var projectToDelete by remember { mutableStateOf<com.alexdremov.notate.data.ProjectConfig?>(null) }
@@ -185,17 +215,40 @@ fun MainScreen(
             }
         }
 
+    // "Import PDF": create a note sized to the PDF, then let CanvasActivity import the pages.
+    val pdfImportPicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                viewModel.createCanvasFromPdf(uri) { path ->
+                    val intent =
+                        Intent(context, CanvasActivity::class.java).apply {
+                            putExtra("CANVAS_PATH", path)
+                            putExtra(CanvasActivity.EXTRA_IMPORT_PDF_URI, uri.toString())
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                    context.startActivity(intent)
+                }
+            }
+        }
+
     // Back Handler
     val isAtRoot = breadcrumbs.size <= 1
     val shouldHandleBack =
-        if (lockedProjectId != null) {
+        if (isSearchExpanded || searchQuery.isNotBlank()) {
+            true
+        } else if (lockedProjectId != null) {
             !isAtRoot
         } else {
             currentProject != null
         }
 
     BackHandler(enabled = shouldHandleBack) {
-        viewModel.navigateUp()
+        if (isSearchExpanded || searchQuery.isNotBlank()) {
+            viewModel.setSearchQuery("")
+            isSearchExpanded = false
+        } else {
+            viewModel.navigateUp()
+        }
     }
 
     Row(modifier = Modifier.fillMaxSize()) {
@@ -213,6 +266,20 @@ fun MainScreen(
                 onAddProject = { showNameDialog = DialogType.ADD_PROJECT },
                 onManageTags = { showNameDialog = DialogType.MANAGE_TAGS },
                 onSettingsClick = { showSettingsDialog = true },
+                onTodayClick = {
+                    scope.launch {
+                        val path = DailyNotesManager.openOrCreateTodayNote(context)
+                        if (path != null) {
+                            context.startActivity(
+                                Intent(context, CanvasActivity::class.java).apply {
+                                    putExtra("CANVAS_PATH", path)
+                                },
+                            )
+                        } else {
+                            snackbarHostState.showSnackbar("Add a project first to use Daily Notes")
+                        }
+                    }
+                },
             )
         }
 
@@ -223,12 +290,30 @@ fun MainScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.headlineMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        if (isSearchExpanded && !isPickerMode) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = viewModel::setSearchQuery,
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                placeholder = { Text("Search all notes") },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                        }
+                                    }
+                                },
+                            )
+                        } else {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.headlineMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     },
                     navigationIcon = {
                         if (isPickerMode) {
@@ -238,6 +323,19 @@ fun MainScreen(
                         }
                     },
                     actions = {
+                        if (!isPickerMode) {
+                            IconButton(
+                                onClick = {
+                                    isSearchExpanded = !isSearchExpanded
+                                    if (!isSearchExpanded) viewModel.setSearchQuery("")
+                                },
+                            ) {
+                                Icon(
+                                    if (isSearchExpanded) Icons.Default.Close else Icons.Default.Search,
+                                    contentDescription = if (isSearchExpanded) "Close search" else "Search notes",
+                                )
+                            }
+                        }
                         if (currentProject != null || selectedTag != null) {
                             // Sort Action
                             IconButton(onClick = { showSortMenu = true }) {
@@ -272,6 +370,9 @@ fun MainScreen(
                                 IconButton(onClick = { showNameDialog = DialogType.CREATE_CANVAS }) {
                                     Icon(Icons.Filled.Edit, contentDescription = "New Canvas")
                                 }
+                                IconButton(onClick = { pdfImportPicker.launch(arrayOf("application/pdf")) }) {
+                                    Icon(Icons.Filled.PictureAsPdf, contentDescription = "Import PDF")
+                                }
                             }
                         } else {
                             // Project List Actions
@@ -289,17 +390,48 @@ fun MainScreen(
             },
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
-                if (currentProject == null && selectedTag == null) {
+                if (searchQuery.isNotBlank()) {
+                    OcrSearchResultsScreen(
+                        query = searchQuery,
+                        results = searchResults,
+                        projects = projects,
+                        onResultClick = { result ->
+                            val intent = Intent(context, CanvasActivity::class.java).apply {
+                                putExtra("CANVAS_PATH", result.path)
+                                result.bounds?.let { bounds ->
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_LEFT, bounds.left)
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_TOP, bounds.top)
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_RIGHT, bounds.right)
+                                    putExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_BOTTOM, bounds.bottom)
+                                }
+                            }
+                            context.startActivity(intent)
+                        },
+                    )
+                } else if (currentProject == null && selectedTag == null) {
                     // --- Empty State ---
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = if (lockedProjectId != null) "Loading project..." else "Select a project from the sidebar",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text =
+                                    when {
+                                        lockedProjectId != null -> "Loading project..."
+                                        projects.isEmpty() -> "Create a project to start taking notes"
+                                        else -> "Select a project from the sidebar"
+                                    },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (lockedProjectId == null && !isPickerMode && projects.isEmpty()) {
+                                Spacer(Modifier.height(16.dp))
+                                OutlinedButton(onClick = { showNameDialog = DialogType.ADD_PROJECT }) {
+                                    Text("New Project", color = Color.Black)
+                                }
+                            }
+                        }
                     }
                 } else {
                     // --- Level 1+: File Browser ---
@@ -320,6 +452,7 @@ fun MainScreen(
                                     if (isPickerMode && onFilePicked != null) {
                                         onFilePicked(item)
                                     } else {
+                                        PreferencesManager.addRecent(context, item.uuid ?: item.path)
                                         val intent =
                                             Intent(context, CanvasActivity::class.java).apply {
                                                 putExtra("CANVAS_PATH", item.path)
@@ -333,6 +466,9 @@ fun MainScreen(
                         onItemRename = { item, newName -> if (!isPickerMode) viewModel.renameItem(item, newName) },
                         onItemDuplicate = { item -> if (!isPickerMode) viewModel.duplicateItem(item) },
                         onSetFileTags = { item, newTags -> if (!isPickerMode) viewModel.setFileTags(item, newTags) },
+                        favorites = favorites,
+                        recents = recents,
+                        onToggleFavorite = { if (!isPickerMode) viewModel.toggleFavorite(it) },
                     )
                 }
 
@@ -572,17 +708,31 @@ fun MainScreen(
             )
         }
 
-        DialogType.ADD_PROJECT, DialogType.CREATE_FOLDER -> {
+        DialogType.ADD_PROJECT -> {
+            NewProjectDialog(
+                onDismiss = { showNameDialog = null },
+                onConfirm = { name, location ->
+                    when (location) {
+                        ProjectLocation.ON_DEVICE -> {
+                            viewModel.addLocalProject(name)
+                        }
+
+                        ProjectLocation.CUSTOM_FOLDER -> {
+                            pendingProjectName = name
+                            projectLocationPicker.launch(null)
+                        }
+                    }
+                    showNameDialog = null
+                },
+            )
+        }
+
+        DialogType.CREATE_FOLDER -> {
             TextInputDialog(
-                title = if (showNameDialog == DialogType.ADD_PROJECT) "New Project" else "New Folder",
+                title = "New Folder",
                 onDismiss = { showNameDialog = null },
                 onConfirm = { name ->
-                    if (showNameDialog == DialogType.ADD_PROJECT) {
-                        pendingProjectName = name
-                        projectLocationPicker.launch(null)
-                    } else {
-                        viewModel.createFolder(name)
-                    }
+                    viewModel.createFolder(name)
                     showNameDialog = null
                 },
             )

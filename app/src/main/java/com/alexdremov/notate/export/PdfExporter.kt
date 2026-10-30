@@ -23,7 +23,6 @@ import com.alexdremov.notate.util.FountainPenRenderer
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.StrokeRenderer
 import com.alexdremov.notate.util.TextRenderer
-import com.onyx.android.sdk.api.device.epd.EpdController
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.multipdf.LayerUtility
@@ -592,8 +591,7 @@ object PdfExporter {
             }
 
             else -> {
-                val hwMax = EpdController.getMaxTouchPressure()
-                if (hwMax <= 0f) 4096f else hwMax
+                StrokeRenderer.deviceMaxPressure
             }
         }
     }

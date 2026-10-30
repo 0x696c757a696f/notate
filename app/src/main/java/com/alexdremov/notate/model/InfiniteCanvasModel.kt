@@ -228,7 +228,8 @@ class InfiniteCanvasModel {
                 }
 
                 // Deduplicate candidates as items spanning multiple regions will appear multiple times
-                val uniqueCandidates = candidates.distinctBy { it.order }
+                // Locked items (e.g. imported PDF pages) are never erasable.
+                val uniqueCandidates = candidates.distinctBy { it.order }.filterNot { it.isLocked }
 
                 if (uniqueCandidates.isEmpty()) return@withLock null
 
