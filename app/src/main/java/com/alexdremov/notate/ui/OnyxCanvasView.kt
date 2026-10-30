@@ -121,6 +121,13 @@ class OnyxCanvasView
 
         private val exclusionRects = ArrayList<Rect>()
 
+        // Immutable snapshot for the raw-input thread (exclusionRects is mutated on main).
+        @Volatile
+        private var exclusionSnapshot: List<Rect> = emptyList()
+
+        @Volatile
+        private var isRawDrawingActive = false
+
         // Optimization: Pre-allocated RectF for sync updates
         private val selectionBoundsCache = RectF()
 
@@ -740,6 +747,7 @@ class OnyxCanvasView
                 // Keep touchHelper active but disable hardware inking to maintain palm rejection
                 touchHelper?.setRawDrawingRenderEnabled(false)
                 touchHelper?.setRawDrawingEnabled(false)
+                isRawDrawingActive = false
                 EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
             }
         }
@@ -752,15 +760,43 @@ class OnyxCanvasView
             }
         }
 
+        /**
+         * Areas (toolbar, open sidebar) where the stylus must only click, never ink.
+         * [rects] are in screen coordinates; the TouchHelper and raw touch points use
+         * view-local coordinates, so they are translated here.
+         */
         fun setExclusionRects(rects: List<Rect>) {
+            val origin = IntArray(2)
+            getLocationOnScreen(origin)
+            val local = rects.filter { !it.isEmpty }.map { Rect(it).apply { offset(-origin[0], -origin[1]) } }
+            if (local == exclusionRects) return
+
             exclusionRects.clear()
-            exclusionRects.addAll(rects)
+            exclusionRects.addAll(local)
+            exclusionSnapshot = local
             touchHelper?.let {
                 val limit = Rect()
                 getLocalVisibleRect(limit)
-                it.setLimitRect(limit, exclusionRects)
+                if (isRawDrawingActive) {
+                    // The driver only picks up a new limit/exclude set when raw drawing restarts;
+                    // otherwise ink keeps landing on a toolbar that moved or expanded.
+                    it.setRawDrawingEnabled(false)
+                    it.setLimitRect(limit, exclusionRects)
+                    it.setRawDrawingEnabled(true)
+                } else {
+                    it.setLimitRect(limit, exclusionRects)
+                }
             }
         }
+
+        /** True if a stylus point (view coordinates) falls on the toolbar or another UI-only area. */
+        fun isInExclusionZone(
+            x: Float,
+            y: Float,
+        ): Boolean = exclusionSnapshot.any { it.contains(x.toInt(), y.toInt()) }
+
+        /** Called on the main thread after a stylus stroke on a UI-only area was discarded. */
+        var onExcludedStrokeDiscarded: (() -> Unit)? = null
 
         suspend fun clear() {
             canvasModel.clear()
@@ -887,6 +923,7 @@ class OnyxCanvasView
                 openRawDrawing()
                 setRawDrawingEnabled(true)
                 setRawDrawingRenderEnabled(true)
+                isRawDrawingActive = true
 
                 // Mode 2 ignores enableFingerTouch(), so we don't need to call it.
                 // Instead, we use setSingleRegionMode() which is crucial for fast stroke capture in SFTouchRender.
