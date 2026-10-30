@@ -13,8 +13,7 @@ import kotlin.math.abs
  * Ballpoint Pen Renderer.
  *
  * Characteristics:
- * - Consistent width with slight pressure variation (Rolling ball style).
- * - Variable opacity based on pressure (lighter touch = lighter ink).
+ * - Moderate pressure response (see [PenDynamics]): lighter touch = thinner, lighter ink.
  * - High performance using segmented native Path rendering.
  * - Smooth joins and caps using Paint settings.
  * - Segmented caching to support variable properties without mesh artifacts.
@@ -79,22 +78,14 @@ object BallpointPenRenderer {
 
         val segments = ArrayList<BallpointCache.BallpointSegment>()
 
-        // Ballpoint dynamics configuration
+        // Ballpoint dynamics: mild pressure response in both width and ink density
         val baseWidth = stroke.width
-        val minWidthScale = 0.8f
-        val maxWidthScale = 1.0f
-        val minAlpha = 210
-        val pressureAlphaRange = 255 - minAlpha
 
         // Helper to calculate properties for a point
         fun getProps(p: TouchPoint): Pair<Float, Int> {
             val pressure = if (maxPressure > 0) p.pressure / maxPressure else 0.5f
-            val widthScale = minWidthScale + (maxWidthScale - minWidthScale) * pressure
-            val width = baseWidth * widthScale
-
-            val alphaFactor = pressure // Linear or could be squared
-            val alphaRaw = (minAlpha + (alphaFactor * pressureAlphaRange)).toInt().coerceIn(0, 255)
-
+            val width = baseWidth * PenDynamics.ballpointWidthScale(pressure)
+            val alphaRaw = PenDynamics.ballpointAlpha(pressure)
             return width to alphaRaw
         }
 
