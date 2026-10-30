@@ -120,6 +120,58 @@ class OcrIndexWriterTest {
         session.deleteRecursively()
     }
 
+    @Test
+    fun regionsOnlyInSavedContainerAreIndexedNotDeleted() = runTest {
+        // JIT-opened local notes keep untouched regions only inside the saved zip.
+        val dao = database.dao()
+        val documentId = "doc-jit"
+        dao.upsertDocument(OcrDocumentEntity(documentId, null, "/note.notate", "Note", 1, "old", "INDEXED"))
+        dao.insertBlocks(
+            listOf(
+                OcrBlockEntity(
+                    stableId = "zip-block",
+                    documentId = documentId,
+                    regionId = "r_5_5",
+                    regionHash = "old-hash",
+                    source = OcrTextSource.INK_OCR.name,
+                    text = "text in untouched region",
+                    normalizedText = "text in untouched region",
+                    searchTokens = "text in untouched region",
+                    confidence = 0.8f,
+                    left = 1f,
+                    top = 2f,
+                    right = 3f,
+                    bottom = 4f,
+                ),
+            ),
+        )
+
+        val root = File(context.cacheDir, "ocr-jit-test").apply { deleteRecursively(); mkdirs() }
+        val session = File(root, "session").apply { mkdirs() }
+        File(session, "manifest.bin").writeBytes(ProtoBuf.encodeToByteArray(CanvasData.serializer(), CanvasData(uuid = documentId)))
+        val stroke =
+            StrokeData(
+                pointsPacked = floatArrayOf(0f, 0f, 1f, 1f, 0f, 0f, 10f, 10f, 1f, 1f, 0f, 0f),
+                timestampsPacked = longArrayOf(1, 2),
+                color = android.graphics.Color.BLACK,
+                width = 2f,
+                style = StrokeType.BALLPOINT,
+            )
+        val container = File(root, "note.notate")
+        java.util.zip.ZipOutputStream(container.outputStream()).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("r_5_5.bin"))
+            zip.write(ProtoBuf.encodeToByteArray(RegionProto.serializer(), RegionProto(5, 5, strokes = listOf(stroke))))
+            zip.closeEntry()
+        }
+
+        val outcome = OcrIndexWriter(context, UnavailableEngine, dao).indexSession(session, container.absolutePath, 2)
+
+        // The zip-only region was discovered (OCR is unavailable, so it is retained as stale)
+        assertThat(outcome.staleRegions).isEqualTo(1)
+        assertThat(dao.getBlocksForRegion(documentId, "r_5_5").map { it.text }).containsExactly("text in untouched region")
+        root.deleteRecursively()
+    }
+
     private object UnavailableEngine : PaddleOcrEngine {
         override val modelInfo = OcrModelInfo()
         override suspend fun recognize(bitmap: Bitmap): List<OcrBlock> = error("Model missing")

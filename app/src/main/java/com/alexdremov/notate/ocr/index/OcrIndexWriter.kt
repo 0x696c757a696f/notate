@@ -21,6 +21,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.protobuf.ProtoBuf
 import java.io.File
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 import kotlin.math.floor
 
 data class OcrIndexOutcome(
@@ -71,13 +72,11 @@ class OcrIndexWriter(
         var stale = 0
         val liveRegionIds = mutableSetOf(FILENAME_REGION)
 
-        sessionDir.listFiles { file -> file.isFile && REGION_FILE.matches(file.name) }
-            .orEmpty()
-            .sortedBy(File::getName)
-            .forEach { file ->
-                val regionId = file.nameWithoutExtension
+        regionSources(sessionDir, targetPath)
+            .forEach { (fileName, readBytes) ->
+                val regionId = fileName.removeSuffix(".bin")
                 liveRegionIds += regionId
-                val bytes = file.readBytes()
+                val bytes = readBytes()
                 val regionHash = sha256(bytes, modelVersion.toByteArray())
                 if (dao.getRegionHash(documentId, regionId) == regionHash) {
                     unchanged++
@@ -119,6 +118,43 @@ class OcrIndexWriter(
             ),
         )
         return OcrIndexOutcome(documentId, indexed, unchanged, stale)
+    }
+
+    /**
+     * Region files to index, by file name. Local notes are opened with JIT extraction
+     * (`RegionStorage(zipSource = ...)`) and saved incrementally, so regions that were
+     * never touched in this session exist only inside the saved container. Without
+     * reading them, they would be missing here and their rows deleted as orphans.
+     * Session files win because they are newer than the container copy.
+     */
+    private fun regionSources(
+        sessionDir: File,
+        targetPath: String,
+    ): List<Pair<String, () -> ByteArray>> {
+        val sources = sortedMapOf<String, () -> ByteArray>()
+        sessionDir
+            .listFiles { file -> file.isFile && REGION_FILE.matches(file.name) }
+            .orEmpty()
+            .forEach { file -> sources[file.name] = { file.readBytes() } }
+
+        val container = if (targetPath.startsWith("content://")) null else File(targetPath)
+        if (container != null && container.isFile) {
+            try {
+                ZipFile(container).use { zip ->
+                    zip
+                        .entries()
+                        .asSequence()
+                        .filter { !it.isDirectory && REGION_FILE.matches(it.name) && it.name !in sources }
+                        .forEach { entry ->
+                            val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                            sources[entry.name] = { bytes }
+                        }
+                }
+            } catch (e: Exception) {
+                Logger.w("OcrIndex", "Unable to read regions from container $targetPath: ${e.message}")
+            }
+        }
+        return sources.map { it.key to it.value }
     }
 
     private suspend fun replaceFilename(
