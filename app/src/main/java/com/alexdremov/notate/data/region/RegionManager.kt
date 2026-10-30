@@ -632,6 +632,14 @@ class RegionManager(
                             "MUT-APPLIED-IN-EVICTED id=$id i=${iid(region)} items=${region.items.size} " +
                                 "inLimbo=${limbo[id]?.any { it === region } == true}"
                         }
+                        // A parked copy that just became dirty would otherwise
+                        // wait for a sweep (sticky window) or the next saveAll
+                        // to reach disk; persist it now (gated per id).
+                        if (region.isDirty && !region.isRecycled && regionCache.get(id) !== region &&
+                            overflowRegions[id] !== region
+                        ) {
+                            scheduleSave(region)
+                        }
                     }
                 }
 
@@ -929,13 +937,21 @@ class RegionManager(
         if (region.isRecycled) {
             logForensics { "!!!! PARK-RECYCLED id=$id — parking a RECYCLED instance!" }
         }
-        // computeIfAbsent, NOT getOrPut: getOrPut's check-then-put races two
+        // Atomic per-key compute, NOT getOrPut: getOrPut's check-then-put races two
         // concurrent parks of one id into SEPARATE buckets, and the losing
         // bucket's entries vanish from discoverability entirely (silent
         // orphaning — proven via forensics: parked-dirty copies disappeared
         // with zero removal events; UserSession missing-word class).
-        val bucket = limbo.computeIfAbsent(id) { java.util.concurrent.CopyOnWriteArrayList() }
-        if (bucket.none { it === region }) bucket.add(region)
+        //
+        // The add happens INSIDE compute: adding after computeIfAbsent returned
+        // raced an empty-bucket removal (sweep / removeFromLimbo), and the
+        // region landed in a bucket no longer in the map — unreachable.
+        val bucket =
+            limbo.compute(id) { _, existing ->
+                (existing ?: java.util.concurrent.CopyOnWriteArrayList()).also { b ->
+                    if (b.none { it === region }) b.add(region)
+                }
+            }!!
         if (forensics.enabled && limbo.size % 5 == 0) {
             forensics.log(
                 "PARKMAP-SNAPSHOT map=${System.identityHashCode(limbo)} size=${limbo.size} " +
@@ -1002,11 +1018,27 @@ class RegionManager(
             logForensics {
                 "LIMBO-REMOVE id=$id i=${iid(region)} via=$via removed=$removed bucketLeft=${bucket.size}"
             }
-            if (bucket.isEmpty()) {
+            if (removeLimboKeyIfEmpty(id)) {
                 forensics.log("LIMBO-KEY-REMOVE id=$id via=$via")
-                limbo.remove(id, bucket)
             }
         }
+    }
+
+    /**
+     * Drops [id]'s bucket only if it is STILL empty, atomically with respect
+     * to [parkInLimbo] (both run inside the map's per-key compute).
+     */
+    private fun removeLimboKeyIfEmpty(id: RegionId): Boolean {
+        var removed = false
+        limbo.computeIfPresent(id) { _, b ->
+            if (b.isEmpty()) {
+                removed = true
+                null
+            } else {
+                b
+            }
+        }
+        return removed
     }
 
     /**
@@ -1073,17 +1105,27 @@ class RegionManager(
                 // and threw AIOOBE from a background sweeper.
                 for (value in bucket.toArray()) {
                     val region = value as RegionData
-                    // Atomic identity removal: rescue-promotion paths mutate
-                    // this bucket WITHOUT the sweep monitor, so a snapshot
-                    // index can go stale (proven AIOOBE). removeIf re-checks
-                    // against the live list under COWAL's internal lock.
-                    if (!bucket.removeIf { it === region }) {
-                        continue // another actor removed it first
-                    }
                     // NOTE: no hasReferences() gate — refcounts are diagnostic-
                     // only. A reader holding the instance keeps it valid
                     // regardless (non-destructive eviction).
+                    //
+                    // Only CLEAN copies are taken out. The old code removed
+                    // every entry first and never put dirty ones back, so a
+                    // dirty copy inside its sticky window silently vanished
+                    // from limbo; the next load installed stale disk bytes
+                    // and the copy's strokes were lost (CI forensics:
+                    // MUT-APPLIED-IN-EVICTED → SWEEP-STICKY-SKIP → LOAD with
+                    // limbo=null, order 344 gone from memory and disk).
                     if (!region.isDirty) {
+                        // Atomic identity removal: rescue-promotion paths
+                        // mutate this bucket WITHOUT the sweep monitor, so a
+                        // snapshot index can go stale (proven AIOOBE). removeIf
+                        // re-checks against the live list under COWAL's lock.
+                        // Re-check dirtiness inside: a writer may have just
+                        // mutated this parked copy.
+                        if (!bucket.removeIf { it === region && !it.isDirty }) {
+                            continue // removed by another actor, or now dirty
+                        }
                         // CLEAN copies must be dropped promptly: callers (e.g.
                         // EvictionStressTest) rely on prompt dispose-after-
                         // release, and a clean copy reloads from identical
@@ -1114,7 +1156,7 @@ class RegionManager(
                     scheduleSave(region)
                     region.touch()
                 }
-                if (bucket.isEmpty()) mapIt.remove()
+                if (bucket.isEmpty()) removeLimboKeyIfEmpty(key)
             }
         }
     }
