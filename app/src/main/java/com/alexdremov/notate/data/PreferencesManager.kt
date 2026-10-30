@@ -51,6 +51,7 @@ object PreferencesManager {
     private const val KEY_SHAPE_BUTTONS_MIGRATED = "toolbar_shape_buttons_migrated_v1"
     private const val KEY_ZOOM_BUTTON_MIGRATED = "toolbar_zoom_button_migrated_v1"
     private const val KEY_GUIDES_BUTTON_MIGRATED = "toolbar_guides_button_migrated_v1"
+    private const val KEY_PEN_WIDTH_MIGRATED = "toolbar_pen_width_04mm_migrated_v1"
     private const val KEY_COLORS = "favorite_colors"
     private const val KEY_TAGS = "defined_tags"
     private const val KEY_SORT_OPTION = "browser_sort_option"
@@ -464,7 +465,8 @@ object PreferencesManager {
                 val items = protoBuf.decodeFromByteArray(ListSerializer(ToolbarItem.serializer()), bytes)
                 var migrated = migrateShapeButtons(context, items)
                 migrated = migrateActionButton(context, migrated, ActionType.ZOOM_WINDOW, KEY_ZOOM_BUTTON_MIGRATED)
-                migrateActionButton(context, migrated, ActionType.GUIDES, KEY_GUIDES_BUTTON_MIGRATED)
+                migrated = migrateActionButton(context, migrated, ActionType.GUIDES, KEY_GUIDES_BUTTON_MIGRATED)
+                migrateDefaultPenWidth(context, migrated)
             } catch (e: Exception) {
                 // Fallback to JSON
                 try {
@@ -482,8 +484,40 @@ object PreferencesManager {
             .putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true)
             .putBoolean(KEY_ZOOM_BUTTON_MIGRATED, true)
             .putBoolean(KEY_GUIDES_BUTTON_MIGRATED, true)
+            .putBoolean(KEY_PEN_WIDTH_MIGRATED, true)
             .apply()
         return defaultToolbarItems()
+    }
+
+    /**
+     * One-time upgrade of pens still at the old, too heavy default widths (10 px pens, 6 px shapes and lines)
+     * to [PenTool.DEFAULT_PEN_WIDTH_MM]. Widths the user picked themselves are kept.
+     */
+    private fun migrateDefaultPenWidth(
+        context: Context,
+        items: List<ToolbarItem>,
+    ): List<ToolbarItem> {
+        val prefs = getPrefs(context)
+        if (prefs.getBoolean(KEY_PEN_WIDTH_MIGRATED, false)) return items
+
+        val newWidth = PenTool.mmToDefaultPx(PenTool.DEFAULT_PEN_WIDTH_MM)
+        var changed = false
+        val result =
+            items.map { item ->
+                val tool = (item as? ToolbarItem.Pen)?.penTool ?: return@map item
+                val oldDefault = if (tool.isShapeTool) 6f else 10f
+                val isWritingPen = tool.type == com.alexdremov.notate.model.ToolType.PEN &&
+                    tool.strokeType != com.alexdremov.notate.model.StrokeType.HIGHLIGHTER
+                if (isWritingPen && tool.width == oldDefault) {
+                    changed = true
+                    ToolbarItem.Pen(tool.copy(width = newWidth))
+                } else {
+                    item
+                }
+            }
+        if (changed) saveToolbarItems(context, result)
+        prefs.edit().putBoolean(KEY_PEN_WIDTH_MIGRATED, true).apply()
+        return result
     }
 
     /**

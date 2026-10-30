@@ -66,11 +66,28 @@ data class PenTool(
         }
 
     companion object {
+        /** Default writing width: a fine 0.4 mm line, like GoodNotes' and Boox Notes' default pens. */
+        const val DEFAULT_PEN_WIDTH_MM = 0.4f
+
+        /** Screen px for [mm] on this device (canvas units are screen px at 100% zoom). */
+        fun mmToDefaultPx(mm: Float): Float {
+            val xdpi = runCatching { android.content.res.Resources.getSystem().displayMetrics.xdpi }.getOrNull() ?: 0f
+            // Fall back to the Boox Note X panel (227 dpi) if the metrics are unavailable.
+            return mm * (if (xdpi > 0f) xdpi else 227f) / 25.4f
+        }
+
         fun defaultPens(): List<PenTool> =
             listOf(
-                PenTool("pen_0", "Ballpoint", ToolType.PEN, Color.BLACK, 10f, StrokeType.BALLPOINT),
-                PenTool("pen_1", "Pen 1", ToolType.PEN, Color.BLACK, 10f, StrokeType.FINELINER),
-                PenTool("pen_2", "Pen 2", ToolType.PEN, Color.parseColor("#1A237E"), 10f, StrokeType.FOUNTAIN),
+                PenTool("pen_0", "Ballpoint", ToolType.PEN, Color.BLACK, mmToDefaultPx(DEFAULT_PEN_WIDTH_MM), StrokeType.BALLPOINT),
+                PenTool("pen_1", "Pen 1", ToolType.PEN, Color.BLACK, mmToDefaultPx(DEFAULT_PEN_WIDTH_MM), StrokeType.FINELINER),
+                PenTool(
+                    "pen_2",
+                    "Pen 2",
+                    ToolType.PEN,
+                    Color.parseColor("#1A237E"),
+                    mmToDefaultPx(DEFAULT_PEN_WIDTH_MM),
+                    StrokeType.FOUNTAIN,
+                ),
                 PenTool("pen_3", "Pen 3", ToolType.PEN, Color.parseColor("#fff9c47c"), 60f, StrokeType.HIGHLIGHTER),
                 PenTool("eraser_std", "Standard Eraser", ToolType.ERASER, Color.WHITE, 30f, StrokeType.FINELINER, EraserType.STANDARD),
                 PenTool(
@@ -97,7 +114,7 @@ data class PenTool(
                 name = if (shapeType.isLine) "Lines" else "Shapes",
                 type = ToolType.PEN,
                 color = Color.BLACK,
-                width = 6f,
+                width = mmToDefaultPx(DEFAULT_PEN_WIDTH_MM),
                 strokeType = StrokeType.FINELINER,
                 shapeType = shapeType,
             )
