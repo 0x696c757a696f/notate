@@ -11,6 +11,8 @@ import com.alexdremov.notate.model.BreadcrumbItem
 import com.alexdremov.notate.model.Tag
 import com.alexdremov.notate.util.Logger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,13 +74,82 @@ class HomeViewModel(
     private val _savingPaths = MutableStateFlow<Set<String>>(emptySet())
     val savingPaths: StateFlow<Set<String>> = _savingPaths.asStateFlow()
 
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+    private val _searchResults = MutableStateFlow<List<com.alexdremov.notate.ocr.index.OcrSearchResult>>(emptyList())
+    val searchResults: StateFlow<List<com.alexdremov.notate.ocr.index.OcrSearchResult>> = _searchResults.asStateFlow()
+    private var searchJob: Job? = null
+    private val ocrSearchRepository = com.alexdremov.notate.ocr.index.OcrSearchRepository.get(application)
+
+    private val _favorites = MutableStateFlow<Set<String>>(emptySet())
+    val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
+
+    private val _recents = MutableStateFlow<List<CanvasItem>>(emptyList())
+    val recents: StateFlow<List<CanvasItem>> = _recents.asStateFlow()
+
     init {
         loadProjects()
         loadTags()
         loadSortOption()
+        restoreLastProject()
         startIndexing()
         observeSaveStatus()
         observeGlobalSync()
+        com.alexdremov.notate.data.worker.OcrBackfillScheduler.schedule(application)
+        loadFavorites()
+    }
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            _searchResults.value = emptyList()
+            return
+        }
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(150)
+            val results = ocrSearchRepository.search(query)
+            if (_searchQuery.value == query) _searchResults.value = results
+        }
+    }
+
+    private fun loadFavorites() {
+        _favorites.value = PreferencesManager.getFavorites(getApplication())
+    }
+
+    fun toggleFavorite(item: FileSystemItem) {
+        if (item !is CanvasItem) return
+        val key = item.uuid ?: item.path
+        val newFav = !_favorites.value.contains(key)
+        _favorites.value = if (newFav) _favorites.value + key else _favorites.value - key
+        PreferencesManager.setFavorite(getApplication(), key, newFav)
+    }
+
+    private fun loadRecents() {
+        val repo = repository
+        val path = _currentPath.value
+        val atRoot = repo != null && (path == null || path == repo.getRootPath())
+        if (repo == null || !atRoot) {
+            _recents.value = emptyList()
+            return
+        }
+        viewModelScope.launch {
+            val resolved =
+                withContext(Dispatchers.IO) {
+                    val keys = PreferencesManager.getRecents(getApplication())
+                    if (keys.isEmpty()) return@withContext emptyList<CanvasItem>()
+                    val indexed =
+                        try {
+                            repo.getAllIndexedFiles()
+                        } catch (e: Exception) {
+                            emptyList<CanvasItem>()
+                        }
+                    val byUuid = indexed.mapNotNull { c -> c.uuid?.let { it to c } }.toMap()
+                    val byPath = indexed.associateBy { it.path }
+                    keys.mapNotNull { key -> byUuid[key] ?: byPath[key] }
+                }
+            _recents.value = resolved
+        }
     }
 
     private fun observeSaveStatus() {
@@ -361,6 +432,25 @@ class HomeViewModel(
         name: String,
         uri: String,
     ) {
+        val config = registerProject(name, uri)
+        startIndexing()
+        // A freshly created project is what the user wants to work in next.
+        openProject(config)
+    }
+
+    /**
+     * Creates a project stored inside the app, without asking the user to pick a folder
+     * through the system file manager.
+     */
+    fun addLocalProject(name: String) {
+        val dir = ProjectRepository.createLocalProjectFolder(getApplication(), name)
+        addProject(name, dir.absolutePath)
+    }
+
+    private fun registerProject(
+        name: String,
+        uri: String,
+    ): ProjectConfig {
         val config =
             ProjectConfig(
                 id = UUID.randomUUID().toString(),
@@ -369,10 +459,38 @@ class HomeViewModel(
             )
         PreferencesManager.addProject(getApplication(), config)
         loadProjects()
-        startIndexing()
+        return config
     }
 
+    /**
+     * Reopens the project the user last worked in, so the home screen does not start on an
+     * empty "select a project" page. On a fresh install a default on-device project is created
+     * once, so a new notebook is one tap away.
+     */
+    private fun restoreLastProject() {
+        val prefs = homeUiPrefs()
+        if (_projects.value.isEmpty() && !prefs.getBoolean(KEY_DEFAULT_PROJECT_CREATED, false)) {
+            try {
+                val dir = ProjectRepository.createLocalProjectFolder(getApplication(), DEFAULT_PROJECT_NAME)
+                registerProject(DEFAULT_PROJECT_NAME, dir.absolutePath)
+            } catch (e: Exception) {
+                Logger.e("HomeViewModel", "Failed to create default project", e)
+            }
+            prefs.edit().putBoolean(KEY_DEFAULT_PROJECT_CREATED, true).apply()
+        }
+
+        val projects = _projects.value
+        val lastId = prefs.getString(KEY_LAST_PROJECT_ID, null)
+        val target = projects.firstOrNull { it.id == lastId } ?: projects.singleOrNull() ?: return
+        openProject(target)
+    }
+
+    private fun homeUiPrefs() = getApplication<Application>().getSharedPreferences(HOME_UI_PREFS, android.content.Context.MODE_PRIVATE)
+
     fun removeProject(project: ProjectConfig) {
+        if (homeUiPrefs().getString(KEY_LAST_PROJECT_ID, null) == project.id) {
+            homeUiPrefs().edit().remove(KEY_LAST_PROJECT_ID).apply()
+        }
         PreferencesManager.removeProject(getApplication(), project.id)
         loadedRepositories.remove(project.id)
         loadProjects()
@@ -383,6 +501,7 @@ class HomeViewModel(
         _currentProject.value = project
         val repo = getRepository(project)
         repository = repo
+        homeUiPrefs().edit().putString(KEY_LAST_PROJECT_ID, project.id).apply()
 
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -519,6 +638,7 @@ class HomeViewModel(
         _currentPath.value = path
         updateTitle()
         updateBreadcrumbs()
+        loadRecents()
         viewModelScope.launch {
             val items =
                 withContext(Dispatchers.IO) {
@@ -604,6 +724,47 @@ class HomeViewModel(
             val path =
                 withContext(Dispatchers.IO) {
                     repo.createCanvas(name, _currentPath.value, type, pageWidth, pageHeight)
+                }
+            if (path != null) {
+                loadBrowserItems(_currentPath.value)
+                onSuccess(path)
+            }
+        }
+    }
+
+    /**
+     * Creates a fixed-pages note sized after the PDF's first page and returns its path.
+     * The pages themselves are imported by CanvasActivity once the note is open.
+     */
+    fun createCanvasFromPdf(
+        uri: Uri,
+        onSuccess: (String) -> Unit,
+    ) {
+        val repo = repository ?: return
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            val path =
+                withContext(Dispatchers.IO) {
+                    try {
+                        val firstPage =
+                            com.alexdremov.notate.util.PdfPageImporter.Document.open(app, uri).use { doc ->
+                                doc.pageSizes().firstOrNull()
+                            } ?: return@withContext null
+                        val (w, h) =
+                            com.alexdremov.notate.util.PdfPageImporter.notebookPageSize(
+                                firstPage,
+                                com.alexdremov.notate.config.CanvasConfig.PAGE_A4_WIDTH,
+                            )
+                        val name =
+                            com.alexdremov.notate.util.UriUtils
+                                .getFileName(app, uri)
+                                ?.substringBeforeLast('.')
+                                ?.takeIf { it.isNotBlank() } ?: "Imported PDF"
+                        repo.createCanvas(name, _currentPath.value, CanvasType.FIXED_PAGES, w, h)
+                    } catch (e: Exception) {
+                        Logger.e("HomeViewModel", "Cannot open PDF: $uri", e, showToUser = true)
+                        null
+                    }
                 }
             if (path != null) {
                 loadBrowserItems(_currentPath.value)
@@ -741,6 +902,7 @@ class HomeViewModel(
     }
 
     fun refresh() {
+        loadFavorites()
         val repo = repository
         val tag = _selectedTag.value
 
@@ -821,4 +983,11 @@ class HomeViewModel(
     }
 
     fun isAtTopLevel(): Boolean = _currentProject.value == null
+
+    companion object {
+        private const val HOME_UI_PREFS = "notate_home_ui"
+        private const val KEY_LAST_PROJECT_ID = "last_project_id"
+        private const val KEY_DEFAULT_PROJECT_CREATED = "default_project_created"
+        private const val DEFAULT_PROJECT_NAME = "My Notes"
+    }
 }

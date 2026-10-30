@@ -3,10 +3,12 @@
 package com.alexdremov.notate
 
 import android.content.Intent
+import android.graphics.RectF
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceRequest
@@ -55,6 +57,12 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.geometry.Rect as ComposeRect
 
 class CanvasActivity : AppCompatActivity() {
+    companion object {
+        /** Optional content URI of a PDF to import into the opened note. */
+        const val EXTRA_IMPORT_PDF_URI = "IMPORT_PDF_URI"
+        private const val STATE_PDF_IMPORT_CONSUMED = "pdf_import_consumed"
+    }
+
     private lateinit var binding: ActivityMainBinding
     private val viewModel: DrawingViewModel by viewModels()
     private var activePenPopup: com.alexdremov.notate.ui.dialog.PenSettingsPopup? = null
@@ -75,6 +83,10 @@ class CanvasActivity : AppCompatActivity() {
     private var autoSaveJob: Job? = null
 
     private var currentCanvasPath: String? = null
+    private var pendingSearchBounds: RectF? = null
+
+    // PDF to import once the session is loaded (new note created from "Import PDF").
+    private var pendingPdfImport: Uri? = null
     private var isFixedPageState: androidx.compose.runtime.MutableState<Boolean>? = null
 
     // Floating Window State
@@ -133,6 +145,22 @@ class CanvasActivity : AppCompatActivity() {
                 sidebarCoordinator.close()
             }
         }
+
+    private val pdfPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importPdf(uri)
+        }
+
+    private fun importPdf(uri: Uri) {
+        lifecycleScope.launch {
+            val pages = binding.canvasView.getController().importPdf(uri)
+            if (pages > 0) {
+                android.widget.Toast
+                    .makeText(this@CanvasActivity, "Imported $pages PDF page(s)", android.widget.Toast.LENGTH_SHORT)
+                    .show()
+            }
+        }
+    }
 
     private val imagePickerLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -209,6 +237,12 @@ class CanvasActivity : AppCompatActivity() {
             }
         }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // The intent survives recreation; don't import the same PDF twice.
+        outState.putBoolean(STATE_PDF_IMPORT_CONSUMED, pendingPdfImport == null)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -265,6 +299,18 @@ class CanvasActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         currentCanvasPath = intent.getStringExtra("CANVAS_PATH")
+        if (intent.hasExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_LEFT)) {
+            pendingSearchBounds =
+                RectF(
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_LEFT, 0f),
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_TOP, 0f),
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_RIGHT, 0f),
+                    intent.getFloatExtra(com.alexdremov.notate.ocr.index.OcrNavigation.EXTRA_BOTTOM, 0f),
+                )
+        }
+        if (savedInstanceState?.getBoolean(STATE_PDF_IMPORT_CONSUMED) != true) {
+            pendingPdfImport = intent.getStringExtra(EXTRA_IMPORT_PDF_URI)?.let { Uri.parse(it) }
+        }
 
         enableImmersiveMode()
 
@@ -452,6 +498,15 @@ class CanvasActivity : AppCompatActivity() {
                         binding.canvasView.getController().addStrokes(strokes)
                     }
                 },
+                onPalmRejectionChanged = { enabled ->
+                    binding.canvasView.setPalmRejectionEnabled(enabled)
+                },
+                onTwoFingerTapActionChange = { action ->
+                    binding.canvasView.setTwoFingerTapAction(action)
+                },
+                onStylusButtonActionChange = { action ->
+                    binding.canvasView.setStylusButtonAction(action)
+                },
             )
         binding.canvasView.onStrokeStarted = {
             activePenPopup?.dismiss()
@@ -461,8 +516,20 @@ class CanvasActivity : AppCompatActivity() {
             }
         }
 
+        // If the driver already inked a stylus tap on the toolbar, repaint it clean.
+        binding.canvasView.onExcludedStrokeDiscarded = {
+            EpdController.invalidate(binding.toolbarContainer, UpdateMode.GC)
+            if (sidebarCoordinator.isOpen) {
+                EpdController.invalidate(binding.settingsSidebarContainer, UpdateMode.GC)
+            }
+        }
+
         binding.canvasView.onRequestInsertImage = {
             imagePickerLauncher.launch(arrayOf("image/*"))
+        }
+
+        binding.canvasView.onRequestInsertPdf = {
+            pdfPickerLauncher.launch(arrayOf("application/pdf"))
         }
 
         binding.canvasView.onBrowseFiles = { callback ->
@@ -536,6 +603,18 @@ class CanvasActivity : AppCompatActivity() {
 
         binding.canvasView.setCursorView(binding.cursorView)
         binding.minimapView.setup(binding.canvasView)
+        binding.canvasView.setPalmRejectionEnabled(
+            com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this),
+        )
+        binding.canvasView.onThreeFingerTap = {
+            viewModel.toggleDistractionFree()
+        }
+        binding.canvasView.setTwoFingerTapAction(
+            com.alexdremov.notate.data.PreferencesManager.getTwoFingerTapAction(this),
+        )
+        binding.canvasView.setStylusButtonAction(
+            com.alexdremov.notate.data.PreferencesManager.getStylusButtonAction(this),
+        )
 
         // ViewModel observation
         lifecycleScope.launch {
@@ -576,6 +655,10 @@ class CanvasActivity : AppCompatActivity() {
                 }
 
                 launch {
+                    viewModel.isDistractionFree.collect { setDistractionFree(it) }
+                }
+
+                launch {
                     viewModel.saveEvents.collect { event ->
                         when (event) {
                             is DrawingViewModel.SaveEvent.Conflict -> {
@@ -604,10 +687,19 @@ class CanvasActivity : AppCompatActivity() {
                                     .getModel()
                                     .initializeSession(session.regionManager, session.metadata.nextStrokeOrder)
                                 binding.canvasView.loadMetadata(session.metadata)
+                                pendingSearchBounds?.let { bounds ->
+                                    pendingSearchBounds = null
+                                    binding.canvasView.post { binding.canvasView.focusSearchMatch(bounds) }
+                                }
 
                                 val isFixed = session.metadata.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
                                 isFixedPageState?.value = isFixed
                                 viewModel.setFixedPageMode(isFixed)
+
+                                pendingPdfImport?.let { uri ->
+                                    pendingPdfImport = null
+                                    importPdf(uri)
+                                }
 
                                 // Toolbar init logic is now in ViewModel's loadCanvasSession
 
@@ -987,6 +1079,17 @@ class CanvasActivity : AppCompatActivity() {
     private fun updateDrawingEnabledState() {
         val shouldDisable = sidebarCoordinator.isOpen || isGridOpen || activePenPopup != null
         viewModel.setDrawingEnabled(!shouldDisable)
+    }
+
+    private fun setDistractionFree(enabled: Boolean) {
+        val vis = if (enabled) View.GONE else View.VISIBLE
+        binding.toolbarContainer.visibility = vis
+        binding.minimapView.visibility = vis
+        if (enabled) {
+            sidebarCoordinator.close()
+        }
+        // Recompute stylus exclusion so the hidden toolbar stops reserving area.
+        updateExclusionRects()
     }
 
     private fun updateExclusionRects() {

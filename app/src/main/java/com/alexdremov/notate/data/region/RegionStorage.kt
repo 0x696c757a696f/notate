@@ -234,6 +234,7 @@ open class RegionStorage(
                         order = iData.order,
                         rotation = iData.rotation,
                         opacity = iData.opacity,
+                        locked = iData.locked,
                     )
                 loaded.add(image)
             }

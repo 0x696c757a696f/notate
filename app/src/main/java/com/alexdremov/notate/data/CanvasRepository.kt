@@ -13,6 +13,7 @@ import com.alexdremov.notate.data.io.FileLockManager
 import com.alexdremov.notate.data.region.RegionManager
 import com.alexdremov.notate.data.region.RegionStorage
 import com.alexdremov.notate.data.worker.SaveWorker
+import com.alexdremov.notate.data.worker.OcrIndexWorker
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.ThumbnailGenerator
 import kotlinx.coroutines.Dispatchers
@@ -580,13 +581,31 @@ class CanvasRepository(
                         // session (e.g. quick close -> reopen -> close). The session
                         // directory is fully flushed at this point and immutable once
                         // closed, so letting the running worker finish is always correct.
-                        WorkManager
-                            .getInstance(context)
-                            .enqueueUniqueWork(
+                        // A KEPT chain also drops this OCR follow-up; the charging/idle
+                        // backfill worker indexes the note later.
+                        val manager = WorkManager.getInstance(context)
+                        val continuation =
+                            manager.beginUniqueWork(
                                 "SaveWorker_$name",
                                 ExistingWorkPolicy.KEEP,
                                 workRequest,
                             )
+                        if (PreferencesManager.isBackgroundOcrIndexingEnabled(context)) {
+                            val indexData =
+                                Data.Builder()
+                                    .putString(OcrIndexWorker.KEY_SESSION_PATH, session.sessionDir.absolutePath)
+                                    .putString(OcrIndexWorker.KEY_TARGET_PATH, path)
+                                    .build()
+                            val indexRequest =
+                                OneTimeWorkRequest.Builder(OcrIndexWorker::class.java)
+                                    .setInputData(indexData)
+                                    .addTag(OcrIndexWorker.TAG)
+                                    .setBackoffCriteria(BackoffPolicy.LINEAR, 10, TimeUnit.SECONDS)
+                                    .build()
+                            continuation.then(indexRequest).enqueue()
+                        } else {
+                            continuation.enqueue()
+                        }
                     } catch (e: Exception) {
                         Logger.e("CanvasRepository", "Failed to prepare background save for $path", e)
                     } finally {

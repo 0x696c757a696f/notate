@@ -74,6 +74,9 @@ interface CanvasController {
 
     suspend fun copySelection()
 
+    /** Returns the currently selected ink without mutating the selection. */
+    suspend fun getSelectedStrokesForOcr(): List<Stroke>
+
     suspend fun paste(
         x: Float,
         y: Float,
@@ -86,6 +89,13 @@ interface CanvasController {
         width: Float,
         height: Float,
     )
+
+    /**
+     * Imports every page of the PDF at [uri] as locked background images placed after
+     * the existing content, so they can be written on but not erased or moved.
+     * Returns the number of imported pages (0 on failure).
+     */
+    suspend fun importPdf(uri: android.net.Uri): Int
 
     suspend fun addText(
         text: String,
