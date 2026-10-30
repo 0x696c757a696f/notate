@@ -232,8 +232,17 @@ class ViewportInteractor(
     private fun endInteraction() {
         if (!isFastModeActive) return
         isFastModeActive = false
-        onInteractionEnd()
+        // Leave the fast waveform (which refreshes the screen) before the pen is handed back,
+        // so that refresh doesn't land on the first stroke after a pan.
         EpdFastModeController.exitFastMode()
+        onInteractionEnd()
+    }
+
+    /** Ends a pan/zoom in progress without another touch event (e.g. the touch turned out to be a palm). */
+    fun cancel() {
+        endInteraction()
+        isPanning = false
+        isInteracting = false
     }
 
     fun getCurrentScale() = currentScale

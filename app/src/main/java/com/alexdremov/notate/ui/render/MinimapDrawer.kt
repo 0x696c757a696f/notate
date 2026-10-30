@@ -71,6 +71,17 @@ class MinimapDrawer(
         minimapHandler.postDelayed(hideMinimapRunnable, CanvasConfig.MINIMAP_HIDE_DELAY_MS)
     }
 
+    /**
+     * Hides the minimap right away instead of after [CanvasConfig.MINIMAP_HIDE_DELAY_MS].
+     * A delayed hide redraws the screen just as the pen starts writing after a pan, which stalls the stroke.
+     */
+    fun hideNow() {
+        minimapHandler.removeCallbacks(hideMinimapRunnable)
+        if (!isMinimapVisible) return
+        isMinimapVisible = false
+        onRefresh()
+    }
+
     @Volatile
     private var isRegenerating = false
 
