@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
+import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
 import com.alexdremov.notate.config.CanvasConfig
 import com.alexdremov.notate.model.BackgroundStyle
@@ -97,15 +98,23 @@ class SettingsSidebarController(
             onEditToolbar()
         }
 
-        mainMenuView.findViewById<View>(R.id.menu_item_debug).setOnClickListener {
-            showDebugMenu()
+        // Renderer/log switches are developer tools; release builds don't show them.
+        val debugMenuItem = mainMenuView.findViewById<View>(R.id.menu_item_debug)
+        val debugDivider = mainMenuView.findViewById<View>(R.id.divider_debug)
+        if (BuildConfig.DEBUG) {
+            debugMenuItem.setOnClickListener {
+                showDebugMenu()
+            }
+        } else {
+            debugMenuItem.visibility = View.GONE
+            debugDivider?.visibility = View.GONE
         }
     }
 
     private fun showDocumentMenu() {
         contentFrame.removeAllViews()
 
-        tvTitle.text = "Document"
+        tvTitle.text = "Page layout"
         btnBack.visibility = View.VISIBLE
 
         val composeView =
@@ -548,7 +557,7 @@ class SettingsSidebarController(
         val bgView = LayoutInflater.from(context).inflate(R.layout.dialog_background_settings, contentFrame, false)
         contentFrame.addView(bgView)
 
-        tvTitle.text = "Background"
+        tvTitle.text = "Page background"
         btnBack.visibility = View.VISIBLE
 
         bindBackgroundSettings(bgView)

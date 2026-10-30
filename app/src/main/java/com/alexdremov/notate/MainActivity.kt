@@ -178,6 +178,7 @@ fun MainScreen(
     var showSortMenu by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showWebDocs by remember { mutableStateOf(false) }
+    var showNewMenu by remember { mutableStateOf(false) }
     var isSearchExpanded by remember { mutableStateOf(false) }
 
     // Project Actions State
@@ -274,6 +275,7 @@ fun MainScreen(
                 onAddProject = { showNameDialog = DialogType.ADD_PROJECT },
                 onManageTags = { showNameDialog = DialogType.MANAGE_TAGS },
                 onSettingsClick = { showSettingsDialog = true },
+                onReadingClick = { showWebDocs = true },
                 onTodayClick = {
                     scope.launch {
                         val path = DailyNotesManager.openOrCreateTodayNote(context)
@@ -369,35 +371,64 @@ fun MainScreen(
                                     )
                                 }
                             }
+                        }
 
-                            // Browser Actions
-                            if (!isPickerMode) {
-                                IconButton(onClick = { showWebDocs = true }) {
-                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "EPUB / HTML")
+                        // One labelled "New" entry instead of a row of unlabelled icons. Everything
+                        // that creates or brings in content lives here; Settings stays in the sidebar.
+                        if (!isPickerMode && selectedTag == null) {
+                            Box {
+                                TextButton(onClick = { showNewMenu = true }) {
+                                    Icon(Icons.Filled.Add, contentDescription = null, tint = Ink)
+                                    Spacer(Modifier.width(Spacing.xs))
+                                    Text("New", color = Ink, style = MaterialTheme.typography.labelLarge)
                                 }
-                            }
-                            if (currentProject != null && selectedTag == null) {
-                                IconButton(onClick = { showNameDialog = DialogType.CREATE_FOLDER }) {
-                                    Icon(Icons.Filled.CreateNewFolder, contentDescription = "New Folder")
-                                }
-                                IconButton(onClick = { showNameDialog = DialogType.CREATE_CANVAS }) {
-                                    Icon(Icons.Filled.Edit, contentDescription = "New Canvas")
-                                }
-                                IconButton(onClick = { pdfImportPicker.launch(arrayOf("application/pdf")) }) {
-                                    Icon(Icons.Filled.PictureAsPdf, contentDescription = "Import PDF")
-                                }
-                            }
-                        } else {
-                            // Project List Actions
-                            if (!isPickerMode) {
-                                IconButton(onClick = { showWebDocs = true }) {
-                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "EPUB / HTML")
-                                }
-                                IconButton(onClick = { showSettingsDialog = true }) {
-                                    Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                                }
-                                IconButton(onClick = { showNameDialog = DialogType.ADD_PROJECT }) {
-                                    Icon(Icons.Filled.Add, contentDescription = "Add Project")
+                                DropdownMenu(
+                                    expanded = showNewMenu,
+                                    onDismissRequest = { showNewMenu = false },
+                                ) {
+                                    if (currentProject != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("New canvas") },
+                                            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                            onClick = {
+                                                showNewMenu = false
+                                                showNameDialog = DialogType.CREATE_CANVAS
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("New folder") },
+                                            leadingIcon = { Icon(Icons.Filled.CreateNewFolder, contentDescription = null) },
+                                            onClick = {
+                                                showNewMenu = false
+                                                showNameDialog = DialogType.CREATE_FOLDER
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Import PDF") },
+                                            leadingIcon = { Icon(Icons.Filled.PictureAsPdf, contentDescription = null) },
+                                            onClick = {
+                                                showNewMenu = false
+                                                pdfImportPicker.launch(arrayOf("application/pdf"))
+                                            },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Import EPUB / HTML") },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null) },
+                                        onClick = {
+                                            showNewMenu = false
+                                            showWebDocs = true
+                                        },
+                                    )
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("New project") },
+                                        leadingIcon = { Icon(Icons.Filled.CreateNewFolder, contentDescription = null) },
+                                        onClick = {
+                                            showNewMenu = false
+                                            showNameDialog = DialogType.ADD_PROJECT
+                                        },
+                                    )
                                 }
                             }
                         }

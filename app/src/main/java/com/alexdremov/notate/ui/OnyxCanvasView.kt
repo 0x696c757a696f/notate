@@ -286,18 +286,7 @@ class OnyxCanvasView
                                     selectionInteractor.onLongPressDragStart(e.x, e.y)
                                     performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                                 } else {
-                                    // Show Contextual Menu
-                                    contextMenu =
-                                        com.alexdremov.notate.ui.dialog.CanvasContextMenu(
-                                            context,
-                                            onPaste = {
-                                                viewScope.launch { canvasController.paste(worldX, worldY) }
-                                            },
-                                            onPasteImage = { onRequestInsertImage?.invoke() },
-                                            onInsertPdf = { onRequestInsertPdf?.invoke() },
-                                            onInsertLink = { showLinkDialog(worldX, worldY) },
-                                        )
-                                    contextMenu?.show(this@OnyxCanvasView, e.x, e.y)
+                                    showInsertMenu(worldX, worldY, e.x, e.y)
                                     performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                                 }
                             }
@@ -359,6 +348,38 @@ class OnyxCanvasView
                         }
                     },
                 )
+        }
+
+        /**
+         * The toolbar's Insert button: the same menu as a long-press on empty canvas,
+         * with pasted or linked content landing in the middle of the visible area.
+         */
+        fun showInsertMenu() {
+            if (isReadOnly) return
+            val inv = Matrix()
+            matrix.invert(inv)
+            val pts = floatArrayOf(width / 2f, height / 2f)
+            inv.mapPoints(pts)
+            showInsertMenu(pts[0], pts[1], width / 2f, height / 2f)
+        }
+
+        private fun showInsertMenu(
+            worldX: Float,
+            worldY: Float,
+            viewX: Float,
+            viewY: Float,
+        ) {
+            contextMenu =
+                com.alexdremov.notate.ui.dialog.CanvasContextMenu(
+                    context,
+                    onPaste = {
+                        viewScope.launch { canvasController.paste(worldX, worldY) }
+                    },
+                    onPasteImage = { onRequestInsertImage?.invoke() },
+                    onInsertPdf = { onRequestInsertPdf?.invoke() },
+                    onInsertLink = { showLinkDialog(worldX, worldY) },
+                )
+            contextMenu?.show(this, viewX, viewY)
         }
 
         private fun showLinkDialog(

@@ -15,7 +15,7 @@
     <string name="select_tool">Select</string>
     <string name="undo_action">Undo</string>
     <string name="redo_action">Redo</string>
-    <string name="image_action">Image</string>
+    <string name="image_action">Insert</string>
     <string name="select_tool_title">Select Tool</string>
     <string name="eraser_settings">Eraser Settings</string>
     <string name="pen_style">Pen Style</string>

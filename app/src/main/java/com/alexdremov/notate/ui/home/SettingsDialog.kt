@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.ViewQuilt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -98,9 +99,10 @@ fun SettingsDialog(
                     text =
                         when (currentScreen) {
                             SettingsScreen.MAIN -> "Settings"
-                            SettingsScreen.INPUT -> "Input & Gestures"
-                            SettingsScreen.INTERFACE -> "Interface"
-                            SettingsScreen.PDF -> "PDF Export"
+                            SettingsScreen.INPUT -> "Writing & gestures"
+                            SettingsScreen.INTERFACE -> "Toolbar"
+                            SettingsScreen.STARTUP -> "Startup"
+                            SettingsScreen.PDF -> "Export"
                             SettingsScreen.OCR -> "Text recognition & search"
                             SettingsScreen.ABOUT -> "About"
                         },
@@ -116,36 +118,43 @@ fun SettingsDialog(
                         .verticalScroll(rememberScrollState()),
             ) {
                 when (currentScreen) {
+                    // Ordered by how often people change them: writing first, accounts and info last.
                     SettingsScreen.MAIN -> {
+                        SettingsMenuItem(
+                            title = "Writing & gestures",
+                            subtitle = "Palm rejection, eraser, shapes, snapping, finger and pen buttons",
+                            icon = Icons.Default.Brush,
+                            onClick = { currentScreen = SettingsScreen.INPUT },
+                        )
+                        SettingsMenuItem(
+                            title = "Toolbar",
+                            subtitle = "Auto collapse",
+                            icon = Icons.Default.ViewQuilt,
+                            onClick = { currentScreen = SettingsScreen.INTERFACE },
+                        )
+                        SettingsMenuItem(
+                            title = "Startup",
+                            subtitle = "What opens when the app starts",
+                            icon = Icons.Default.Today,
+                            onClick = { currentScreen = SettingsScreen.STARTUP },
+                        )
+                        SettingsMenuItem(
+                            title = "Text recognition & search",
+                            subtitle = "Offline handwriting model and search index",
+                            icon = Icons.Default.Search,
+                            onClick = { currentScreen = SettingsScreen.OCR },
+                        )
+                        SettingsMenuItem(
+                            title = "Export",
+                            subtitle = "PDF quality, scale and the format used for sync",
+                            icon = Icons.Default.PictureAsPdf,
+                            onClick = { currentScreen = SettingsScreen.PDF },
+                        )
                         SettingsMenuItem(
                             title = "Synchronization",
                             subtitle = "Cloud storage and sync options",
                             icon = Icons.Default.CloudSync,
                             onClick = onOpenSync,
-                        )
-                        SettingsMenuItem(
-                            title = "Input & Gestures",
-                            subtitle = "Pen behavior, shapes, and eraser",
-                            icon = Icons.Default.Brush,
-                            onClick = { currentScreen = SettingsScreen.INPUT },
-                        )
-                        SettingsMenuItem(
-                            title = "Interface",
-                            subtitle = "Toolbar and visual settings",
-                            icon = Icons.Default.ViewQuilt,
-                            onClick = { currentScreen = SettingsScreen.INTERFACE },
-                        )
-                        SettingsMenuItem(
-                            title = "PDF Export",
-                            subtitle = "Quality and scale settings",
-                            icon = Icons.Default.PictureAsPdf,
-                            onClick = { currentScreen = SettingsScreen.PDF },
-                        )
-                        SettingsMenuItem(
-                            title = "Text recognition & search",
-                            subtitle = "Offline PP-OCRv3 model and local index",
-                            icon = Icons.Default.Search,
-                            onClick = { currentScreen = SettingsScreen.OCR },
                         )
                         SettingsMenuItem(
                             title = "About",
@@ -214,7 +223,6 @@ fun SettingsDialog(
 
                     SettingsScreen.INTERFACE -> {
                         var collapsibleToolbar by remember { mutableStateOf(PreferencesManager.isCollapsibleToolbarEnabled(context)) }
-                        var openDailyOnStart by remember { mutableStateOf(PreferencesManager.isOpenDailyOnStartEnabled(context)) }
                         var collapseTimeout by remember {
                             mutableFloatStateOf(
                                 PreferencesManager.getToolbarCollapseTimeout(context).toFloat(),
@@ -232,10 +240,12 @@ fun SettingsDialog(
                                 PreferencesManager.setToolbarCollapseTimeout(context, collapseTimeout.toLong())
                             },
                         )
+                    }
 
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    SettingsScreen.STARTUP -> {
+                        var openDailyOnStart by remember { mutableStateOf(PreferencesManager.isOpenDailyOnStartEnabled(context)) }
                         SettingsToggle(
-                            title = "Open daily note on startup",
+                            title = "Open today's note on startup",
                             checked = openDailyOnStart,
                             onCheckedChange = {
                                 openDailyOnStart = it
@@ -333,6 +343,7 @@ enum class SettingsScreen {
     MAIN,
     INPUT,
     INTERFACE,
+    STARTUP,
     PDF,
     OCR,
     ABOUT,
