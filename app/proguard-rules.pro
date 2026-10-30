@@ -32,3 +32,9 @@
 -keep class com.google.api.services.drive.** { *; }
 -dontwarn com.google.api.client.**
 -dontwarn com.google.api.services.drive.**
+
+# R8 9.2.14 (AGP 9.2.1) crashes with a NullPointerException in its API-level
+# database while optimizing androidx.core.location.LocationManagerCompat
+# (GpsStatus lambdas). Shrinking/obfuscation still run; drop this once AGP
+# ships a fixed R8.
+-dontoptimize
