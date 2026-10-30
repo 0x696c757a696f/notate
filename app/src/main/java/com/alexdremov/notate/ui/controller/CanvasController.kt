@@ -90,6 +90,13 @@ interface CanvasController {
         height: Float,
     )
 
+    /**
+     * Imports every page of the PDF at [uri] as locked background images placed after
+     * the existing content, so they can be written on but not erased or moved.
+     * Returns the number of imported pages (0 on failure).
+     */
+    suspend fun importPdf(uri: android.net.Uri): Int
+
     suspend fun addText(
         text: String,
         x: Float,

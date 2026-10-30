@@ -732,6 +732,47 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * Creates a fixed-pages note sized after the PDF's first page and returns its path.
+     * The pages themselves are imported by CanvasActivity once the note is open.
+     */
+    fun createCanvasFromPdf(
+        uri: Uri,
+        onSuccess: (String) -> Unit,
+    ) {
+        val repo = repository ?: return
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            val path =
+                withContext(Dispatchers.IO) {
+                    try {
+                        val firstPage =
+                            com.alexdremov.notate.util.PdfPageImporter.Document.open(app, uri).use { doc ->
+                                doc.pageSizes().firstOrNull()
+                            } ?: return@withContext null
+                        val (w, h) =
+                            com.alexdremov.notate.util.PdfPageImporter.notebookPageSize(
+                                firstPage,
+                                com.alexdremov.notate.config.CanvasConfig.PAGE_A4_WIDTH,
+                            )
+                        val name =
+                            com.alexdremov.notate.util.UriUtils
+                                .getFileName(app, uri)
+                                ?.substringBeforeLast('.')
+                                ?.takeIf { it.isNotBlank() } ?: "Imported PDF"
+                        repo.createCanvas(name, _currentPath.value, CanvasType.FIXED_PAGES, w, h)
+                    } catch (e: Exception) {
+                        Logger.e("HomeViewModel", "Cannot open PDF: $uri", e, showToUser = true)
+                        null
+                    }
+                }
+            if (path != null) {
+                loadBrowserItems(_currentPath.value)
+                onSuccess(path)
+            }
+        }
+    }
+
     fun deleteItem(item: FileSystemItem) {
         val repo = repository ?: return
         val currentProject = _currentProject.value

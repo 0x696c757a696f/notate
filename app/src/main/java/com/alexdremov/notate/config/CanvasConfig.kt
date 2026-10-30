@@ -79,6 +79,12 @@ object CanvasConfig {
     val PAGE_BACKGROUND_COLOR = Color.WHITE
     val FIXED_PAGE_CANVAS_BG_COLOR = Color.rgb(226, 226, 226) // Slightly gray, outside pages
 
+    // PDF Import: pages are rasterized once at import time and drawn as locked images.
+    // 1800px is sharper than any Boox panel at 100% zoom while keeping PNGs small.
+    const val PDF_IMPORT_RENDER_WIDTH_PX = 1800
+    const val PDF_IMPORT_MAX_PIXELS = 6_000_000 // Caps transient bitmap memory (~24MB ARGB)
+    const val PDF_IMPORT_PAGE_Z_INDEX = -1f // Always below ink
+
     // Fountain Pen Rendering
     const val FOUNTAIN_PRESSURE_POWER_EXPONENT = 0.95f
     const val FOUNTAIN_MIN_WIDTH = 1.5f
