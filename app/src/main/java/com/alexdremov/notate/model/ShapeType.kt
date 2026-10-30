@@ -31,4 +31,7 @@ enum class ShapeType {
     ;
 
     val isDragShape: Boolean get() = this != NONE && this != AUTO
+
+    /** Line-family types live on the separate "Lines" toolbar button; everything else on "Shapes". */
+    val isLine: Boolean get() = this == LINE || this == ARROW || this == DOUBLE_ARROW
 }

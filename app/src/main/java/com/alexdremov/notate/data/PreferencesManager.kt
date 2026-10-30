@@ -47,6 +47,7 @@ object PreferencesManager {
     private const val PREFS_NAME = "notate_prefs"
     private const val KEY_PROJECTS = "projects_list"
     private const val KEY_TOOLBAR_ITEMS = "toolbar_items_config"
+    private const val KEY_SHAPE_BUTTONS_MIGRATED = "toolbar_shape_buttons_migrated_v1"
     private const val KEY_COLORS = "favorite_colors"
     private const val KEY_TAGS = "defined_tags"
     private const val KEY_SORT_OPTION = "browser_sort_option"
@@ -457,7 +458,8 @@ object PreferencesManager {
         if (data != null) {
             return try {
                 val bytes = Base64.decode(data, Base64.DEFAULT)
-                protoBuf.decodeFromByteArray(ListSerializer(ToolbarItem.serializer()), bytes)
+                val items = protoBuf.decodeFromByteArray(ListSerializer(ToolbarItem.serializer()), bytes)
+                migrateShapeButtons(context, items)
             } catch (e: Exception) {
                 // Fallback to JSON
                 try {
@@ -469,7 +471,38 @@ object PreferencesManager {
                 }
             }
         }
+        // Defaults already include the Shapes and Lines buttons; don't re-add them if the user removes them later.
+        getPrefs(context).edit().putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true).apply()
         return defaultToolbarItems()
+    }
+
+    /**
+     * One-time upgrade for toolbars saved before the Shapes and Lines buttons existed: adds whichever is missing
+     * right after the last pen. Runs once, so a button the user removes afterwards stays removed.
+     */
+    private fun migrateShapeButtons(
+        context: Context,
+        items: List<ToolbarItem>,
+    ): List<ToolbarItem> {
+        val prefs = getPrefs(context)
+        if (prefs.getBoolean(KEY_SHAPE_BUTTONS_MIGRATED, false)) return items
+
+        val shapePens = items.filterIsInstance<ToolbarItem.Pen>().map { it.penTool }.filter { it.isShapeTool }
+        val toAdd = mutableListOf<ToolbarItem>()
+        if (shapePens.none { !it.shapeType.isLine } && items.none { it.id == "shape_tool" }) {
+            toAdd.add(ToolbarItem.Pen(PenTool.defaultShapeTool("shape_tool")))
+        }
+        if (shapePens.none { it.shapeType.isLine } && items.none { it.id == "line_tool" }) {
+            toAdd.add(ToolbarItem.Pen(PenTool.defaultShapeTool("line_tool", com.alexdremov.notate.model.ShapeType.LINE)))
+        }
+
+        val result = items.toMutableList()
+        if (toAdd.isNotEmpty()) {
+            result.addAll(result.indexOfLast { it is ToolbarItem.Pen } + 1, toAdd)
+            saveToolbarItems(context, result)
+        }
+        prefs.edit().putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true).apply()
+        return result
     }
 
     private fun defaultToolbarItems(): List<com.alexdremov.notate.model.ToolbarItem> {

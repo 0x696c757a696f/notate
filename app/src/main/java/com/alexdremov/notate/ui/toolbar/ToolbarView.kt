@@ -691,7 +691,12 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     color = Color.Black,
                 )
             } else if (item.penTool.isShapeTool) {
-                Icon(painter = painterResource(R.drawable.ic_tool_shape), contentDescription = item.penTool.name, tint = Color.Black)
+                // Shows the shape currently picked on this button
+                Icon(
+                    painter = painterResource(ShapeUi.iconRes(item.penTool.shapeType)),
+                    contentDescription = stringResource(ShapeUi.labelRes(item.penTool.shapeType)),
+                    tint = Color.Black,
+                )
             } else {
                 val resId =
                     when (item.penTool.strokeType) {
@@ -798,6 +803,18 @@ fun ToolbarEditPanel(
                 item = ToolbarItem.Pen(PenTool.defaultShapeTool("shape_preview")),
                 label = stringResource(R.string.shape_tool),
                 onClick = { viewModel.addShapeTool() },
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            // Add Lines
+            AddItemButton(
+                item = ToolbarItem.Pen(PenTool.defaultShapeTool("line_preview", ShapeType.LINE)),
+                label = stringResource(R.string.line_tool),
+                onClick = { viewModel.addShapeTool(ShapeType.LINE) },
             )
         }
 
