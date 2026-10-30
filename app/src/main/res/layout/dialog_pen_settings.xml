@@ -69,6 +69,7 @@
                         <ImageView android:id="@+id/styleBrush" android:layout_width="60dp" android:layout_height="60dp" android:src="@drawable/stylus_brush_24" android:background="@drawable/bg_tool_selected" android:padding="12dp" android:clickable="true" android:focusable="true"/>
                         <ImageView android:id="@+id/styleCharcoal" android:layout_width="60dp" android:layout_height="60dp" android:src="@drawable/stylus_pen_24" android:background="@drawable/bg_tool_selected" android:padding="12dp" android:clickable="true" android:focusable="true"/>
                         <ImageView android:id="@+id/styleDash" android:layout_width="60dp" android:layout_height="60dp" android:src="@drawable/stylus_dash_24" android:background="@drawable/bg_tool_selected" android:padding="12dp" android:clickable="true" android:focusable="true"/>
+                        <ImageView android:id="@+id/styleDot" android:layout_width="60dp" android:layout_height="60dp" android:src="@drawable/stylus_dot_24" android:background="@drawable/bg_tool_selected" android:padding="12dp" android:clickable="true" android:focusable="true"/>
 
                     </GridLayout>
 
@@ -103,6 +104,15 @@
 
                     </RadioGroup>
                 </FrameLayout>
+
+                <!-- Shape picker (Visible only for shape pens), filled in PenSettingsPopup -->
+                <LinearLayout
+                    android:id="@+id/layoutShapeOptions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginTop="16dp"
+                    android:visibility="gone" />
 
                 <View
                     android:id="@+id/divider1"

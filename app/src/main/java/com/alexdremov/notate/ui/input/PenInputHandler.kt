@@ -13,6 +13,7 @@ import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.ui.controller.CanvasController
 import com.alexdremov.notate.util.ColorUtils
 import com.alexdremov.notate.util.Logger
+import com.alexdremov.notate.util.ShapeGeometry
 import com.alexdremov.notate.util.ShapeRecognizer
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
@@ -74,6 +75,10 @@ class PenInputHandler(
     private var pendingPerfectShape: ShapeRecognizer.RecognitionResult? = null
 
     private var isIgnoringCurrentStroke = false
+
+    // World-space pen-down point of the current drag shape (shape tools only)
+    @Volatile
+    private var shapeStartWorld: android.graphics.PointF? = null
 
     private lateinit var dwellDetector: DwellDetector
 
@@ -383,8 +388,9 @@ class PenInputHandler(
         // Reset Dwell State
         cursorView?.hideShapePreview()
         pendingPerfectShape = null
+        shapeStartWorld = if (currentTool.isDragShapeTool) android.graphics.PointF(startPoint.x, startPoint.y) else null
 
-        if (currentTool.type != ToolType.SELECT) {
+        if (currentTool.type != ToolType.SELECT && !currentTool.isDragShapeTool) {
             dwellDetector.onStart(touchPoint, currentTool)
         }
 
@@ -492,6 +498,8 @@ class PenInputHandler(
         val toolSnapshot = currentTool // Snapshot tool for coroutine
         val eraserToolSnapshot = eraserTool
         val tempShape = pendingPerfectShape
+        val shapeStart = shapeStartWorld
+        shapeStartWorld = null
         val isEraser = isCurrentStrokeEraser || toolSnapshot.type == ToolType.ERASER || b
 
         var builtEraserStroke: com.alexdremov.notate.model.Stroke? = null
@@ -547,6 +555,7 @@ class PenInputHandler(
                         val originalStroke = builtOriginalStroke
                         val isScribble =
                             originalStroke != null &&
+                                !toolSnapshot.isShapeTool &&
                                 toolSnapshot.strokeType != StrokeType.HIGHLIGHTER &&
                                 com.alexdremov.notate.data.PreferencesManager
                                     .isScribbleToEraseEnabled(view.context) &&
@@ -555,75 +564,37 @@ class PenInputHandler(
 
                         if (isScribble) {
                             controller.commitEraser(originalStroke!!, EraserType.STROKE)
+                        } else if (toolSnapshot.isDragShapeTool) {
+                            // Drag shape: geometry comes from pen-down/pen-up only; a tap draws nothing.
+                            if (originalStroke != null && shapeStart != null) {
+                                val segments =
+                                    ShapeGeometry.build(
+                                        toolSnapshot.shapeType,
+                                        shapeStart,
+                                        android.graphics.PointF(endPoint.x, endPoint.y),
+                                        toolSnapshot.polygonSides,
+                                    )
+                                if (segments.isNotEmpty()) commitShapeSegments(segments, originalStroke, toolSnapshot)
+                            }
                         } else {
                             val shapeEnabled =
                                 com.alexdremov.notate.data.PreferencesManager
                                     .isShapePerfectionEnabled(view.context)
-                            if (shapeEnabled && originalStroke != null && tempShape != null &&
-                                tempShape.shape != ShapeRecognizer.RecognizedShape.NONE
-                            ) {
-                                controller.startBatchSession()
-                                val avgPressure =
-                                    originalStroke.points
-                                        .map { it.pressure }
-                                        .average()
-                                        .toFloat()
-                                val avgSize =
-                                    originalStroke.points
-                                        .map { it.size }
-                                        .average()
-                                        .toFloat()
-                                val avgTiltX =
-                                    originalStroke.points
-                                        .map { it.tiltX }
-                                        .average()
-                                        .toFloat()
-                                val avgTiltY =
-                                    originalStroke.points
-                                        .map { it.tiltY }
-                                        .average()
-                                        .toFloat()
-
-                                for (segmentPoints in tempShape.segments) {
-                                    val newTouchPoints =
-                                        segmentPoints.map { p ->
-                                            TouchPoint(
-                                                p.x,
-                                                p.y,
-                                                avgPressure,
-                                                avgSize,
-                                                avgTiltX.toInt(),
-                                                avgTiltY.toInt(),
-                                                System.currentTimeMillis(),
-                                            )
-                                        }
-                                    val segmentPath = Path()
-                                    if (newTouchPoints.isNotEmpty()) {
-                                        segmentPath.moveTo(newTouchPoints[0].x, newTouchPoints[0].y)
-                                        for (i in 1 until newTouchPoints.size) {
-                                            segmentPath.lineTo(
-                                                newTouchPoints[i].x,
-                                                newTouchPoints[i].y,
-                                            )
-                                        }
-                                    }
-                                    val perfectedStroke =
-                                        com.alexdremov.notate.model.Stroke(
-                                            path = segmentPath,
-                                            points = newTouchPoints,
-                                            color = toolSnapshot.color,
-                                            width = toolSnapshot.width,
-                                            style = toolSnapshot.strokeType,
-                                            bounds =
-                                                com.alexdremov.notate.util.StrokeGeometry.computeStrokeBounds(
-                                                    segmentPath,
-                                                    toolSnapshot.width,
-                                                    toolSnapshot.strokeType,
-                                                ),
-                                        )
-                                    controller.commitStroke(perfectedStroke)
+                            // Auto shape pen: snap on pen-up without needing to hold the pen still.
+                            val shape =
+                                when {
+                                    shapeEnabled && tempShape != null &&
+                                        tempShape.shape != ShapeRecognizer.RecognizedShape.NONE -> tempShape
+                                    toolSnapshot.shapeType == com.alexdremov.notate.model.ShapeType.AUTO && originalStroke != null ->
+                                        ShapeRecognizer.recognize(originalStroke.points)
+                                    else -> null
                                 }
-                                controller.endBatchSession()
+                            if (originalStroke != null && shape != null && shape.shape != ShapeRecognizer.RecognizedShape.NONE) {
+                                commitShapeSegments(
+                                    shape.segments.map { ShapeGeometry.Segment(it) },
+                                    originalStroke,
+                                    toolSnapshot,
+                                )
                             } else {
                                 originalStroke?.let { s -> controller.commitStroke(s) }
                             }
@@ -641,6 +612,63 @@ class PenInputHandler(
                 (view as? com.alexdremov.notate.ui.OnyxCanvasView)?.notifyStrokeFinished()
                 onStrokeFinished()
             }
+        }
+    }
+
+    /**
+     * Commits [segments] as one stroke each, inheriting the average pressure/tilt of [source] so the
+     * result looks like the pen that drew it. Batched so the whole shape is a single undo step.
+     */
+    private suspend fun commitShapeSegments(
+        segments: List<ShapeGeometry.Segment>,
+        source: com.alexdremov.notate.model.Stroke,
+        tool: PenTool,
+    ) {
+        val avgPressure = source.points.map { it.pressure }.average().toFloat()
+        val avgSize = source.points.map { it.size }.average().toFloat()
+        val avgTiltX = source.points.map { it.tiltX }.average().toFloat()
+        val avgTiltY = source.points.map { it.tiltY }.average().toFloat()
+
+        controller.startBatchSession()
+        try {
+            for (segment in segments) {
+                if (segment.points.isEmpty()) continue
+                val newTouchPoints =
+                    segment.points.map { p ->
+                        TouchPoint(
+                            p.x,
+                            p.y,
+                            avgPressure,
+                            avgSize,
+                            avgTiltX.toInt(),
+                            avgTiltY.toInt(),
+                            System.currentTimeMillis(),
+                        )
+                    }
+                val segmentPath = Path()
+                segmentPath.moveTo(newTouchPoints[0].x, newTouchPoints[0].y)
+                for (i in 1 until newTouchPoints.size) {
+                    segmentPath.lineTo(newTouchPoints[i].x, newTouchPoints[i].y)
+                }
+                val width = tool.width * segment.widthScale
+                val perfectedStroke =
+                    com.alexdremov.notate.model.Stroke(
+                        path = segmentPath,
+                        points = newTouchPoints,
+                        color = tool.color,
+                        width = width,
+                        style = tool.strokeType,
+                        bounds =
+                            com.alexdremov.notate.util.StrokeGeometry.computeStrokeBounds(
+                                segmentPath,
+                                width,
+                                tool.strokeType,
+                            ),
+                    )
+                controller.commitStroke(perfectedStroke)
+            }
+        } finally {
+            controller.endBatchSession()
         }
     }
 
@@ -692,6 +720,10 @@ class PenInputHandler(
 
         currentStrokeScreenBounds.union(touchPoint.x, touchPoint.y)
 
+        if (currentTool.isDragShapeTool) {
+            updateShapePreview(android.graphics.PointF(newPoint.x, newPoint.y))
+        }
+
         if (currentTool.type == ToolType.ERASER || currentTool.type == ToolType.SELECT) {
             if (currentTool.type == ToolType.SELECT) {
                 if (currentTool.selectionType == com.alexdremov.notate.model.SelectionType.LASSO) {
@@ -718,6 +750,31 @@ class PenInputHandler(
         }
 
         updateCursor(touchPoint)
+    }
+
+    /** Draws the drag shape from the pen-down point to [currentWorld] as a dashed preview. */
+    private fun updateShapePreview(currentWorld: android.graphics.PointF) {
+        val start = shapeStartWorld ?: return
+        val segments = ShapeGeometry.build(currentTool.shapeType, start, currentWorld, currentTool.polygonSides)
+        if (segments.isEmpty()) {
+            cursorView?.hideShapePreview()
+            return
+        }
+        val screenPath = Path()
+        for (segment in segments) {
+            val pts = segment.points
+            if (pts.isEmpty()) continue
+            screenPath.moveTo(pts[0].x, pts[0].y)
+            for (i in 1 until pts.size) screenPath.lineTo(pts[i].x, pts[i].y)
+        }
+        screenPath.transform(matrix)
+
+        // Shapes can extend past the pen path (e.g. polygons drawn from their center): grow refresh bounds.
+        val bounds = RectF()
+        screenPath.computeBounds(bounds, true)
+        currentStrokeScreenBounds.union(bounds)
+
+        cursorView?.showShapePreview(screenPath)
     }
 
     private fun updateCursor(touchPoint: TouchPoint) {
