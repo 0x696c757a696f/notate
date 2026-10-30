@@ -55,6 +55,12 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.geometry.Rect as ComposeRect
 
 class CanvasActivity : AppCompatActivity() {
+    companion object {
+        /** Optional content URI of a PDF to import into the opened note. */
+        const val EXTRA_IMPORT_PDF_URI = "IMPORT_PDF_URI"
+        private const val STATE_PDF_IMPORT_CONSUMED = "pdf_import_consumed"
+    }
+
     private lateinit var binding: ActivityMainBinding
     private val viewModel: DrawingViewModel by viewModels()
     private var activePenPopup: com.alexdremov.notate.ui.dialog.PenSettingsPopup? = null
@@ -75,6 +81,9 @@ class CanvasActivity : AppCompatActivity() {
     private var autoSaveJob: Job? = null
 
     private var currentCanvasPath: String? = null
+
+    // PDF to import once the session is loaded (new note created from "Import PDF").
+    private var pendingPdfImport: Uri? = null
     private var isFixedPageState: androidx.compose.runtime.MutableState<Boolean>? = null
 
     // Floating Window State
@@ -133,6 +142,22 @@ class CanvasActivity : AppCompatActivity() {
                 sidebarCoordinator.close()
             }
         }
+
+    private val pdfPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importPdf(uri)
+        }
+
+    private fun importPdf(uri: Uri) {
+        lifecycleScope.launch {
+            val pages = binding.canvasView.getController().importPdf(uri)
+            if (pages > 0) {
+                android.widget.Toast
+                    .makeText(this@CanvasActivity, "Imported $pages PDF page(s)", android.widget.Toast.LENGTH_SHORT)
+                    .show()
+            }
+        }
+    }
 
     private val imagePickerLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -209,6 +234,12 @@ class CanvasActivity : AppCompatActivity() {
             }
         }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // The intent survives recreation; don't import the same PDF twice.
+        outState.putBoolean(STATE_PDF_IMPORT_CONSUMED, pendingPdfImport == null)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -265,6 +296,9 @@ class CanvasActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         currentCanvasPath = intent.getStringExtra("CANVAS_PATH")
+        if (savedInstanceState?.getBoolean(STATE_PDF_IMPORT_CONSUMED) != true) {
+            pendingPdfImport = intent.getStringExtra(EXTRA_IMPORT_PDF_URI)?.let { Uri.parse(it) }
+        }
 
         enableImmersiveMode()
 
@@ -465,6 +499,10 @@ class CanvasActivity : AppCompatActivity() {
             imagePickerLauncher.launch(arrayOf("image/*"))
         }
 
+        binding.canvasView.onRequestInsertPdf = {
+            pdfPickerLauncher.launch(arrayOf("application/pdf"))
+        }
+
         binding.canvasView.onBrowseFiles = { callback ->
             pendingLinkCallback = callback
 
@@ -608,6 +646,11 @@ class CanvasActivity : AppCompatActivity() {
                                 val isFixed = session.metadata.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
                                 isFixedPageState?.value = isFixed
                                 viewModel.setFixedPageMode(isFixed)
+
+                                pendingPdfImport?.let { uri ->
+                                    pendingPdfImport = null
+                                    importPdf(uri)
+                                }
 
                                 // Toolbar init logic is now in ViewModel's loadCanvasSession
 

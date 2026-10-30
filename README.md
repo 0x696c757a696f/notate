@@ -24,6 +24,7 @@ without sacrificing extensive functionality.
 | ✏️ **Scribble-to-Erase** | Quickly erase content by scribbling over it—detects zig-zag gesture density and velocity |
 | 🧴 **Smart Erasers** | Stroke eraser, standard (partial) eraser, and lasso eraser modes |
 | 📝 **Images** | Paste images seamlessly into the canvas |
+| 📑 **PDF Annotation** | Import a PDF as a new notebook (or append it to an open note) and write directly on its pages; pages are locked so erasers and selection never touch them |
 | 🔗 **Deep Linking** | Create interactive links to other notes, local PDFs, or websites; content opens in draggable floating windows |
 | 🔲 **Selection** | Rectangle and lasso selection modes to select, copy, and move strokes or images |
 | 🧭 **Fixed Pages Mode** | Page Mode emulation with visual grid and thumbnail navigation |

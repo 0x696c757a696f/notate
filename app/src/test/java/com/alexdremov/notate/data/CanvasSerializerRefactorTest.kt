@@ -14,6 +14,30 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, sdk = [33])
 class CanvasSerializerRefactorTest {
     @Test
+    fun `locked flag survives CanvasImage serialization`() {
+        val logical = RectF(0f, 0f, 2480f, 3508f)
+        val original =
+            CanvasImage(
+                uri = "images/page.png",
+                logicalBounds = logical,
+                bounds = RectF(logical),
+                zIndex = -1f,
+                order = 7L,
+                locked = true,
+            )
+
+        val data = CanvasSerializer.toCanvasImageData(original)
+        assertTrue(data.locked)
+
+        val restored = CanvasSerializer.fromCanvasImageData(data)
+        assertTrue(restored.locked)
+        assertEquals(original, restored)
+
+        // Images written before the flag existed must load as unlocked.
+        assertFalse(CanvasSerializer.fromCanvasImageData(data.copy(locked = false)).locked)
+    }
+
+    @Test
     fun `test CanvasImage serialization roundtrip`() {
         val logical = RectF(10f, 20f, 110f, 120f)
         val rotation = 30f

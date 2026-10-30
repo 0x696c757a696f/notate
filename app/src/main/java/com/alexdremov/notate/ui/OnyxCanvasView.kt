@@ -131,6 +131,7 @@ class OnyxCanvasView
         var minimapDrawer: com.alexdremov.notate.ui.render.MinimapDrawer? = null
 
         var onRequestInsertImage: (() -> Unit)? = null
+        var onRequestInsertPdf: (() -> Unit)? = null
         var onBrowseFiles: ((onResult: (name: String, uuid: String) -> Unit) -> Unit)? = null
         var onSelectFile: ((onResult: (name: String, path: String) -> Unit) -> Unit)? = null
         var onLinkActivated: ((com.alexdremov.notate.model.LinkItem) -> Unit)? = null
@@ -265,6 +266,7 @@ class OnyxCanvasView
                                                 viewScope.launch { canvasController.paste(worldX, worldY) }
                                             },
                                             onPasteImage = { onRequestInsertImage?.invoke() },
+                                            onInsertPdf = { onRequestInsertPdf?.invoke() },
                                             onInsertLink = { showLinkDialog(worldX, worldY) },
                                         )
                                     contextMenu?.show(this@OnyxCanvasView, e.x, e.y)
