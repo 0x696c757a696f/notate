@@ -609,6 +609,12 @@ class WebInkOverlayView(
             return true
         }
 
+        /** Appends a single value (e.g. one pressure sample per point). */
+        fun add(v: Float) {
+            if (size + 1 > data.size) data = data.copyOf(data.size * 2)
+            data[size++] = v
+        }
+
         fun clear() {
             size = 0
         }
