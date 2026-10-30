@@ -471,6 +471,14 @@ class CanvasActivity : AppCompatActivity() {
             }
         }
 
+        // If the driver already inked a stylus tap on the toolbar, repaint it clean.
+        binding.canvasView.onExcludedStrokeDiscarded = {
+            EpdController.invalidate(binding.toolbarContainer, UpdateMode.GC)
+            if (sidebarCoordinator.isOpen) {
+                EpdController.invalidate(binding.settingsSidebarContainer, UpdateMode.GC)
+            }
+        }
+
         binding.canvasView.onRequestInsertImage = {
             imagePickerLauncher.launch(arrayOf("image/*"))
         }
