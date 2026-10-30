@@ -85,9 +85,17 @@ data class PenTool(
                 ),
                 PenTool("text_tool", "Text", ToolType.TEXT, Color.BLACK, 40f, StrokeType.FINELINER),
                 defaultShapeTool("shape_tool"),
-            )
+            ) + DEFAULT_SHAPE_BUTTONS.map { defaultShapeTool(defaultShapeButtonId(it), it) }
 
-        fun defaultShapeTool(id: String): PenTool =
+        /** Shapes that get their own toolbar button by default (on top of the Auto shape pen). */
+        val DEFAULT_SHAPE_BUTTONS: List<ShapeType> = listOf(ShapeType.LINE, ShapeType.POLYGON, ShapeType.AXES)
+
+        fun defaultShapeButtonId(type: ShapeType): String = "shape_${type.name.lowercase()}"
+
+        fun defaultShapeTool(
+            id: String,
+            shapeType: ShapeType = ShapeType.AUTO,
+        ): PenTool =
             PenTool(
                 id = id,
                 name = "Shapes",
@@ -95,7 +103,7 @@ data class PenTool(
                 color = Color.BLACK,
                 width = 6f,
                 strokeType = StrokeType.FINELINER,
-                shapeType = ShapeType.AUTO,
+                shapeType = shapeType,
             )
     }
 }

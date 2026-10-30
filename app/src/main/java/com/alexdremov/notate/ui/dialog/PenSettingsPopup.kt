@@ -475,22 +475,8 @@ class PenSettingsPopup(
         )
 
         val options =
-            listOf(
-                ShapeType.AUTO to R.string.shape_auto,
-                ShapeType.LINE to R.string.shape_line,
-                ShapeType.ARROW to R.string.shape_arrow,
-                ShapeType.DOUBLE_ARROW to R.string.shape_double_arrow,
-                ShapeType.RECTANGLE to R.string.shape_rectangle,
-                ShapeType.ELLIPSE to R.string.shape_ellipse,
-                ShapeType.TRIANGLE to R.string.shape_triangle,
-                ShapeType.RIGHT_TRIANGLE to R.string.shape_right_triangle,
-                ShapeType.POLYGON to R.string.shape_polygon,
-                ShapeType.AXES to R.string.shape_axes,
-                ShapeType.AXES_QUADRANT to R.string.shape_axes_quadrant,
-                ShapeType.AXES_3D to R.string.shape_axes_3d,
-                ShapeType.GRID to R.string.shape_grid,
-                ShapeType.NUMBER_LINE to R.string.shape_number_line,
-            )
+            com.alexdremov.notate.ui.toolbar.ShapeUi.ORDERED
+                .map { it to com.alexdremov.notate.ui.toolbar.ShapeUi.labelRes(it) }
 
         val grid =
             GridLayout(context).apply {

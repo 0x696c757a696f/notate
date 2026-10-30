@@ -382,9 +382,9 @@ class DrawingViewModel
             selectTool(newId)
         }
 
-        fun addShapeTool() {
+        fun addShapeTool(type: com.alexdremov.notate.model.ShapeType = com.alexdremov.notate.model.ShapeType.AUTO) {
             val newId = "shape_${System.currentTimeMillis()}"
-            addToolbarItem(ToolbarItem.Pen(PenTool.defaultShapeTool(newId)))
+            addToolbarItem(ToolbarItem.Pen(PenTool.defaultShapeTool(newId, type)))
             selectTool(newId)
         }
 
