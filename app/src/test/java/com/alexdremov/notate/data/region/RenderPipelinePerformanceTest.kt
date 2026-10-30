@@ -569,6 +569,7 @@ class RenderPipelinePerformanceTest {
         val done =
             java.util.concurrent.atomic
                 .AtomicBoolean(false)
+        val lastProgress = java.util.concurrent.ConcurrentHashMap<Thread, Long>()
         val readers =
             (0 until 4).map {
                 Thread {
@@ -576,13 +577,41 @@ class RenderPipelinePerformanceTest {
                         while (!done.get()) {
                             rm.queryItems(probe)
                             counts[windowIdx.get()].increment()
+                            lastProgress[Thread.currentThread()] = System.nanoTime()
                         }
                     }
-                }.apply { isDaemon = true }
+                }.apply {
+                    isDaemon = true
+                    name = "flow-reader-$it"
+                }
             }
+
+        // Stall diagnostics: when a reader makes no progress for 300ms, dump
+        // every thread's stack once so a CI failure names the blocking site.
+        val dumps =
+            java.util.concurrent.atomic
+                .AtomicInteger(0)
+        val watchdog =
+            Thread {
+                while (!done.get()) {
+                    Thread.sleep(50)
+                    val now = System.nanoTime()
+                    val stalled = lastProgress.entries.firstOrNull { now - it.value > 300_000_000L }
+                    if (stalled != null && dumps.incrementAndGet() <= 2) {
+                        val sb = StringBuilder("!!!! FLOW-STALL window=${windowIdx.get()} reader=${stalled.key.name}\n")
+                        for ((th, st) in Thread.getAllStackTraces()) {
+                            if (st.isEmpty()) continue
+                            sb.append("--- ${th.name} ${th.state}\n")
+                            st.take(40).forEach { sb.append("    at $it\n") }
+                        }
+                        println(sb)
+                    }
+                }
+            }.apply { isDaemon = true }
 
         repeat(150) { runBlocking { rm.queryItems(probe) } } // warm-up
         readers.forEach { it.start() }
+        watchdog.start()
 
         var stopWriters = false
         val writers =
@@ -627,8 +656,8 @@ class RenderPipelinePerformanceTest {
         val worstLoadedWindow = counts.filterIndexed { i, _ -> i % 2 == 1 }.minOf { it.sum() }
         val ratio = if (quietPerWindow > 0) loadedPerWindow / quietPerWindow else 0.0
         println(
-            "!!!! FLOW quiet=%.0f/win loaded=%.0f/win ratio=%.2f worstLoadedWindow=$worstLoadedWindow"
-                .format(quietPerWindow, loadedPerWindow, ratio),
+            "!!!! FLOW quiet=%.0f/win loaded=%.0f/win ratio=%.2f worstLoadedWindow=$worstLoadedWindow windows=%s"
+                .format(quietPerWindow, loadedPerWindow, ratio, counts.map { it.sum() }),
         )
 
         assertTrue(
