@@ -29,6 +29,11 @@ data class CanvasImage(
     override val order: Long = 0,
     val rotation: Float = 0f,
     val opacity: Float = 1.0f,
+    /**
+     * Locked images act as page backgrounds (e.g. imported PDF pages): they are
+     * rendered and exported normally but ignored by erasers, hit-testing and selection.
+     */
+    val locked: Boolean = false,
 ) : CanvasItem {
     override fun distanceToPoint(
         x: Float,
@@ -77,7 +82,8 @@ data class CanvasImage(
             bounds == other.bounds &&
             zIndex == other.zIndex &&
             rotation == other.rotation &&
-            opacity == other.opacity
+            opacity == other.opacity &&
+            locked == other.locked
     }
 
     override fun hashCode(): Int {
@@ -88,6 +94,7 @@ data class CanvasImage(
         result = 31 * result + zIndex.hashCode()
         result = 31 * result + rotation.hashCode()
         result = 31 * result + opacity.hashCode()
+        result = 31 * result + locked.hashCode()
         return result
     }
 }

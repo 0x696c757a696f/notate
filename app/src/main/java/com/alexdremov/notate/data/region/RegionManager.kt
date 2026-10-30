@@ -15,6 +15,7 @@ import com.alexdremov.notate.model.CanvasImage
 import com.alexdremov.notate.model.CanvasItem
 import com.alexdremov.notate.model.LinkItem
 import com.alexdremov.notate.model.Stroke
+import com.alexdremov.notate.model.isLocked
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.PerformanceProfiler
 import com.alexdremov.notate.util.Quadtree
@@ -2028,6 +2029,7 @@ class RegionManager(
 
         candidates.sortByDescending { it.order }
         for (item in candidates) {
+            if (item.isLocked) continue
             if (item.distanceToPoint(x, y) < tolerance) return item
         }
         return null
@@ -2415,6 +2417,7 @@ class RegionManager(
                                 order = data.order,
                                 rotation = data.rotation,
                                 opacity = data.opacity,
+                                locked = data.locked,
                             )
                     } else if (type == 2) {
                         // Type 2 is TextItem

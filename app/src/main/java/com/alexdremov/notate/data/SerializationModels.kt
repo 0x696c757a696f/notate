@@ -111,6 +111,8 @@ data class CanvasImageData(
     val rotation: Float = 0f,
     @ProtoNumber(9)
     val opacity: Float = 1.0f,
+    @ProtoNumber(10)
+    val locked: Boolean = false,
 )
 
 @Serializable

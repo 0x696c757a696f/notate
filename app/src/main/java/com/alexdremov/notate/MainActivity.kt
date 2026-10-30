@@ -212,6 +212,22 @@ fun MainScreen(
             }
         }
 
+    // "Import PDF": create a note sized to the PDF, then let CanvasActivity import the pages.
+    val pdfImportPicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                viewModel.createCanvasFromPdf(uri) { path ->
+                    val intent =
+                        Intent(context, CanvasActivity::class.java).apply {
+                            putExtra("CANVAS_PATH", path)
+                            putExtra(CanvasActivity.EXTRA_IMPORT_PDF_URI, uri.toString())
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                    context.startActivity(intent)
+                }
+            }
+        }
+
     // Back Handler
     val isAtRoot = breadcrumbs.size <= 1
     val shouldHandleBack =
@@ -312,6 +328,9 @@ fun MainScreen(
                                 }
                                 IconButton(onClick = { showNameDialog = DialogType.CREATE_CANVAS }) {
                                     Icon(Icons.Filled.Edit, contentDescription = "New Canvas")
+                                }
+                                IconButton(onClick = { pdfImportPicker.launch(arrayOf("application/pdf")) }) {
+                                    Icon(Icons.Filled.PictureAsPdf, contentDescription = "Import PDF")
                                 }
                             }
                         } else {

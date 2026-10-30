@@ -67,6 +67,7 @@ object CanvasSerializer {
             order = item.order,
             rotation = item.rotation,
             opacity = item.opacity,
+            locked = item.locked,
         )
 
     fun fromCanvasImageData(cData: CanvasImageData): com.alexdremov.notate.model.CanvasImage {
@@ -80,6 +81,7 @@ object CanvasSerializer {
             order = cData.order,
             rotation = cData.rotation,
             opacity = cData.opacity,
+            locked = cData.locked,
         )
     }
 
