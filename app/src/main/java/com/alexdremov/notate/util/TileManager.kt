@@ -21,6 +21,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -38,6 +39,9 @@ import kotlin.coroutines.coroutineContext
 import kotlin.math.floor
 import kotlin.math.log2
 import kotlin.math.pow
+
+/** How many items a tile job draws between cooperative [yield] calls. */
+private const val YIELD_EVERY_ITEMS = 32
 
 /**
  * Coordinates the Level-of-Detail (LOD) tiled rendering system for the infinite canvas.
@@ -890,8 +894,11 @@ class TileManager(
         val sortedItems = items.sortedWith(compareBy<com.alexdremov.notate.model.CanvasItem> { it.zIndex }.thenBy { it.order })
         val hidden = hiddenItemIds
 
-        for (item in sortedItems) {
-            yield() // Check cancellation
+        for ((index, item) in sortedItems.withIndex()) {
+            // Cancellation check per item is cheap; yield() re-dispatches the coroutine, so only
+            // give other tile jobs a turn every few items instead of after every single stroke.
+            coroutineContext.ensureActive()
+            if (index % YIELD_EVERY_ITEMS == YIELD_EVERY_ITEMS - 1) yield()
             if (hidden.contains(item.order)) continue
             renderer.drawItemToCanvas(canvas, item, scale = scale)
         }

@@ -336,11 +336,24 @@ fun MainScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = if (lockedProjectId != null) "Loading project..." else "Select a project from the sidebar",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text =
+                                    when {
+                                        lockedProjectId != null -> "Loading project..."
+                                        projects.isEmpty() -> "Create a project to start taking notes"
+                                        else -> "Select a project from the sidebar"
+                                    },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (lockedProjectId == null && !isPickerMode && projects.isEmpty()) {
+                                Spacer(Modifier.height(16.dp))
+                                OutlinedButton(onClick = { showNameDialog = DialogType.ADD_PROJECT }) {
+                                    Text("New Project", color = Color.Black)
+                                }
+                            }
+                        }
                     }
                 } else {
                     // --- Level 1+: File Browser ---
@@ -617,17 +630,31 @@ fun MainScreen(
             )
         }
 
-        DialogType.ADD_PROJECT, DialogType.CREATE_FOLDER -> {
+        DialogType.ADD_PROJECT -> {
+            NewProjectDialog(
+                onDismiss = { showNameDialog = null },
+                onConfirm = { name, location ->
+                    when (location) {
+                        ProjectLocation.ON_DEVICE -> {
+                            viewModel.addLocalProject(name)
+                        }
+
+                        ProjectLocation.CUSTOM_FOLDER -> {
+                            pendingProjectName = name
+                            projectLocationPicker.launch(null)
+                        }
+                    }
+                    showNameDialog = null
+                },
+            )
+        }
+
+        DialogType.CREATE_FOLDER -> {
             TextInputDialog(
-                title = if (showNameDialog == DialogType.ADD_PROJECT) "New Project" else "New Folder",
+                title = "New Folder",
                 onDismiss = { showNameDialog = null },
                 onConfirm = { name ->
-                    if (showNameDialog == DialogType.ADD_PROJECT) {
-                        pendingProjectName = name
-                        projectLocationPicker.launch(null)
-                    } else {
-                        viewModel.createFolder(name)
-                    }
+                    viewModel.createFolder(name)
                     showNameDialog = null
                 },
             )

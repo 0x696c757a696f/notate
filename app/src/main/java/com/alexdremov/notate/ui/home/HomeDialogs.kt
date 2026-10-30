@@ -79,6 +79,101 @@ fun TextInputDialog(
     )
 }
 
+/** Where a new project keeps its files. */
+enum class ProjectLocation {
+    /** Inside the app: no system file picker, works out of the box. */
+    ON_DEVICE,
+
+    /** A folder the user picks with the system file picker (shared with other apps). */
+    CUSTOM_FOLDER,
+}
+
+/**
+ * New project: a name and, optionally, a storage location. Storing on the device is the
+ * default so creating a project never drops the user into the system file manager unless
+ * they explicitly ask for a custom folder.
+ */
+@Composable
+fun NewProjectDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, ProjectLocation) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var location by remember { mutableStateOf(ProjectLocation.ON_DEVICE) }
+
+    AlertDialog(
+        modifier = Modifier.border(2.dp, Color.Black, RoundedCornerShape(28.dp)),
+        onDismissRequest = onDismiss,
+        title = { Text(text = "New Project") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Save to", style = MaterialTheme.typography.titleSmall)
+
+                ProjectLocationOption(
+                    title = "This device",
+                    description = "Recommended. Kept inside Notate; back it up with Sync.",
+                    selected = location == ProjectLocation.ON_DEVICE,
+                    onSelect = { location = ProjectLocation.ON_DEVICE },
+                )
+                ProjectLocationOption(
+                    title = "A folder I choose",
+                    description = "Opens the system file picker next, to use a folder shared with other apps.",
+                    selected = location == ProjectLocation.CUSTOM_FOLDER,
+                    onSelect = { location = ProjectLocation.CUSTOM_FOLDER },
+                )
+            }
+        },
+        confirmButton = {
+            OutlinedButton(
+                enabled = name.isNotBlank(),
+                onClick = { onConfirm(name.trim(), location) },
+            ) {
+                Text(if (location == ProjectLocation.CUSTOM_FOLDER) "Choose Folder" else "Create")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ProjectLocationOption(
+    title: String,
+    description: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, onClick = onSelect, role = Role.RadioButton)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(modifier = Modifier.padding(start = 8.dp)) {
+            Text(text = title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.DarkGray,
+            )
+        }
+    }
+}
+
 @Composable
 fun CreateCanvasDialog(
     onDismiss: () -> Unit,

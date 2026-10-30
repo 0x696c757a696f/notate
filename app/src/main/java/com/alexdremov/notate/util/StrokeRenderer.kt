@@ -190,20 +190,20 @@ object StrokeRenderer {
                 }
 
                 is com.alexdremov.notate.model.CanvasImage -> {
-                    if (xfermode != null) paint.xfermode = android.graphics.PorterDuffXfermode(xfermode)
+                    if (xfermode != null) paint.xfermode = xfermodeFor(xfermode)
                     ImageRenderer.draw(canvas, paint, item, context, scale)
                     if (xfermode != null) paint.xfermode = null
                 }
 
                 is com.alexdremov.notate.model.TextItem -> {
                     // Propagate paint (with potential xfermode) to TextRenderer
-                    if (xfermode != null) paint.xfermode = android.graphics.PorterDuffXfermode(xfermode)
+                    if (xfermode != null) paint.xfermode = xfermodeFor(xfermode)
                     TextRenderer.draw(canvas, item, context, paint)
                     if (xfermode != null) paint.xfermode = null
                 }
 
                 is com.alexdremov.notate.model.LinkItem -> {
-                    if (xfermode != null) paint.xfermode = android.graphics.PorterDuffXfermode(xfermode)
+                    if (xfermode != null) paint.xfermode = xfermodeFor(xfermode)
                     LinkRenderer.draw(canvas, item, context, paint, scale)
                     if (xfermode != null) paint.xfermode = null
                 }
@@ -262,7 +262,7 @@ object StrokeRenderer {
                 isAntiAlias = true
                 isDither = true
                 if (xfermode != null) {
-                    this.xfermode = android.graphics.PorterDuffXfermode(xfermode)
+                    this.xfermode = xfermodeFor(xfermode)
                 }
             }
 
@@ -325,9 +325,33 @@ object StrokeRenderer {
         if (maxObserved > 0f && maxObserved <= 1.0f) {
             return 1.0f
         }
-        val hwMax = EpdController.getMaxTouchPressure()
-        return if (hwMax <= 0f) 4096f else hwMax
+        return deviceMaxPressure
     }
+
+    /**
+     * Hardware max pressure, resolved once. It is a device constant, but the SDK call used to
+     * run for every stroke on every tile render.
+     */
+    val deviceMaxPressure: Float by lazy {
+        try {
+            val hwMax = EpdController.getMaxTouchPressure()
+            if (hwMax <= 0f) 4096f else hwMax
+        } catch (e: Throwable) {
+            // Non-Onyx environment (Robolectric, other devices)
+            4096f
+        }
+    }
+
+    // PorterDuffXfermode is immutable; share one instance per mode instead of allocating per draw.
+    private val xfermodeCache =
+        java.util.EnumMap<android.graphics.PorterDuff.Mode, android.graphics.PorterDuffXfermode>(
+            android.graphics.PorterDuff.Mode::class.java,
+        )
+
+    private fun xfermodeFor(mode: android.graphics.PorterDuff.Mode): android.graphics.PorterDuffXfermode =
+        synchronized(xfermodeCache) {
+            xfermodeCache.getOrPut(mode) { android.graphics.PorterDuffXfermode(mode) }
+        }
 
     private fun drawDebugBounds(
         canvas: Canvas,

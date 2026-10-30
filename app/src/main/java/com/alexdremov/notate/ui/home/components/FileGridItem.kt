@@ -2,7 +2,6 @@ package com.alexdremov.notate.ui.home.components
 
 import android.graphics.BitmapFactory
 import android.util.Base64
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,8 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -32,8 +31,21 @@ import com.alexdremov.notate.data.CanvasItem
 import com.alexdremov.notate.data.FileSystemItem
 import com.alexdremov.notate.data.ProjectItem
 import com.alexdremov.notate.data.SyncStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+
+/** Thumbnail decode result: still loading, decoded, or undecodable (show the fallback icon). */
+private sealed interface ThumbnailState {
+    data object Loading : ThumbnailState
+
+    data class Ready(
+        val bitmap: ImageBitmap,
+    ) : ThumbnailState
+
+    data object Failed : ThumbnailState
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -75,24 +87,33 @@ fun FileGridItem(
                 contentAlignment = Alignment.Center,
             ) {
                 if (item is CanvasItem && !item.thumbnail.isNullOrEmpty()) {
-                    val bitmap =
-                        remember(item.thumbnail) {
-                            try {
-                                val decoded = Base64.decode(item.thumbnail, Base64.DEFAULT)
-                                BitmapFactory.decodeByteArray(decoded, 0, decoded.size)?.asImageBitmap()
-                            } catch (e: Exception) {
-                                null
+                    // Decode off the main thread: a folder full of notes otherwise decodes every
+                    // Base64 thumbnail during composition and stutters the first scroll.
+                    val thumbnail by produceState<ThumbnailState>(ThumbnailState.Loading, item.thumbnail) {
+                        value =
+                            withContext(Dispatchers.Default) {
+                                try {
+                                    val decoded = Base64.decode(item.thumbnail, Base64.DEFAULT)
+                                    BitmapFactory
+                                        .decodeByteArray(decoded, 0, decoded.size)
+                                        ?.asImageBitmap()
+                                        ?.let { ThumbnailState.Ready(it) }
+                                        ?: ThumbnailState.Failed
+                                } catch (e: Exception) {
+                                    ThumbnailState.Failed
+                                }
                             }
-                        }
+                    }
 
-                    if (bitmap != null) {
+                    val state = thumbnail
+                    if (state is ThumbnailState.Ready) {
                         Image(
-                            bitmap = bitmap,
+                            bitmap = state.bitmap,
                             contentDescription = null,
                             contentScale = ContentScale.Fit, // Contain within box
                             modifier = Modifier.fillMaxSize().padding(8.dp),
                         )
-                    } else {
+                    } else if (state is ThumbnailState.Failed) {
                         // Fallback icon
                         Icon(
                             imageVector = Icons.Default.Description,
@@ -112,20 +133,8 @@ fun FileGridItem(
                 }
 
                 if (item.syncStatus != SyncStatus.NONE) {
-                    val infiniteTransition = rememberInfiniteTransition()
-                    val angle by if (item.syncStatus == SyncStatus.SYNCING) {
-                        infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec =
-                                infiniteRepeatable(
-                                    animation = tween(1000, easing = LinearEasing),
-                                ),
-                        )
-                    } else {
-                        remember { mutableFloatStateOf(0f) }
-                    }
-
+                    // Static badge: a spinning icon forces continuous e-ink refreshes (flicker,
+                    // ghosting and battery drain) for as long as a sync runs.
                     Box(
                         modifier =
                             Modifier
@@ -139,7 +148,7 @@ fun FileGridItem(
                             imageVector = Icons.Default.Sync,
                             contentDescription = "Syncing",
                             tint = if (item.syncStatus == SyncStatus.SYNCING) Color(0xFF007AFF) else Color.Gray,
-                            modifier = Modifier.fillMaxSize().rotate(angle),
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
