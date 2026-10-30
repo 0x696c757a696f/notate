@@ -12,8 +12,11 @@ enum class StrokeType(
     val alphaMultiplier: Float = 1.0f,
     val defaultZIndex: Float = 0.0f,
 ) {
+    // touchHelperStyle is the live (hardware) ink while the pen is down. The driver only has a few
+    // styles, so it is the closest match to the final render: pressure-sensitive pens use FOUNTAIN,
+    // the constant-width fineliner uses PENCIL.
     FOUNTAIN(TouchHelper.STROKE_STYLE_FOUNTAIN, "Fountain"),
-    BALLPOINT(TouchHelper.STROKE_STYLE_PENCIL, "Ballpoint"),
+    BALLPOINT(TouchHelper.STROKE_STYLE_FOUNTAIN, "Ballpoint"),
     FINELINER(TouchHelper.STROKE_STYLE_PENCIL, "Fineliner"),
     HIGHLIGHTER(
         TouchHelper.STROKE_STYLE_MARKER,

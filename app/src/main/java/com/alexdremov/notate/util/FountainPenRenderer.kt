@@ -8,7 +8,6 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -74,12 +73,11 @@ object FountainPenRenderer {
         maxPressure: Float,
     ): List<ControlPoint> {
         val result = ArrayList<ControlPoint>(rawPoints.size)
-        val adjustedBaseWidth = baseWidth * CanvasConfig.FOUNTAIN_BASE_WIDTH_MULTIPLIER
-
-        // Smoothing state
-        var lastPressure = if (rawPoints.isNotEmpty()) rawPoints[0].pressure / maxPressure else 0.5f
         // Avoid division by zero if maxPressure is 0
         val safeMaxPressure = if (maxPressure > 0) maxPressure else 4096f
+
+        // Smoothing state
+        var lastPressure = if (rawPoints.isNotEmpty()) rawPoints[0].pressure / safeMaxPressure else 0.5f
 
         for (i in rawPoints.indices) {
             val p = rawPoints[i]
@@ -109,8 +107,8 @@ object FountainPenRenderer {
                 rawP * CanvasConfig.FOUNTAIN_PRESSURE_SMOOTHING_FACTOR
 
             // 3. Calculate Target Width
-            // W = Base * Pressure^Exp * (1 - k * Velocity)
-            val pressureFactor = lastPressure.pow(CanvasConfig.FOUNTAIN_PRESSURE_POWER_EXPONENT)
+            // W = Base * PressureCurve * (1 - k * Velocity) * Taper
+            val pressureFactor = PenDynamics.fountainWidthScale(lastPressure)
 
             // Velocity thins the stroke: (1 - influence * normVel)
             // We clamp the thinning so it doesn't disappear completely
@@ -118,7 +116,10 @@ object FountainPenRenderer {
                 (1.0f - (normVelocity * CanvasConfig.FOUNTAIN_VELOCITY_INFLUENCE))
                     .coerceIn(0.2f, 1.0f)
 
-            var targetWidth = adjustedBaseWidth * pressureFactor * velocityFactor
+            // Ink swells in at the start of a stroke and thins out at the end.
+            val taper = PenDynamics.fountainTaper(i, rawPoints.size)
+
+            var targetWidth = baseWidth * pressureFactor * velocityFactor * taper
 
             // Absolute min width clamp
             targetWidth = targetWidth.coerceAtLeast(CanvasConfig.FOUNTAIN_MIN_WIDTH)

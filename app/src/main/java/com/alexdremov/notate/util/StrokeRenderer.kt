@@ -286,6 +286,7 @@ object StrokeRenderer {
                 if (forceVector) {
                     when (stroke.style) {
                         StrokeType.FOUNTAIN -> FountainStrategy
+                        StrokeType.BALLPOINT -> BallpointStrategy
                         StrokeType.HIGHLIGHTER -> HighlighterStrategy
                         StrokeType.DASH -> DashStrategy
                         StrokeType.DOT -> DotStrategy
