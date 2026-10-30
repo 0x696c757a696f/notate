@@ -105,7 +105,7 @@ class WebDocActivity : AppCompatActivity() {
             .putExtra(EXTRA_IS_FOLDER, isFolder)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-        private const val REDUCE_MOTION_JS =
+        const val REDUCE_MOTION_JS =
             "(function(){if(document.getElementById('__notate_reduce_motion'))return;" +
                 "var s=document.createElement('style');s.id='__notate_reduce_motion';" +
                 // Near-zero instead of 'none' so transitionend/animationend still fire for page scripts.
@@ -542,31 +542,7 @@ class WebDocActivity : AppCompatActivity() {
         val host = WebDocResources.hostFor(m.id)
         val contentRoot = library.contentDir(m.id)
 
-        with(webView.settings) {
-            domStorageEnabled = true // localStorage / sessionStorage for exercise answers & progress
-            @Suppress("DEPRECATION")
-            databaseEnabled = true
-            // Sandbox: the page can only see its own files through the private origin.
-            allowFileAccess = false
-            allowContentAccess = false
-            @Suppress("DEPRECATION")
-            allowFileAccessFromFileURLs = false
-            @Suppress("DEPRECATION")
-            allowUniversalAccessFromFileURLs = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            javaScriptCanOpenWindowsAutomatically = false
-            setSupportMultipleWindows(false)
-            setGeolocationEnabled(false)
-            mediaPlaybackRequiresUserGesture = true
-            // Layout: honour <meta viewport> (fixed-layout EPUBs), fit wide pages, pinch zoom without +/- buttons.
-            useWideViewPort = true
-            loadWithOverviewMode = true
-            setSupportZoom(true)
-            builtInZoomControls = true
-            displayZoomControls = false
-            textZoom = 100 // keep layout stable so ink stays on the right words
-            cacheMode = WebSettings.LOAD_NO_CACHE
-        }
+        WebDocSandbox.configure(webView.settings)
 
         webView.webViewClient =
             object : WebViewClient() {
@@ -575,10 +551,10 @@ class WebDocActivity : AppCompatActivity() {
                     request: WebResourceRequest,
                 ): WebResourceResponse? {
                     val url = request.url
-                    if (url.host == host) return serveLocal(contentRoot, url, request.method)
+                    if (url.host == host) return WebDocSandbox.serveLocal(contentRoot, url, request.method)
                     val scheme = url.scheme ?: ""
                     if (scheme == "data" || scheme == "blob") return null
-                    return if (meta?.policy?.networkAllowed == true) null else blocked()
+                    return if (meta?.policy?.networkAllowed == true) null else WebDocSandbox.blocked()
                 }
 
                 override fun shouldOverrideUrlLoading(
@@ -670,32 +646,7 @@ class WebDocActivity : AppCompatActivity() {
             }
     }
 
-    private fun serveLocal(
-        root: java.io.File,
-        url: Uri,
-        method: String,
-    ): WebResourceResponse {
-        if (method != "GET" && method != "HEAD") {
-            return WebResourceResponse("text/plain", "utf-8", 405, "Method Not Allowed", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-        }
-        val file = WebDocResources.resolve(root, url.encodedPath ?: "/")
-        if (file == null) {
-            return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-        }
-        val mime = WebDocResources.mimeType(file)
-        // HTML/XHTML: let the parser pick the charset from <meta>/XML declaration.
-        val encoding = if (WebDocResources.isTextual(mime) && mime != "text/html" && mime != "application/xhtml+xml") "utf-8" else null
-        val headers = mapOf("Cache-Control" to "no-cache", "X-Content-Type-Options" to "nosniff")
-        return WebResourceResponse(mime, encoding, 200, "OK", headers, file.inputStream().buffered())
-    }
-
-    private fun blocked() = WebResourceResponse("text/plain", "utf-8", 403, "Blocked offline", emptyMap(), ByteArrayInputStream(ByteArray(0)))
-
-    private fun applyPolicy(policy: WebDocPolicy) {
-        webView.settings.javaScriptEnabled = policy.javaScriptEnabled
-        webView.settings.blockNetworkLoads = !policy.networkAllowed
-        webView.settings.safeBrowsingEnabled = policy.networkAllowed
-    }
+    private fun applyPolicy(policy: WebDocPolicy) = WebDocSandbox.applyPolicy(webView.settings, policy)
 
     private fun updatePolicy(transform: (WebDocPolicy) -> WebDocPolicy) {
         val m = meta ?: return

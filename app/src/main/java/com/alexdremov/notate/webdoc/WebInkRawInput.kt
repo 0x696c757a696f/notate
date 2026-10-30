@@ -179,9 +179,24 @@ class WebInkRawInput(
         if (pauseCount == 0) applyState()
     }
 
+    /** Areas over the page (overlay coordinates) where the pen must not ink, e.g. a floating toolbar. */
+    var exclusionRects: List<Rect> = emptyList()
+        set(value) {
+            if (field == value) return
+            field = value
+            updateLimitRect()
+            // The driver only takes a new exclude set when raw drawing restarts.
+            if (active) {
+                runCatching {
+                    helper?.setRawDrawingEnabled(false)
+                    helper?.setRawDrawingEnabled(true)
+                }
+            }
+        }
+
     /** Call after layout changes so the driver only captures over the page area. */
     fun updateLimitRect() {
-        helper?.setLimitRect(visibleRect(), ArrayList<Rect>())
+        helper?.setLimitRect(visibleRect(), ArrayList(exclusionRects))
     }
 
     /** Stylus hover over the page: keep the driver's ink while the pen is about to write again. */

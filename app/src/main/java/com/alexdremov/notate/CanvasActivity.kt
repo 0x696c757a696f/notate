@@ -108,7 +108,17 @@ class CanvasActivity : AppCompatActivity() {
     // Tabs and split view
     private var workspace = Workspace()
     private var secondary: SecondaryPane? = null
+
+    // A book (EPUB/HTML) shown beside the note instead of a second note.
+    private var book: com.alexdremov.notate.webdoc.BookPane? = null
     private var secondaryActive = false
+
+    private val bookActive: Boolean
+        get() = secondaryActive && book != null
+
+    private fun partnerPath(): String? = secondary?.path ?: book?.meta?.id
+
+    private fun partnerView(): View? = secondary?.container ?: book
     private var isSwitchingTabs = false
     private var pendingSplitOrientation = SplitOrientation.SIDE_BY_SIDE
     private val activeCanvasState = mutableStateOf<OnyxCanvasView?>(null)
@@ -121,7 +131,7 @@ class CanvasActivity : AppCompatActivity() {
     private val allCanvases: List<OnyxCanvasView>
         get() = listOfNotNull(binding.canvasView, secondary?.canvas)
 
-    private fun activePath(): String? = if (secondaryActive) secondary?.path else currentCanvasPath
+    private fun activePath(): String? = if (secondaryActive) partnerPath() else currentCanvasPath
 
     private fun activeSession(): com.alexdremov.notate.data.CanvasSession? =
         if (secondaryActive) secondary?.session else viewModel.currentSession.value
@@ -150,7 +160,9 @@ class CanvasActivity : AppCompatActivity() {
     private val splitPickerLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val path = result.data?.getStringExtra("NOTE_PATH")
-            if (result.resultCode == RESULT_OK && path != null) startSplit(path, pendingSplitOrientation)
+            if (result.resultCode == RESULT_OK && path != null) {
+                startSplit(DocTab(DocKind.NOTE, path, WorkspaceStore.titleFor(path)), pendingSplitOrientation)
+            }
         }
 
     private var pendingLinkCallback: ((name: String, uuid: String) -> Unit)? = null
@@ -450,24 +462,26 @@ class CanvasActivity : AppCompatActivity() {
                         onActionClick = { action ->
                             when (action) {
                                 com.alexdremov.notate.model.ActionType.UNDO -> {
-                                    lifecycleScope.launch { activeCanvas.undo() }
+                                    val bookPane = book
+                                    if (bookActive && bookPane != null) bookPane.undo() else lifecycleScope.launch { activeCanvas.undo() }
                                 }
 
                                 com.alexdremov.notate.model.ActionType.REDO -> {
-                                    lifecycleScope.launch { activeCanvas.redo() }
+                                    val bookPane = book
+                                    if (bookActive && bookPane != null) bookPane.redo() else lifecycleScope.launch { activeCanvas.redo() }
                                 }
 
                                 com.alexdremov.notate.model.ActionType.INSERT_IMAGE -> {
                                     // Image, PDF, link or paste: one menu, shared with long-press on the canvas.
-                                    activeCanvas.showInsertMenu()
+                                    if (!notOnBook("Inserting")) activeCanvas.showInsertMenu()
                                 }
 
                                 com.alexdremov.notate.model.ActionType.ZOOM_WINDOW -> {
-                                    activeCanvas.toggleZoomWindow()
+                                    if (!notOnBook("The zoom window")) activeCanvas.toggleZoomWindow()
                                 }
 
                                 com.alexdremov.notate.model.ActionType.GUIDES -> {
-                                    showGuidesPicker()
+                                    if (!notOnBook("The ruler in split view")) showGuidesPicker()
                                 }
                             }
                         },
@@ -596,16 +610,19 @@ class CanvasActivity : AppCompatActivity() {
                             canvas.setTool(tool)
                             if (tool.type == ToolType.ERASER) canvas.setEraser(tool)
                         }
+                        book?.setTool(tool)
                     }
                 }
                 launch {
                     viewModel.currentEraser.collect { eraser ->
                         eraser?.let { e -> allCanvases.forEach { it.setEraser(e) } }
+                        book?.setEraser(eraser)
                     }
                 }
                 launch {
                     viewModel.isDrawingEnabled.collect { enabled ->
                         allCanvases.forEach { it.setDrawingEnabled(enabled) }
+                        book?.setInkAllowed(enabled)
                     }
                 }
                 launch {
@@ -1089,7 +1106,7 @@ class CanvasActivity : AppCompatActivity() {
                 }
 
                 is com.alexdremov.notate.ui.split.SplitDrag.Outcome.Collapse -> {
-                    if (outcome.keepIndex == primarySlot()) exitSplit() else secondary?.path?.let { promoteToSingle(it) }
+                    if (outcome.keepIndex == primarySlot()) exitSplit() else partnerPath()?.let { promoteToSingle(it) }
                 }
             }
         }
@@ -1108,7 +1125,7 @@ class CanvasActivity : AppCompatActivity() {
 
         val split = path?.let { workspace.splitFor(it) }
         val partner = split?.partnerOf(path)
-        if (partner != null) openSecondary(partner)
+        if (partner != null) openPartner(partner)
         layoutPanes()
         renderTabs()
     }
@@ -1123,12 +1140,12 @@ class CanvasActivity : AppCompatActivity() {
 
     private fun layoutPanes() {
         val split = currentSplit()
-        val pane = secondary
+        val pane = partnerView()
         val layout = binding.splitLayout
         if (split == null || pane == null) {
             layout.setPanes(binding.primaryPane, null)
         } else {
-            if (primarySlot() == 0) layout.setPanes(binding.primaryPane, pane.container) else layout.setPanes(pane.container, binding.primaryPane)
+            if (primarySlot() == 0) layout.setPanes(binding.primaryPane, pane) else layout.setPanes(pane, binding.primaryPane)
             layout.orientation = split.orientation
             layout.ratio = split.ratio
             layout.activeIndex = if (secondaryActive) 1 - primarySlot() else primarySlot()
@@ -1140,25 +1157,42 @@ class CanvasActivity : AppCompatActivity() {
     }
 
     private fun renderTabs() {
-        val shown = setOfNotNull(currentCanvasPath, secondary?.path)
-        binding.tabBar.render(workspace.tabs, activePath(), shown, if (secondary != null) currentSplit() else null)
+        val shown = setOfNotNull(currentCanvasPath, partnerPath())
+        binding.tabBar.render(workspace.tabs, activePath(), shown, if (partnerView() != null) currentSplit() else null)
     }
 
     /** Moves the pen (raw drawing), toolbar and menus to the other pane. */
     private fun setActivePane(useSecondary: Boolean) {
-        val pane = secondary
-        val target = if (useSecondary && pane != null) pane.canvas else binding.canvasView
-        if (target === activeCanvas && target.isPaneActive) return
-        val old = activeCanvas
-        old.setPaneActive(false)
-        secondaryActive = useSecondary && pane != null
-        target.setPaneActive(true)
-        target.doOnLayout { if (it === activeCanvas) target.setDrawingEnabled(inkGate.isInkAllowed) }
-        activeCanvasState.value = target
+        val bookPane = book
+        val wantPartner = useSecondary && partnerView() != null
+        val alreadyThere =
+            if (wantPartner) secondaryActive else !secondaryActive && binding.canvasView.isPaneActive
+        if (alreadyThere) return
 
-        val isFixed = target.getModel().canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
-        isFixedPageState?.value = isFixed
-        viewModel.setFixedPageMode(isFixed)
+        // Release the pen driver first: two open raw-drawing sessions fight over the digitizer.
+        if (secondaryActive) {
+            secondary?.canvas?.setPaneActive(false)
+            bookPane?.setPaneActive(false)
+        } else {
+            binding.canvasView.setPaneActive(false)
+        }
+        secondaryActive = wantPartner
+
+        if (bookActive && bookPane != null) {
+            bookPane.setPaneActive(true)
+            bookPane.setInkAllowed(inkGate.isInkAllowed)
+            // Page navigation for books lives in the book pane.
+            isFixedPageState?.value = false
+            viewModel.setFixedPageMode(false)
+        } else {
+            val target = activeCanvas
+            target.setPaneActive(true)
+            target.doOnLayout { if (it === activeCanvas) target.setDrawingEnabled(inkGate.isInkAllowed) }
+            activeCanvasState.value = target
+            val isFixed = target.getModel().canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
+            isFixedPageState?.value = isFixed
+            viewModel.setFixedPageMode(isFixed)
+        }
 
         binding.splitLayout.activeIndex = if (secondaryActive) 1 - primarySlot() else primarySlot()
         activePath()?.let { p -> workspace = WorkspaceStore.update(this) { it.activate(p) } }
@@ -1166,18 +1200,25 @@ class CanvasActivity : AppCompatActivity() {
         renderTabs()
     }
 
+    /** True (after telling the user) when [what] is not available while the book pane has focus. */
+    private fun notOnBook(what: String): Boolean {
+        if (!bookActive) return false
+        android.widget.Toast.makeText(this, "$what is only available on note pages", android.widget.Toast.LENGTH_SHORT).show()
+        return true
+    }
+
     private fun onTabSelected(tab: DocTab) {
         when (tab.path) {
             activePath() -> return
             currentCanvasPath -> setActivePane(useSecondary = false)
-            secondary?.path -> setActivePane(useSecondary = true)
+            partnerPath() -> setActivePane(useSecondary = true)
             else -> switchToTab(tab)
         }
     }
 
     private fun closeTab(tab: DocTab) {
         when (tab.path) {
-            secondary?.path -> {
+            partnerPath() -> {
                 exitSplit()
                 workspace = WorkspaceStore.update(this) { it.close(tab.path) }
                 renderTabs()
@@ -1185,7 +1226,7 @@ class CanvasActivity : AppCompatActivity() {
 
             currentCanvasPath -> {
                 workspace = WorkspaceStore.update(this) { it.close(tab.path) }
-                val next = secondary?.path?.let { workspace.tab(it) } ?: workspace.activePath?.let { workspace.tab(it) }
+                val next = partnerPath()?.let { workspace.tab(it) } ?: workspace.activePath?.let { workspace.tab(it) }
                 if (next != null) switchToTab(next) else closeAndFinish()
             }
 
@@ -1198,7 +1239,7 @@ class CanvasActivity : AppCompatActivity() {
 
     private fun onSplitButton(orientation: SplitOrientation) {
         val split = currentSplit()
-        if (split != null && secondary != null) {
+        if (split != null && partnerView() != null) {
             if (split.orientation != orientation) {
                 currentCanvasPath?.let { p -> workspace = WorkspaceStore.update(this) { it.updateSplit(p) { s -> s.copy(orientation = orientation) } } }
                 layoutPanes()
@@ -1207,14 +1248,16 @@ class CanvasActivity : AppCompatActivity() {
         }
         pendingSplitOrientation = orientation
         val current = currentCanvasPath ?: return
-        val candidates = workspace.tabs.filter { it.kind == DocKind.NOTE && it.path != current }
-        val labels = candidates.map { it.title } + "Browse notes\u2026"
+        val candidates = workspace.tabs.filter { it.path != current }
+        val labels = candidates.map { it.title } + "Browse notes\u2026" + "Browse books\u2026"
         androidx.appcompat.app.AlertDialog
             .Builder(this)
             .setTitle(if (orientation == SplitOrientation.SIDE_BY_SIDE) "Open beside" else "Open below")
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which < candidates.size) {
-                    startSplit(candidates[which].path, orientation)
+                    startSplit(candidates[which], orientation)
+                } else if (which == candidates.size + 1) {
+                    showBookPicker(orientation)
                 } else {
                     val intent =
                         Intent(this, NotePickerActivity::class.java).apply {
@@ -1225,26 +1268,79 @@ class CanvasActivity : AppCompatActivity() {
             }.show()
     }
 
+    private fun showBookPicker(orientation: SplitOrientation) {
+        val books =
+            com.alexdremov.notate.webdoc.WebDocActivity
+                .library(this)
+                .list()
+        if (books.isEmpty()) {
+            android.widget.Toast.makeText(this, "No books yet: import one from Home", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        androidx.appcompat.app.AlertDialog
+            .Builder(this)
+            .setTitle("Books")
+            .setItems(books.map { it.title }.toTypedArray()) { _, which ->
+                startSplit(DocTab(DocKind.WEB, books[which].id, books[which].title), orientation)
+            }.show()
+    }
+
     private fun startSplit(
-        other: String,
+        other: DocTab,
         orientation: SplitOrientation,
     ) {
         val current = currentCanvasPath ?: return
-        if (other == current) {
+        if (other.path == current) {
             android.widget.Toast.makeText(this, "This note is already open", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-        if (secondary != null) closeSecondary()
+        closeSecondary()
+        // Keep the current note active in the tab list while adding the new one next to it.
+        val title = if (other.kind == DocKind.NOTE) WorkspaceStore.titleFor(other.path) else other.title
         workspace =
             WorkspaceStore.update(this) {
                 it
-                    .open(DocTab(DocKind.NOTE, other, WorkspaceStore.titleFor(other)))
-                    .split(current, other, orientation)
+                    .open(other.copy(title = title))
+                    .split(current, other.path, orientation)
             }
-        openSecondary(other)
+        if (!openPartner(other.path)) return
         layoutPanes()
-        // Like Notability: the note just opened beside gets the pen.
+        // Like Notability: the document just opened beside gets the pen.
         setActivePane(useSecondary = true)
+    }
+
+    /** Opens the split partner as a note pane or a book pane. False if it could not be opened. */
+    private fun openPartner(path: String): Boolean {
+        if (workspace.tab(path)?.kind != DocKind.WEB) {
+            openSecondary(path)
+            return true
+        }
+        val meta =
+            com.alexdremov.notate.webdoc.WebDocActivity
+                .library(this)
+                .loadMeta(path)
+        if (meta == null) {
+            android.widget.Toast.makeText(this, "Book not found or deleted", android.widget.Toast.LENGTH_SHORT).show()
+            currentCanvasPath?.let { p -> workspace = WorkspaceStore.update(this) { it.unsplit(p).close(path) } }
+            renderTabs()
+            return false
+        }
+        val pane =
+            com.alexdremov.notate.webdoc.BookPane(
+                this,
+                meta,
+                com.alexdremov.notate.webdoc.WebDocActivity
+                    .library(this),
+            )
+        pane.setTool(viewModel.activeTool.value)
+        pane.setEraser(viewModel.currentEraser.value)
+        pane.onStrokeStarted = {
+            activePenPopup?.dismiss()
+            activePenPopup = null
+            if (sidebarCoordinator.isOpen) sidebarCoordinator.close()
+        }
+        book = pane
+        return true
     }
 
     /** Leaves split view, keeping the main note full screen. */
@@ -1370,8 +1466,15 @@ class CanvasActivity : AppCompatActivity() {
         }
     }
 
-    /** Saves the split-view note and releases it. Safe to call from onDestroy. */
+    /** Saves the split-view note or book and releases it. Safe to call from onDestroy. */
     private fun closeSecondary() {
+        book?.let { bookPane ->
+            if (secondaryActive) setActivePane(useSecondary = false)
+            book = null
+            bookPane.setPaneActive(false)
+            (bookPane.parent as? ViewGroup)?.removeView(bookPane)
+            bookPane.release()
+        }
         val pane = secondary ?: return
         if (secondaryActive) setActivePane(useSecondary = false)
         secondary = null
@@ -1422,6 +1525,7 @@ class CanvasActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        book?.onHostResume()
         // Ensure no sync runs while canvas is active
         com.alexdremov.notate.data.SyncManager
             .cancelAllSyncs()
@@ -1430,6 +1534,7 @@ class CanvasActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        book?.onHostPause()
         // Allow sync to proceed in background
         com.alexdremov.notate.data.SyncManager.isCanvasOpen = false
 
@@ -1556,6 +1661,7 @@ class CanvasActivity : AppCompatActivity() {
         }
 
         activeCanvas.setExclusionRects(rects)
+        book?.setExclusionRects(rects)
     }
 
     private fun handleToolClick(
@@ -1565,6 +1671,8 @@ class CanvasActivity : AppCompatActivity() {
         Logger.d("NotateDebug", "handleToolClick ID=$toolId")
 
         val item = viewModel.toolbarItems.value.find { it.id == toolId }
+        if (item is ToolbarItem.Select && notOnBook("Selection")) return
+        if (item is ToolbarItem.Pen && item.penTool.type == ToolType.TEXT && notOnBook("Text boxes")) return
         val isSelectionSafeTool =
             when (item) {
                 is ToolbarItem.Pen -> item.penTool.type == ToolType.TEXT
