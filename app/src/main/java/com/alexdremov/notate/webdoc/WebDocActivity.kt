@@ -1111,7 +1111,7 @@ class WebDocActivity : AppCompatActivity() {
                 }
             setOnClickListener {
                 set(!isOn())
-                overlay.invalidate()
+                this@WebDocActivity.overlay.invalidate()
                 dialog.dismiss()
             }
         }
