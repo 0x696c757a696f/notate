@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items as recentItems
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -44,6 +46,7 @@ import com.alexdremov.notate.model.Tag
 import com.alexdremov.notate.ui.home.components.Breadcrumbs
 import com.alexdremov.notate.ui.home.components.DeleteConfirmationDialog
 import com.alexdremov.notate.ui.home.components.EmptyState
+import com.alexdremov.notate.ui.home.components.EmptyStateAction
 import com.alexdremov.notate.ui.home.components.FileGridItem
 
 /**
@@ -66,6 +69,8 @@ fun FileBrowserScreen(
     favorites: Set<String> = emptySet(),
     recents: List<CanvasItem> = emptyList(),
     onToggleFavorite: (FileSystemItem) -> Unit = {},
+    onCreateCanvas: (() -> Unit)? = null,
+    onCreateFolder: (() -> Unit)? = null,
 ) {
     var itemToDelete by remember { mutableStateOf<FileSystemItem?>(null) }
     var managingItemPath by remember { mutableStateOf<String?>(null) }
@@ -104,7 +109,16 @@ fun FileBrowserScreen(
         }
 
         if (items.isEmpty()) {
-            EmptyState("Folder is empty.\nCreate a folder or canvas.")
+            EmptyState(
+                title = if (atRoot) "No notes yet" else "This folder is empty",
+                message = "Start a canvas to write, or add a folder to keep notes organized.",
+                icon = Icons.Outlined.EditNote,
+                actions =
+                    listOfNotNull(
+                        onCreateCanvas?.takeIf { !isReadOnly }?.let { EmptyStateAction("New canvas", it) },
+                        onCreateFolder?.takeIf { !isReadOnly }?.let { EmptyStateAction("New folder", it) },
+                    ),
+            )
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 180.dp),

@@ -25,7 +25,8 @@ fun Breadcrumbs(
 
     // Auto-scroll to end when items change
     LaunchedEffect(items) {
-        scrollState.animateScrollTo(scrollState.maxValue)
+        // Jump, not animate: a scroll animation is a burst of partial e-ink refreshes.
+        scrollState.scrollTo(scrollState.maxValue)
     }
 
     Row(
