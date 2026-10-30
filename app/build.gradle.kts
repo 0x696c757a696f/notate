@@ -20,6 +20,10 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        ndk {
+            // Boox devices are ARM64; the OCR runtime ships ARM64 native code only.
+            abiFilters += "arm64-v8a"
+        }
         vectorDrawables {
             useSupportLibrary = true
         }
