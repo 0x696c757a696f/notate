@@ -727,6 +727,7 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     ActionType.UNDO -> R.drawable.ic_undo
                     ActionType.REDO -> R.drawable.ic_redo
                     ActionType.INSERT_IMAGE -> R.drawable.ic_add
+                    ActionType.ZOOM_WINDOW -> R.drawable.ic_zoom_window
                 }
             Icon(painter = painterResource(iconRes), contentDescription = item.actionType.name, tint = Color.Black)
         }
@@ -867,6 +868,13 @@ fun ToolbarEditPanel(
                 item = ToolbarItem.Action(ActionType.INSERT_IMAGE),
                 label = stringResource(R.string.image_action),
                 onClick = { viewModel.addToolbarItem(ToolbarItem.Action(ActionType.INSERT_IMAGE)) },
+            )
+
+            // Add Zoom Writing Window
+            AddItemButton(
+                item = ToolbarItem.Action(ActionType.ZOOM_WINDOW),
+                label = stringResource(R.string.zoom_window_action),
+                onClick = { viewModel.addToolbarItem(ToolbarItem.Action(ActionType.ZOOM_WINDOW)) },
             )
 
             // Add Page Nav

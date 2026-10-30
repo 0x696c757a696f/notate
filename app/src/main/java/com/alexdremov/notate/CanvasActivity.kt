@@ -430,6 +430,10 @@ class CanvasActivity : AppCompatActivity() {
                                 com.alexdremov.notate.model.ActionType.INSERT_IMAGE -> {
                                     imagePickerLauncher.launch(arrayOf("image/*"))
                                 }
+
+                                com.alexdremov.notate.model.ActionType.ZOOM_WINDOW -> {
+                                    binding.canvasView.toggleZoomWindow()
+                                }
                             }
                         },
                         onOpenSidebar = {

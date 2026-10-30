@@ -48,6 +48,7 @@ object PreferencesManager {
     private const val KEY_PROJECTS = "projects_list"
     private const val KEY_TOOLBAR_ITEMS = "toolbar_items_config"
     private const val KEY_SHAPE_BUTTONS_MIGRATED = "toolbar_shape_buttons_migrated_v1"
+    private const val KEY_ZOOM_BUTTON_MIGRATED = "toolbar_zoom_button_migrated_v1"
     private const val KEY_COLORS = "favorite_colors"
     private const val KEY_TAGS = "defined_tags"
     private const val KEY_SORT_OPTION = "browser_sort_option"
@@ -459,7 +460,7 @@ object PreferencesManager {
             return try {
                 val bytes = Base64.decode(data, Base64.DEFAULT)
                 val items = protoBuf.decodeFromByteArray(ListSerializer(ToolbarItem.serializer()), bytes)
-                migrateShapeButtons(context, items)
+                migrateZoomButton(context, migrateShapeButtons(context, items))
             } catch (e: Exception) {
                 // Fallback to JSON
                 try {
@@ -472,7 +473,11 @@ object PreferencesManager {
             }
         }
         // Defaults already include the Shapes and Lines buttons; don't re-add them if the user removes them later.
-        getPrefs(context).edit().putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true).apply()
+        getPrefs(context)
+            .edit()
+            .putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true)
+            .putBoolean(KEY_ZOOM_BUTTON_MIGRATED, true)
+            .apply()
         return defaultToolbarItems()
     }
 
@@ -502,6 +507,28 @@ object PreferencesManager {
             saveToolbarItems(context, result)
         }
         prefs.edit().putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true).apply()
+        return result
+    }
+
+    /**
+     * One-time upgrade for toolbars saved before the zoom writing window existed: adds its button after
+     * the last action button (or at the end). Removing it later is respected.
+     */
+    private fun migrateZoomButton(
+        context: Context,
+        items: List<ToolbarItem>,
+    ): List<ToolbarItem> {
+        val prefs = getPrefs(context)
+        if (prefs.getBoolean(KEY_ZOOM_BUTTON_MIGRATED, false)) return items
+
+        val zoom = ToolbarItem.Action(com.alexdremov.notate.model.ActionType.ZOOM_WINDOW)
+        val result = items.toMutableList()
+        if (items.none { it.id == zoom.id }) {
+            val lastAction = result.indexOfLast { it is ToolbarItem.Action }
+            result.add(if (lastAction >= 0) lastAction + 1 else result.size, zoom)
+            saveToolbarItems(context, result)
+        }
+        prefs.edit().putBoolean(KEY_ZOOM_BUTTON_MIGRATED, true).apply()
         return result
     }
 
@@ -548,6 +575,10 @@ object PreferencesManager {
         items.add(
             com.alexdremov.notate.model.ToolbarItem
                 .Action(com.alexdremov.notate.model.ActionType.REDO),
+        )
+        items.add(
+            com.alexdremov.notate.model.ToolbarItem
+                .Action(com.alexdremov.notate.model.ActionType.ZOOM_WINDOW),
         )
         items.add(
             com.alexdremov.notate.model.ToolbarItem

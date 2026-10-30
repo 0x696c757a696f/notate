@@ -82,8 +82,30 @@ class PenInputHandler(
 
     // The current stroke started on the toolbar/sidebar: discard it and repaint that UI.
     private var isDiscardingExcludedStroke = false
+    private var excludedDownX = 0f
+    private var excludedDownY = 0f
 
     private lateinit var dwellDetector: DwellDetector
+
+    /**
+     * Zoom writing window hook: returns the world -> screen matrix of the magnified writing area if the
+     * view point lies inside it, else null (the stroke uses the canvas matrix).
+     */
+    var zoomMatrixAt: ((Float, Float) -> Matrix?)? = null
+
+    /** Called on the main thread with the world bounds of a stroke written in the zoom window. */
+    var onZoomStrokeFinished: ((RectF) -> Unit)? = null
+
+    // World <-> screen mapping of the current stroke: the canvas matrix, or the zoom window's.
+    private val strokeMatrix = Matrix()
+    private val strokeInverse = Matrix()
+
+    @Volatile
+    private var isZoomStroke = false
+
+    // Scale used for hardware ink width: the zoom window's while the pen is over it.
+    private var inkScale = 1.0f
+    private var isHoveringZoom = false
 
     init {
         dwellDetector =
@@ -101,7 +123,7 @@ class PenInputHandler(
 
                     // Transform path to Screen Coordinates for display
                     val screenPath = Path(result.path)
-                    screenPath.transform(matrix)
+                    screenPath.transform(strokeMatrix)
 
                     cursorView?.showShapePreview(screenPath)
 
@@ -109,7 +131,7 @@ class PenInputHandler(
                     val bounds = RectF()
                     screenPath.computeBounds(bounds, true)
                     // Add padding for stroke width
-                    val padding = (currentTool.width * currentScale) + 20f
+                    val padding = (currentTool.width * inkScale) + 20f
                     bounds.inset(-padding, -padding)
 
                     val dirtyRect =
@@ -153,7 +175,7 @@ class PenInputHandler(
             touchHelper?.setRawDrawingEnabled(false)
 
             // Expand bounds slightly for anti-aliasing safety
-            val refreshPadding = (currentTool.width * currentScale) + 10f
+            val refreshPadding = (currentTool.width * inkScale) + 10f
             currentStrokeScreenBounds.inset(-refreshPadding, -refreshPadding)
 
             val dirtyRect =
@@ -198,6 +220,15 @@ class PenInputHandler(
     fun onHoverMove(event: android.view.MotionEvent) {
         // Keep postponing as long as we move
         refreshHandler.removeCallbacks(refreshRunnable)
+
+        // Size the hardware ink for the area the pen is about to write in.
+        if (isStrokeInProgress) return
+        val zoom = zoomMatrixAt?.invoke(event.x, event.y)
+        if ((zoom != null) != isHoveringZoom) {
+            isHoveringZoom = zoom != null
+            inkScale = if (zoom != null) zoom.mapRadius(1f) else currentScale
+            updateTouchHelperTool()
+        }
     }
 
     fun onHoverExit() {
@@ -228,6 +259,7 @@ class PenInputHandler(
 
     fun setScale(scale: Float) {
         this.currentScale = scale
+        if (!isHoveringZoom && !isZoomStroke) inkScale = scale
         updateTouchHelperTool()
     }
 
@@ -277,7 +309,7 @@ class PenInputHandler(
             PenToolConfigurator.configure(
                 helper,
                 currentTool,
-                currentScale,
+                inkScale,
                 view.context,
             )
     }
@@ -292,8 +324,7 @@ class PenInputHandler(
         y: Float,
     ): FloatArray {
         val pts = floatArrayOf(x, y)
-        matrix.invert(inverseMatrix)
-        inverseMatrix.mapPoints(pts)
+        strokeInverse.mapPoints(pts)
         return pts
     }
 
@@ -318,6 +349,8 @@ class PenInputHandler(
             isStrokeInProgress = true
             isIgnoringCurrentStroke = true
             isDiscardingExcludedStroke = true
+            excludedDownX = touchPoint.x
+            excludedDownY = touchPoint.y
             lastProcessedTimestamp = touchPoint.timestamp
             return
         }
@@ -326,6 +359,19 @@ class PenInputHandler(
         isSelecting = false
         isIgnoringCurrentStroke = false
         lastProcessedTimestamp = touchPoint.timestamp
+
+        // Pick the coordinate mapping for this stroke: zoom writing window or the canvas itself.
+        val zoom = zoomMatrixAt?.invoke(touchPoint.x, touchPoint.y)
+        isZoomStroke = zoom != null
+        strokeMatrix.set(zoom ?: matrix)
+        strokeMatrix.invert(strokeInverse)
+        inkScale = if (zoom != null) zoom.mapRadius(1f) else currentScale
+        isHoveringZoom = isZoomStroke
+        if (isZoomStroke && currentTool.type == ToolType.SELECT) {
+            // Selecting through the magnifier isn't supported: ignore the stroke.
+            isIgnoringCurrentStroke = true
+            return
+        }
 
         // Always clear previous selection when starting a new stylus interaction
         scope.launch { controller.clearSelection() }
@@ -433,7 +479,14 @@ class PenInputHandler(
                 .exitAnimationUpdate(true)
             if (isDiscardingExcludedStroke) {
                 isDiscardingExcludedStroke = false
-                view.post { (view as? com.alexdremov.notate.ui.OnyxCanvasView)?.onExcludedStrokeDiscarded?.invoke() }
+                val downX = excludedDownX
+                val downY = excludedDownY
+                view.post {
+                    val canvasView = view as? com.alexdremov.notate.ui.OnyxCanvasView ?: return@post
+                    // The zoom window's buttons live inside the canvas, so a stylus tap on them lands here.
+                    canvasView.handleStylusTapOnZoomControls(downX, downY, touchPoint.x, touchPoint.y)
+                    canvasView.onExcludedStrokeDiscarded?.invoke()
+                }
             }
             return
         }
@@ -514,6 +567,7 @@ class PenInputHandler(
             )
 
         val toolSnapshot = currentTool // Snapshot tool for coroutine
+        val zoomStroke = isZoomStroke
         val eraserToolSnapshot = eraserTool
         val tempShape = pendingPerfectShape
         val shapeStart = shapeStartWorld
@@ -629,6 +683,16 @@ class PenInputHandler(
                 isStrokeInProgress = false
                 (view as? com.alexdremov.notate.ui.OnyxCanvasView)?.notifyStrokeFinished()
                 onStrokeFinished()
+                if (zoomStroke) {
+                    val worldBounds = (builtOriginalStroke ?: builtEraserStroke)?.bounds
+                    if (worldBounds != null) {
+                        // The ink also lands on the canvas itself: include it in the pending refresh.
+                        val onCanvas = RectF(worldBounds)
+                        matrix.mapRect(onCanvas)
+                        currentStrokeScreenBounds.union(onCanvas)
+                        if (!isEraser) view.post { onZoomStrokeFinished?.invoke(RectF(worldBounds)) }
+                    }
+                }
             }
         }
     }
@@ -709,13 +773,7 @@ class PenInputHandler(
         lastProcessedTimestamp = touchPoint.timestamp
 
         val worldPts = floatArrayOf(touchPoint.x, touchPoint.y)
-        if (preInvertedMatrix != null) {
-            preInvertedMatrix.mapPoints(worldPts)
-        } else {
-            val inv = Matrix()
-            matrix.invert(inv)
-            inv.mapPoints(worldPts)
-        }
+        (preInvertedMatrix ?: strokeInverse).mapPoints(worldPts)
 
         val newPoint =
             TouchPoint(
@@ -763,7 +821,7 @@ class PenInputHandler(
                 // Eraser Width should be DOCUMENT-CONSTANT (matching pens).
                 val worldWidth = currentTool.width
                 val eraserType = currentTool.eraserType
-                scope.launch { eraserHandler.processMove(newPoint, worldWidth, eraserType, currentScale) }
+                scope.launch { eraserHandler.processMove(newPoint, worldWidth, eraserType, inkScale) }
             }
         }
 
@@ -785,7 +843,7 @@ class PenInputHandler(
             screenPath.moveTo(pts[0].x, pts[0].y)
             for (i in 1 until pts.size) screenPath.lineTo(pts[i].x, pts[i].y)
         }
-        screenPath.transform(matrix)
+        screenPath.transform(strokeMatrix)
 
         // Shapes can extend past the pen path (e.g. polygons drawn from their center): grow refresh bounds.
         val bounds = RectF()
@@ -800,11 +858,11 @@ class PenInputHandler(
             if (currentTool.eraserType == EraserType.LASSO) {
                 cursorView?.hide()
             } else {
-                val radius = (currentTool.width * currentScale) / 2f
+                val radius = (currentTool.width * inkScale) / 2f
                 cursorView?.update(touchPoint.x, touchPoint.y, radius)
             }
         } else if (isLargeStrokeMode) {
-            val radius = (currentTool.width * currentScale) / 2f
+            val radius = (currentTool.width * inkScale) / 2f
             cursorView?.update(touchPoint.x, touchPoint.y, radius)
         }
     }
@@ -813,13 +871,9 @@ class PenInputHandler(
         val points = touchPointList.points
         if (points.isEmpty()) return
 
-        // Optimization: Invert matrix once for the entire batch
-        val invertedMatrix = Matrix()
-        matrix.invert(invertedMatrix)
-
         synchronized(strokeBuilder) {
             for (point in points) {
-                internalProcessMove(point, invertedMatrix)
+                internalProcessMove(point)
             }
         }
     }

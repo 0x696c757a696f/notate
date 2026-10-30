@@ -21,4 +21,5 @@
     <string name="line_style_solid">实线</string>
     <string name="line_style_dashed">虚线</string>
     <string name="line_style_dotted">点线</string>
+    <string name="zoom_window_action">放大书写</string>
 </resources>
