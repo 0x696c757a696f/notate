@@ -82,8 +82,45 @@ class PenInputHandler(
 
     // The current stroke started on the toolbar/sidebar: discard it and repaint that UI.
     private var isDiscardingExcludedStroke = false
+    private var excludedDownX = 0f
+    private var excludedDownY = 0f
 
     private lateinit var dwellDetector: DwellDetector
+
+    /**
+     * Zoom writing window hook: returns the world -> screen matrix of the magnified writing area if the
+     * view point lies inside it, else null (the stroke uses the canvas matrix).
+     */
+    var zoomMatrixAt: ((Float, Float) -> Matrix?)? = null
+
+    /** Called on the main thread with the world bounds of a stroke written in the zoom window. */
+    var onZoomStrokeFinished: ((RectF) -> Unit)? = null
+
+    // World <-> screen mapping of the current stroke: the canvas matrix, or the zoom window's.
+    private val strokeMatrix = Matrix()
+    private val strokeInverse = Matrix()
+
+    @Volatile
+    private var isZoomStroke = false
+
+    /** Ruler/protractor hook: the guide a stroke starting at this view point should follow, if any. */
+    var guideSnapAt: ((Float, Float) -> com.alexdremov.notate.ui.guide.GuideSnap?)? = null
+
+    // Guide followed by the current stroke (screen space), and where it started.
+    private var activeGuide: com.alexdremov.notate.ui.guide.GuideSnap? = null
+    private var guideStartX = 0f
+    private var guideStartY = 0f
+    private var guideArcStart = 0.0
+    private var guideArcLast = 0.0
+    private var guideArcSweep = 0.0
+    private var guideScreenPoints: List<android.graphics.PointF> = emptyList()
+
+    // The pen hovers next to a guide: hardware ink is off so only the guided preview shows.
+    private var isHoveringGuide = false
+
+    // Scale used for hardware ink width: the zoom window's while the pen is over it.
+    private var inkScale = 1.0f
+    private var isHoveringZoom = false
 
     init {
         dwellDetector =
@@ -101,7 +138,7 @@ class PenInputHandler(
 
                     // Transform path to Screen Coordinates for display
                     val screenPath = Path(result.path)
-                    screenPath.transform(matrix)
+                    screenPath.transform(strokeMatrix)
 
                     cursorView?.showShapePreview(screenPath)
 
@@ -109,7 +146,7 @@ class PenInputHandler(
                     val bounds = RectF()
                     screenPath.computeBounds(bounds, true)
                     // Add padding for stroke width
-                    val padding = (currentTool.width * currentScale) + 20f
+                    val padding = (currentTool.width * inkScale) + 20f
                     bounds.inset(-padding, -padding)
 
                     val dirtyRect =
@@ -153,7 +190,7 @@ class PenInputHandler(
             touchHelper?.setRawDrawingEnabled(false)
 
             // Expand bounds slightly for anti-aliasing safety
-            val refreshPadding = (currentTool.width * currentScale) + 10f
+            val refreshPadding = (currentTool.width * inkScale) + 10f
             currentStrokeScreenBounds.inset(-refreshPadding, -refreshPadding)
 
             val dirtyRect =
@@ -198,6 +235,17 @@ class PenInputHandler(
     fun onHoverMove(event: android.view.MotionEvent) {
         // Keep postponing as long as we move
         refreshHandler.removeCallbacks(refreshRunnable)
+
+        // Size the hardware ink for the area the pen is about to write in.
+        if (isStrokeInProgress) return
+        val zoom = zoomMatrixAt?.invoke(event.x, event.y)
+        val nearGuide = zoom == null && isGuideTool() && guideSnapAt?.invoke(event.x, event.y) != null
+        if ((zoom != null) != isHoveringZoom || nearGuide != isHoveringGuide) {
+            isHoveringZoom = zoom != null
+            isHoveringGuide = nearGuide
+            inkScale = if (zoom != null) zoom.mapRadius(1f) else currentScale
+            updateTouchHelperTool()
+        }
     }
 
     fun onHoverExit() {
@@ -228,6 +276,7 @@ class PenInputHandler(
 
     fun setScale(scale: Float) {
         this.currentScale = scale
+        if (!isHoveringZoom && !isZoomStroke) inkScale = scale
         updateTouchHelperTool()
     }
 
@@ -277,9 +326,11 @@ class PenInputHandler(
             PenToolConfigurator.configure(
                 helper,
                 currentTool,
-                currentScale,
+                inkScale,
                 view.context,
             )
+        // Next to a ruler/protractor the raw pen path would wobble off the guide: show only the preview.
+        if (isHoveringGuide || activeGuide != null) helper.setRawDrawingRenderEnabled(false)
     }
 
     // Deprecated: Use setScale instead
@@ -292,8 +343,7 @@ class PenInputHandler(
         y: Float,
     ): FloatArray {
         val pts = floatArrayOf(x, y)
-        matrix.invert(inverseMatrix)
-        inverseMatrix.mapPoints(pts)
+        strokeInverse.mapPoints(pts)
         return pts
     }
 
@@ -318,6 +368,8 @@ class PenInputHandler(
             isStrokeInProgress = true
             isIgnoringCurrentStroke = true
             isDiscardingExcludedStroke = true
+            excludedDownX = touchPoint.x
+            excludedDownY = touchPoint.y
             lastProcessedTimestamp = touchPoint.timestamp
             return
         }
@@ -326,6 +378,22 @@ class PenInputHandler(
         isSelecting = false
         isIgnoringCurrentStroke = false
         lastProcessedTimestamp = touchPoint.timestamp
+
+        // Pick the coordinate mapping for this stroke: zoom writing window or the canvas itself.
+        val zoom = zoomMatrixAt?.invoke(touchPoint.x, touchPoint.y)
+        isZoomStroke = zoom != null
+        strokeMatrix.set(zoom ?: matrix)
+        strokeMatrix.invert(strokeInverse)
+        inkScale = if (zoom != null) zoom.mapRadius(1f) else currentScale
+        isHoveringZoom = isZoomStroke
+        activeGuide = if (!b && !isZoomStroke && isGuideTool()) guideSnapAt?.invoke(touchPoint.x, touchPoint.y) else null
+        isHoveringGuide = activeGuide != null
+        activeGuide?.let { startGuide(it, touchPoint.x, touchPoint.y) }
+        if (isZoomStroke && currentTool.type == ToolType.SELECT) {
+            // Selecting through the magnifier isn't supported: ignore the stroke.
+            isIgnoringCurrentStroke = true
+            return
+        }
 
         // Always clear previous selection when starting a new stylus interaction
         scope.launch { controller.clearSelection() }
@@ -404,7 +472,7 @@ class PenInputHandler(
         pendingPerfectShape = null
         shapeStartWorld = if (currentTool.isDragShapeTool) android.graphics.PointF(startPoint.x, startPoint.y) else null
 
-        if (currentTool.type != ToolType.SELECT && !currentTool.isDragShapeTool) {
+        if (currentTool.type != ToolType.SELECT && !currentTool.isDragShapeTool && activeGuide == null) {
             dwellDetector.onStart(touchPoint, currentTool)
         }
 
@@ -433,7 +501,14 @@ class PenInputHandler(
                 .exitAnimationUpdate(true)
             if (isDiscardingExcludedStroke) {
                 isDiscardingExcludedStroke = false
-                view.post { (view as? com.alexdremov.notate.ui.OnyxCanvasView)?.onExcludedStrokeDiscarded?.invoke() }
+                val downX = excludedDownX
+                val downY = excludedDownY
+                view.post {
+                    val canvasView = view as? com.alexdremov.notate.ui.OnyxCanvasView ?: return@post
+                    // The zoom window's buttons live inside the canvas, so a stylus tap on them lands here.
+                    canvasView.handleStylusTapOnZoomControls(downX, downY, touchPoint.x, touchPoint.y)
+                    canvasView.onExcludedStrokeDiscarded?.invoke()
+                }
             }
             return
         }
@@ -514,6 +589,21 @@ class PenInputHandler(
             )
 
         val toolSnapshot = currentTool // Snapshot tool for coroutine
+        val zoomStroke = isZoomStroke
+        val guide = activeGuide
+        if (guide != null) updateGuidePreview(touchPoint.x, touchPoint.y)
+        val guideWorldPoints =
+            if (guide != null) {
+                guideScreenPoints.map { p ->
+                    val pts = floatArrayOf(p.x, p.y)
+                    strokeInverse.mapPoints(pts)
+                    android.graphics.PointF(pts[0], pts[1])
+                }
+            } else {
+                null
+            }
+        activeGuide = null
+        if (guide != null) cursorView?.hideShapePreview()
         val eraserToolSnapshot = eraserTool
         val tempShape = pendingPerfectShape
         val shapeStart = shapeStartWorld
@@ -572,7 +662,8 @@ class PenInputHandler(
                     } else {
                         val originalStroke = builtOriginalStroke
                         val isScribble =
-                            originalStroke != null &&
+                            guideWorldPoints == null &&
+                                originalStroke != null &&
                                 !toolSnapshot.isShapeTool &&
                                 toolSnapshot.strokeType != StrokeType.HIGHLIGHTER &&
                                 com.alexdremov.notate.data.PreferencesManager
@@ -580,7 +671,12 @@ class PenInputHandler(
                                 com.alexdremov.notate.util.ScribbleDetector
                                     .isScribble(originalStroke.points)
 
-                        if (isScribble) {
+                        if (guideWorldPoints != null) {
+                            // Drawn along a ruler/protractor: commit the guided line, not the pen path.
+                            if (originalStroke != null && guideWorldPoints.size >= 2 && pathLength(guideWorldPoints) > 0f) {
+                                commitShapeSegments(listOf(ShapeGeometry.Segment(guideWorldPoints)), originalStroke, toolSnapshot)
+                            }
+                        } else if (isScribble) {
                             controller.commitEraser(originalStroke!!, EraserType.STROKE)
                         } else if (toolSnapshot.isDragShapeTool) {
                             // Drag shape: geometry comes from pen-down/pen-up only; a tap draws nothing.
@@ -629,6 +725,16 @@ class PenInputHandler(
                 isStrokeInProgress = false
                 (view as? com.alexdremov.notate.ui.OnyxCanvasView)?.notifyStrokeFinished()
                 onStrokeFinished()
+                if (zoomStroke) {
+                    val worldBounds = (builtOriginalStroke ?: builtEraserStroke)?.bounds
+                    if (worldBounds != null) {
+                        // The ink also lands on the canvas itself: include it in the pending refresh.
+                        val onCanvas = RectF(worldBounds)
+                        matrix.mapRect(onCanvas)
+                        currentStrokeScreenBounds.union(onCanvas)
+                        if (!isEraser) view.post { onZoomStrokeFinished?.invoke(RectF(worldBounds)) }
+                    }
+                }
             }
         }
     }
@@ -709,13 +815,7 @@ class PenInputHandler(
         lastProcessedTimestamp = touchPoint.timestamp
 
         val worldPts = floatArrayOf(touchPoint.x, touchPoint.y)
-        if (preInvertedMatrix != null) {
-            preInvertedMatrix.mapPoints(worldPts)
-        } else {
-            val inv = Matrix()
-            matrix.invert(inv)
-            inv.mapPoints(worldPts)
-        }
+        (preInvertedMatrix ?: strokeInverse).mapPoints(worldPts)
 
         val newPoint =
             TouchPoint(
@@ -741,6 +841,7 @@ class PenInputHandler(
         if (currentTool.isDragShapeTool) {
             updateShapePreview(android.graphics.PointF(newPoint.x, newPoint.y))
         }
+        if (activeGuide != null) updateGuidePreview(touchPoint.x, touchPoint.y)
 
         if (currentTool.type == ToolType.ERASER || currentTool.type == ToolType.SELECT) {
             if (currentTool.type == ToolType.SELECT) {
@@ -763,11 +864,62 @@ class PenInputHandler(
                 // Eraser Width should be DOCUMENT-CONSTANT (matching pens).
                 val worldWidth = currentTool.width
                 val eraserType = currentTool.eraserType
-                scope.launch { eraserHandler.processMove(newPoint, worldWidth, eraserType, currentScale) }
+                scope.launch { eraserHandler.processMove(newPoint, worldWidth, eraserType, inkScale) }
             }
         }
 
         updateCursor(touchPoint)
+    }
+
+    /** Pen tools that follow a ruler/protractor (drag shapes have their own geometry). */
+    private fun isGuideTool() = currentTool.type == ToolType.PEN && !currentTool.isShapeTool
+
+    private fun startGuide(
+        guide: com.alexdremov.notate.ui.guide.GuideSnap,
+        x: Float,
+        y: Float,
+    ) {
+        guideStartX = x
+        guideStartY = y
+        guideScreenPoints = emptyList()
+        if (guide is com.alexdremov.notate.ui.guide.GuideSnap.Arc) {
+            guideArcStart = com.alexdremov.notate.ui.guide.GuidePath.angleOf(guide, x, y)
+            guideArcLast = guideArcStart
+            guideArcSweep = 0.0
+        }
+    }
+
+    /** Recomputes the guided stroke for the pen at (x, y) and shows it as the preview. */
+    private fun updateGuidePreview(
+        x: Float,
+        y: Float,
+    ) {
+        val guide = activeGuide ?: return
+        val gp = com.alexdremov.notate.ui.guide.GuidePath
+        guideScreenPoints =
+            when (guide) {
+                is com.alexdremov.notate.ui.guide.GuideSnap.Line -> gp.line(guide, guideStartX, guideStartY, x, y)
+                is com.alexdremov.notate.ui.guide.GuideSnap.Ray -> gp.ray(guide, x, y)
+                is com.alexdremov.notate.ui.guide.GuideSnap.Arc -> {
+                    val a = gp.angleOf(guide, x, y)
+                    guideArcSweep += gp.angleDelta(guideArcLast, a)
+                    guideArcLast = a
+                    gp.arc(guide, guideArcStart, guideArcSweep)
+                }
+            }
+        val path = Path()
+        guideScreenPoints.firstOrNull()?.let { path.moveTo(it.x, it.y) }
+        for (i in 1 until guideScreenPoints.size) path.lineTo(guideScreenPoints[i].x, guideScreenPoints[i].y)
+        val bounds = RectF()
+        path.computeBounds(bounds, true)
+        currentStrokeScreenBounds.union(bounds)
+        cursorView?.showShapePreview(path)
+    }
+
+    private fun pathLength(points: List<android.graphics.PointF>): Float {
+        var len = 0f
+        for (i in 1 until points.size) len += kotlin.math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
+        return len
     }
 
     /** Draws the drag shape from the pen-down point to [currentWorld] as a dashed preview. */
@@ -785,7 +937,7 @@ class PenInputHandler(
             screenPath.moveTo(pts[0].x, pts[0].y)
             for (i in 1 until pts.size) screenPath.lineTo(pts[i].x, pts[i].y)
         }
-        screenPath.transform(matrix)
+        screenPath.transform(strokeMatrix)
 
         // Shapes can extend past the pen path (e.g. polygons drawn from their center): grow refresh bounds.
         val bounds = RectF()
@@ -800,11 +952,11 @@ class PenInputHandler(
             if (currentTool.eraserType == EraserType.LASSO) {
                 cursorView?.hide()
             } else {
-                val radius = (currentTool.width * currentScale) / 2f
+                val radius = (currentTool.width * inkScale) / 2f
                 cursorView?.update(touchPoint.x, touchPoint.y, radius)
             }
         } else if (isLargeStrokeMode) {
-            val radius = (currentTool.width * currentScale) / 2f
+            val radius = (currentTool.width * inkScale) / 2f
             cursorView?.update(touchPoint.x, touchPoint.y, radius)
         }
     }
@@ -813,13 +965,9 @@ class PenInputHandler(
         val points = touchPointList.points
         if (points.isEmpty()) return
 
-        // Optimization: Invert matrix once for the entire batch
-        val invertedMatrix = Matrix()
-        matrix.invert(invertedMatrix)
-
         synchronized(strokeBuilder) {
             for (point in points) {
-                internalProcessMove(point, invertedMatrix)
+                internalProcessMove(point)
             }
         }
     }

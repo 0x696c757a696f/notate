@@ -139,6 +139,56 @@ class OnyxCanvasView
 
         private val exclusionRects = ArrayList<Rect>()
 
+        // Exclusion rects from the activity (toolbar, sidebar), in view coordinates, before the
+        // zoom window's control strip is merged in.
+        private var externalExclusionRects: List<Rect> = emptyList()
+
+        // --- Zoom writing window ---
+        private val zoomWindow = com.alexdremov.notate.ui.zoom.ZoomWindow()
+        private val zoomMatrix = Matrix()
+        private var zoomDrag: ZoomDrag? = null
+
+        /** Finger drag of the zoom target: [worldPerPx] converts screen px to world units (signed). */
+        private class ZoomDrag(
+            var lastX: Float,
+            var lastY: Float,
+            val worldPerPx: Float,
+        )
+
+        /** Called when the zoom writing window opens or closes. */
+        var onZoomWindowChanged: ((Boolean) -> Unit)? = null
+
+        // --- Ruler / protractor (screen-space guides) ---
+        private val ruler = com.alexdremov.notate.ui.guide.Ruler()
+        private val protractor = com.alexdremov.notate.ui.guide.Protractor()
+
+        @Volatile
+        var isRulerVisible = false
+            private set
+
+        @Volatile
+        var isProtractorVisible = false
+            private set
+        private var guideGesture: GuideGesture? = null
+
+        // A stroke starting this close (dp) to a guide's edge follows the guide.
+        private val guideSnapDp = 20f
+
+        /** Finger gesture on a guide: one finger moves it, two rotate it (and resize the protractor). */
+        private class GuideGesture(
+            val isRuler: Boolean,
+            var lastX: Float,
+            var lastY: Float,
+        ) {
+            var twoFinger = false
+            var startPointerAngle = 0f
+            var startGuideAngle = 0f
+            var startPointerDist = 1f
+            var startRadius = 0f
+            var lastMidX = 0f
+            var lastMidY = 0f
+        }
+
         // Immutable snapshot for the raw-input thread (exclusionRects is mutated on main).
         @Volatile
         private var exclusionSnapshot: List<Rect> = emptyList()
@@ -241,6 +291,13 @@ class OnyxCanvasView
                         onContentChanged?.invoke()
                     },
                 )
+            penInputHandler.zoomMatrixAt = { x, y ->
+                if (zoomWindow.isInWriting(x, y)) zoomWindow.worldToWriting() else null
+            }
+            penInputHandler.guideSnapAt = { x, y -> guideSnapAt(x, y) }
+            penInputHandler.onZoomStrokeFinished = { worldBounds ->
+                if (zoomWindow.advanceAfterStroke(worldBounds)) onZoomTargetMoved()
+            }
 
             setupGestureDetectors()
 
@@ -258,6 +315,10 @@ class OnyxCanvasView
         ) {
             super.onSizeChanged(w, h, oldw, oldh)
             viewportInteractor.setViewWidth(w)
+            if (zoomWindow.isOpen) {
+                zoomWindow.layout(w, h)
+                applyExclusionRects()
+            }
         }
 
         private fun setupGestureDetectors() {
@@ -453,6 +514,10 @@ class OnyxCanvasView
             if (isStylus) return false // Handled by RawInputCallback
 
             if (palmRejectionEnabled) return true // Palm rejection: ignore finger input (stylus draws via RawInputCallback)
+
+            if (handleZoomWindowTouch(event)) return true
+
+            if (handleGuideTouch(event)) return true
 
             if (!isReadOnly) detectTwoFingerTap(event)
 
@@ -715,6 +780,7 @@ class OnyxCanvasView
                     val currentScale = values[Matrix.MSCALE_X]
 
                     canvasRenderer.render(cv, matrix, visibleRect, RenderQuality.HIGH, currentScale)
+                    if (zoomWindow.isOpen) drawZoomTargetOutline(cv, currentScale)
                     selectionOverlayDrawer.draw(cv, matrix, currentScale)
                     searchHighlightBounds?.let { worldBounds ->
                         val screenBounds = RectF(worldBounds)
@@ -728,6 +794,10 @@ class OnyxCanvasView
                             }
                         cv.drawRect(screenBounds, highlightPaint)
                     }
+
+                    if (isRulerVisible) drawRuler(cv)
+                    if (isProtractorVisible) drawProtractor(cv)
+                    if (zoomWindow.isOpen) drawZoomWindow(cv)
 
                     if (CanvasConfig.DEBUG_SHOW_RAM_USAGE) {
                         val runtime = Runtime.getRuntime()
@@ -923,7 +993,17 @@ class OnyxCanvasView
         fun setExclusionRects(rects: List<Rect>) {
             val origin = IntArray(2)
             getLocationOnScreen(origin)
-            val local = rects.filter { !it.isEmpty }.map { Rect(it).apply { offset(-origin[0], -origin[1]) } }
+            externalExclusionRects = rects.filter { !it.isEmpty }.map { Rect(it).apply { offset(-origin[0], -origin[1]) } }
+            applyExclusionRects()
+        }
+
+        /** Pushes the activity's exclusion rects plus the zoom window's control strip to the pen driver. */
+        private fun applyExclusionRects() {
+            val local = ArrayList(externalExclusionRects)
+            if (zoomWindow.isOpen) {
+                val c = zoomWindow.controls
+                local.add(Rect(c.left.toInt(), c.top.toInt(), c.right.toInt(), c.bottom.toInt()))
+            }
             if (local == exclusionRects) return
 
             exclusionRects.clear()
@@ -1179,6 +1259,519 @@ class OnyxCanvasView
 
             // Use DU for fast visual update after undo/redo instead of full GC refresh
             EpdController.invalidate(this, UpdateMode.DU)
+        }
+
+        // --- Ruler / protractor ---
+
+        private val guideFillPaint =
+            Paint().apply {
+                color = Color.argb(70, 160, 160, 160)
+                style = Paint.Style.FILL
+            }
+        private val guideLinePaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+            }
+        private val guideTextPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textAlign = Paint.Align.CENTER
+            }
+
+        fun setRulerVisible(visible: Boolean) {
+            if (visible == isRulerVisible) return
+            if (visible) ruler.place(width, height, resources.displayMetrics.density)
+            isRulerVisible = visible
+            onGuidesChanged()
+        }
+
+        fun setProtractorVisible(visible: Boolean) {
+            if (visible == isProtractorVisible) return
+            if (visible) protractor.place(width, height, resources.displayMetrics.density)
+            isProtractorVisible = visible
+            onGuidesChanged()
+        }
+
+        private fun onGuidesChanged() {
+            guideGesture = null
+            drawContent()
+            performHardRefresh()
+        }
+
+        /** Called from the raw-input thread: the guide a stroke starting at (x, y) should follow. */
+        private fun guideSnapAt(
+            x: Float,
+            y: Float,
+        ): com.alexdremov.notate.ui.guide.GuideSnap? {
+            if (zoomWindow.isInBox(x, y)) return null
+            val tolerance = guideSnapDp * resources.displayMetrics.density
+            if (isProtractorVisible) protractor.snapAt(x, y, tolerance)?.let { return it }
+            if (isRulerVisible) ruler.snapAt(x, y, tolerance)?.let { return it }
+            return null
+        }
+
+        private fun handleGuideTouch(event: MotionEvent): Boolean {
+            if (!isRulerVisible && !isProtractorVisible) return false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val x = event.x
+                    val y = event.y
+                    guideGesture =
+                        when {
+                            isProtractorVisible && protractor.contains(x, y) -> GuideGesture(false, x, y)
+                            isRulerVisible && ruler.contains(x, y) -> GuideGesture(true, x, y)
+                            else -> null
+                        }
+                    return guideGesture != null
+                }
+
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    val g = guideGesture ?: return false
+                    if (event.pointerCount >= 2) startTwoFingerGuide(g, event)
+                    return true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val g = guideGesture ?: return false
+                    if (g.twoFinger && event.pointerCount >= 2) {
+                        val angle = pointerAngle(event)
+                        val midX = (event.getX(0) + event.getX(1)) / 2f
+                        val midY = (event.getY(0) + event.getY(1)) / 2f
+                        val rotation = g.startGuideAngle + (angle - g.startPointerAngle)
+                        if (g.isRuler) {
+                            ruler.setRotation(rotation)
+                            ruler.moveBy(midX - g.lastMidX, midY - g.lastMidY)
+                        } else {
+                            protractor.setRotation(rotation)
+                            protractor.setRadius(g.startRadius * pointerDist(event) / g.startPointerDist)
+                            protractor.moveBy(midX - g.lastMidX, midY - g.lastMidY)
+                        }
+                        g.lastMidX = midX
+                        g.lastMidY = midY
+                    } else if (!g.twoFinger) {
+                        val dx = event.x - g.lastX
+                        val dy = event.y - g.lastY
+                        if (g.isRuler) ruler.moveBy(dx, dy) else protractor.moveBy(dx, dy)
+                        g.lastX = event.x
+                        g.lastY = event.y
+                    }
+                    invalidateCanvas()
+                    return true
+                }
+
+                MotionEvent.ACTION_POINTER_UP -> {
+                    val g = guideGesture ?: return false
+                    // Keep moving with the finger that stays down, without a jump.
+                    g.twoFinger = false
+                    val remaining = if (event.actionIndex == 0) 1 else 0
+                    g.lastX = event.getX(remaining)
+                    g.lastY = event.getY(remaining)
+                    return true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (guideGesture == null) return false
+                    guideGesture = null
+                    drawContent()
+                    EpdController.invalidate(this, UpdateMode.DU)
+                    return true
+                }
+            }
+            return guideGesture != null
+        }
+
+        private fun startTwoFingerGuide(
+            g: GuideGesture,
+            event: MotionEvent,
+        ) {
+            g.twoFinger = true
+            g.startPointerAngle = pointerAngle(event)
+            g.startGuideAngle = if (g.isRuler) ruler.angle else protractor.angle
+            g.startPointerDist = pointerDist(event).coerceAtLeast(1f)
+            g.startRadius = protractor.radius
+            g.lastMidX = (event.getX(0) + event.getX(1)) / 2f
+            g.lastMidY = (event.getY(0) + event.getY(1)) / 2f
+        }
+
+        private fun pointerAngle(event: MotionEvent) =
+            kotlin.math.atan2(event.getY(1) - event.getY(0), event.getX(1) - event.getX(0))
+
+        private fun pointerDist(event: MotionEvent) =
+            kotlin.math.hypot(event.getX(1) - event.getX(0), event.getY(1) - event.getY(0))
+
+        /** Ruler body with millimetre ticks along both edges and its angle in the middle. */
+        private fun drawRuler(cv: Canvas) {
+            val r = ruler
+            val mm = resources.displayMetrics.xdpi / 25.4f
+            val half = r.length / 2f
+            val hw = r.width / 2f
+            cv.save()
+            cv.translate(r.cx, r.cy)
+            cv.rotate(Math.toDegrees(r.angle.toDouble()).toFloat())
+            cv.drawRect(-half, -hw, half, hw, guideFillPaint)
+            cv.drawLine(-half, -hw, half, -hw, guideLinePaint)
+            cv.drawLine(-half, hw, half, hw, guideLinePaint)
+
+            guideTextPaint.textSize = r.width * 0.2f
+            val count = (half / mm).toInt()
+            for (i in -count..count) {
+                val x = i * mm
+                val len =
+                    when {
+                        i % 10 == 0 -> r.width * 0.28f
+                        i % 5 == 0 -> r.width * 0.18f
+                        else -> r.width * 0.1f
+                    }
+                cv.drawLine(x, -hw, x, -hw + len, guideLinePaint)
+                cv.drawLine(x, hw, x, hw - len, guideLinePaint)
+                if (i % 10 == 0 && i != 0) {
+                    cv.drawText(kotlin.math.abs(i / 10).toString(), x, -hw + len + guideTextPaint.textSize, guideTextPaint)
+                }
+            }
+            guideTextPaint.textSize = r.width * 0.3f
+            cv.drawText("${r.degrees}°", 0f, guideTextPaint.textSize * 0.35f + r.width * 0.12f, guideTextPaint)
+            cv.restore()
+        }
+
+        /** Half disc with 1/5/10 degree ticks, labels every 10 degrees and a centre mark. */
+        private fun drawProtractor(cv: Canvas) {
+            val p = protractor
+            val rad = p.radius
+            cv.save()
+            cv.translate(p.cx, p.cy)
+            cv.rotate(Math.toDegrees(p.angle.toDouble()).toFloat())
+            val oval = RectF(-rad, -rad, rad, rad)
+            cv.drawArc(oval, 180f, 180f, true, guideFillPaint)
+            cv.drawArc(oval, 180f, 180f, false, guideLinePaint)
+            cv.drawLine(-rad, 0f, rad, 0f, guideLinePaint)
+
+            guideTextPaint.textSize = (rad * 0.06f).coerceIn(14f, 36f)
+            for (deg in 0..180) {
+                val len =
+                    when {
+                        deg % 10 == 0 -> rad * 0.1f
+                        deg % 5 == 0 -> rad * 0.065f
+                        else -> rad * 0.035f
+                    }
+                val a = Math.toRadians(deg.toDouble())
+                val c = kotlin.math.cos(a).toFloat()
+                val s = -kotlin.math.sin(a).toFloat()
+                cv.drawLine(c * rad, s * rad, c * (rad - len), s * (rad - len), guideLinePaint)
+                if (deg % 10 == 0) {
+                    val lr = rad - len - guideTextPaint.textSize
+                    cv.drawText(deg.toString(), c * lr, s * lr + guideTextPaint.textSize * 0.35f, guideTextPaint)
+                }
+            }
+            // Centre: where angle rays start
+            val mark = rad * 0.04f
+            cv.drawCircle(0f, 0f, mark, guideLinePaint)
+            cv.drawLine(0f, -mark * 2, 0f, 0f, guideLinePaint)
+            cv.restore()
+        }
+
+        // --- Zoom writing window ---
+
+        val isZoomWindowOpen: Boolean get() = zoomWindow.isOpen
+
+        private var pendingZoomControl: com.alexdremov.notate.ui.zoom.ZoomWindow.Control? = null
+
+        private val zoomFillPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
+        private val zoomStripPaint = Paint().apply { color = Color.rgb(235, 235, 235); style = Paint.Style.FILL }
+        private val zoomBorderPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeWidth = 3f
+            }
+        private val zoomIconPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeWidth = 4f
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+            }
+        private val zoomTextPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textAlign = Paint.Align.CENTER
+            }
+        private val zoomTargetPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeWidth = 3f
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 8f), 0f)
+            }
+        private val zoomGuidePaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(160, 160, 160)
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 10f), 0f)
+            }
+
+        fun toggleZoomWindow() {
+            if (zoomWindow.isOpen) closeZoomWindow() else openZoomWindow()
+        }
+
+        fun openZoomWindow() {
+            if (width == 0 || height == 0 || zoomWindow.isOpen) return
+            zoomWindow.open(matrix, width, height, resources.displayMetrics.density)
+            applyExclusionRects()
+            onZoomWindowChanged?.invoke(true)
+            drawContent()
+            performHardRefresh()
+        }
+
+        fun closeZoomWindow() {
+            if (!zoomWindow.isOpen) return
+            zoomWindow.close()
+            zoomDrag = null
+            pendingZoomControl = null
+            applyExclusionRects()
+            onZoomWindowChanged?.invoke(false)
+            drawContent()
+            performHardRefresh()
+        }
+
+        /**
+         * A stylus tap on an excluded area, from pen-down ([downX], [downY]) to pen-up. Runs the zoom
+         * window button under it, if any. Returns true if the tap was on the zoom window's buttons.
+         */
+        fun handleStylusTapOnZoomControls(
+            downX: Float,
+            downY: Float,
+            upX: Float,
+            upY: Float,
+        ): Boolean {
+            val control = zoomWindow.controlAt(downX, downY) ?: return false
+            if (zoomWindow.controlAt(upX, upY) == control) onZoomControl(control)
+            return true
+        }
+
+        private fun onZoomControl(control: com.alexdremov.notate.ui.zoom.ZoomWindow.Control) {
+            val zw = zoomWindow
+            when (control) {
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.CLOSE -> {
+                    closeZoomWindow()
+                    return
+                }
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.ZOOM_OUT -> zw.zoomBy(1f / com.alexdremov.notate.ui.zoom.ZoomWindow.ZOOM_STEP)
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.ZOOM_IN -> zw.zoomBy(com.alexdremov.notate.ui.zoom.ZoomWindow.ZOOM_STEP)
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.PREV -> zw.step(-com.alexdremov.notate.ui.zoom.ZoomWindow.STEP_FRACTION)
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.NEXT -> zw.step(com.alexdremov.notate.ui.zoom.ZoomWindow.STEP_FRACTION)
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.NEW_LINE -> zw.newLine()
+            }
+            onZoomTargetMoved()
+        }
+
+        /** Keeps the zoom target visible above the docked box, then redraws and refreshes the screen. */
+        private fun onZoomTargetMoved() {
+            if (!zoomWindow.isOpen) return
+            val screen = RectF(zoomWindow.target)
+            matrix.mapRect(screen)
+            val pad = 24f * resources.displayMetrics.density
+            val bottomLimit = zoomWindow.box.top - pad
+            var dx = 0f
+            var dy = 0f
+            if (screen.bottom > bottomLimit) dy = bottomLimit - screen.bottom
+            if (screen.top + dy < pad) dy = pad - screen.top
+            if (screen.right > width - pad) dx = width - pad - screen.right
+            if (screen.left + dx < pad) dx = pad - screen.left
+            if (dx != 0f || dy != 0f) scrollByOffset(dx, dy)
+            drawContent()
+            EpdController.invalidate(this, UpdateMode.DU)
+        }
+
+        /** Finger input on the zoom window: buttons, and dragging to move the target. */
+        private fun handleZoomWindowTouch(event: MotionEvent): Boolean {
+            if (!zoomWindow.isOpen) return false
+            val x = event.x
+            val y = event.y
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    zoomDrag = null
+                    pendingZoomControl = zoomWindow.controlAt(x, y)
+                    if (pendingZoomControl != null || zoomWindow.controls.contains(x, y)) return true
+                    if (zoomWindow.isInBox(x, y)) {
+                        // Dragging the magnified content moves the target the other way, like panning.
+                        zoomDrag = ZoomDrag(x, y, -1f / zoomWindow.scale)
+                        return true
+                    }
+                    val targetScreen = RectF(zoomWindow.target)
+                    matrix.mapRect(targetScreen)
+                    val slop = 16f * resources.displayMetrics.density
+                    targetScreen.inset(-slop, -slop)
+                    if (targetScreen.contains(x, y)) {
+                        zoomDrag = ZoomDrag(x, y, 1f / viewportInteractor.getCurrentScale())
+                        return true
+                    }
+                    return false
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val drag = zoomDrag ?: return pendingZoomControl != null
+                    zoomWindow.moveBy((x - drag.lastX) * drag.worldPerPx, (y - drag.lastY) * drag.worldPerPx)
+                    drag.lastX = x
+                    drag.lastY = y
+                    invalidateCanvas()
+                    return true
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    val control = pendingZoomControl
+                    val drag = zoomDrag
+                    pendingZoomControl = null
+                    zoomDrag = null
+                    if (control != null) {
+                        if (zoomWindow.controlAt(x, y) == control) onZoomControl(control)
+                        return true
+                    }
+                    if (drag != null) {
+                        zoomWindow.commitLineStart()
+                        onZoomTargetMoved()
+                        return true
+                    }
+                    return false
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    val consumed = zoomDrag != null || pendingZoomControl != null
+                    pendingZoomControl = null
+                    zoomDrag = null
+                    return consumed
+                }
+
+                else -> return zoomDrag != null || pendingZoomControl != null
+            }
+        }
+
+        private fun drawZoomTargetOutline(
+            cv: Canvas,
+            viewScale: Float,
+        ) {
+            zoomWindow.onViewScaleChanged(viewScale)
+            val r = RectF(zoomWindow.target)
+            matrix.mapRect(r)
+            cv.drawRect(r, zoomTargetPaint)
+        }
+
+        private fun drawZoomWindow(cv: Canvas) {
+            val zw = zoomWindow
+            cv.drawRect(zw.box, zoomFillPaint)
+
+            val zm = zw.worldToWriting(zoomMatrix)
+            cv.save()
+            cv.clipRect(zw.writing)
+            drawZoomBackground(cv, zm)
+            canvasRenderer.renderDirectVectorsSync(cv, zm, RectF(zw.target), RenderQuality.HIGH)
+            cv.restore()
+
+            // Writing past this line slides the window along.
+            val guideX = zw.writing.left + zw.writing.width() * com.alexdremov.notate.ui.zoom.ZoomWindow.ADVANCE_TRIGGER
+            cv.drawLine(guideX, zw.writing.top + 8f, guideX, zw.writing.bottom - 8f, zoomGuidePaint)
+
+            cv.drawRect(zw.controls, zoomStripPaint)
+            val rects = zw.controlRects()
+            for ((control, rect) in rects) drawZoomControlIcon(cv, control, rect)
+            rects.firstOrNull { it.first == com.alexdremov.notate.ui.zoom.ZoomWindow.Control.ZOOM_IN }?.second?.let { r ->
+                zoomTextPaint.textSize = zw.controls.height() * 0.4f
+                val label = "×" + String.format(java.util.Locale.US, "%.1f", zw.magnification)
+                cv.drawText(label, r.right + r.width() * 0.6f, r.centerY() + zoomTextPaint.textSize * 0.35f, zoomTextPaint)
+            }
+            cv.drawLine(zw.controls.left, zw.controls.bottom, zw.controls.right, zw.controls.bottom, zoomBorderPaint)
+            cv.drawRect(zw.box, zoomBorderPaint)
+        }
+
+        private fun drawZoomBackground(
+            cv: Canvas,
+            zm: Matrix,
+        ) {
+            val target = zoomWindow.target
+            val style = canvasModel.backgroundStyle
+            cv.save()
+            cv.concat(zm)
+            if (canvasModel.canvasType == CanvasType.FIXED_PAGES) {
+                cv.drawColor(CanvasConfig.FIXED_PAGE_CANVAS_BG_COLOR)
+                val pageFullHeight = canvasModel.pageHeight + CanvasConfig.PAGE_SPACING
+                val first = kotlin.math.floor(target.top / pageFullHeight).toInt().coerceAtLeast(0)
+                val last = kotlin.math.floor(target.bottom / pageFullHeight).toInt()
+                for (i in first..last) {
+                    val top = i * pageFullHeight
+                    val pageRect = RectF(0f, top, canvasModel.pageWidth, top + canvasModel.pageHeight)
+                    if (!RectF.intersects(pageRect, target)) continue
+                    cv.drawRect(pageRect, zoomFillPaint)
+                    cv.save()
+                    cv.clipRect(pageRect)
+                    val patternArea =
+                        com.alexdremov.notate.ui.render.background.PatternLayoutHelper
+                            .calculatePatternArea(pageRect, style)
+                    val visible = RectF(patternArea)
+                    if (visible.intersect(target)) {
+                        val (offsetX, offsetY) =
+                            com.alexdremov.notate.ui.render.background.PatternLayoutHelper
+                                .calculateOffsets(patternArea, style)
+                        com.alexdremov.notate.ui.render.BackgroundDrawer
+                            .draw(cv, style, visible, zoomLevel = zoomWindow.scale, offsetX = offsetX, offsetY = offsetY)
+                    }
+                    cv.restore()
+                }
+            } else {
+                com.alexdremov.notate.ui.render.BackgroundDrawer
+                    .draw(cv, style, RectF(target), zoomLevel = zoomWindow.scale)
+            }
+            cv.restore()
+        }
+
+        private fun drawZoomControlIcon(
+            cv: Canvas,
+            control: com.alexdremov.notate.ui.zoom.ZoomWindow.Control,
+            r: RectF,
+        ) {
+            val cx = r.centerX()
+            val cy = r.centerY()
+            val u = r.height() * 0.22f
+            val p = Path()
+            when (control) {
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.ZOOM_OUT -> {
+                    p.moveTo(cx - u, cy)
+                    p.lineTo(cx + u, cy)
+                }
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.ZOOM_IN -> {
+                    p.moveTo(cx - u, cy)
+                    p.lineTo(cx + u, cy)
+                    p.moveTo(cx, cy - u)
+                    p.lineTo(cx, cy + u)
+                }
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.PREV -> {
+                    p.moveTo(cx + u * 0.6f, cy - u)
+                    p.lineTo(cx - u * 0.6f, cy)
+                    p.lineTo(cx + u * 0.6f, cy + u)
+                }
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.NEXT -> {
+                    p.moveTo(cx - u * 0.6f, cy - u)
+                    p.lineTo(cx + u * 0.6f, cy)
+                    p.lineTo(cx - u * 0.6f, cy + u)
+                }
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.NEW_LINE -> {
+                    p.moveTo(cx + u, cy - u)
+                    p.lineTo(cx + u, cy + u * 0.4f)
+                    p.lineTo(cx - u, cy + u * 0.4f)
+                    p.moveTo(cx - u * 0.4f, cy - u * 0.2f)
+                    p.lineTo(cx - u, cy + u * 0.4f)
+                    p.lineTo(cx - u * 0.4f, cy + u)
+                }
+                com.alexdremov.notate.ui.zoom.ZoomWindow.Control.CLOSE -> {
+                    p.moveTo(cx - u, cy - u)
+                    p.lineTo(cx + u, cy + u)
+                    p.moveTo(cx + u, cy - u)
+                    p.lineTo(cx - u, cy + u)
+                }
+            }
+            cv.drawPath(p, zoomIconPaint)
         }
 
         fun notifyStrokeFinished() {

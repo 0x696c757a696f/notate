@@ -16,6 +16,10 @@
     <string name="undo_action">Undo</string>
     <string name="redo_action">Redo</string>
     <string name="image_action">Insert</string>
+    <string name="zoom_window_action">Zoom box</string>
+    <string name="guides_action">Guides</string>
+    <string name="guide_ruler">Ruler</string>
+    <string name="guide_protractor">Protractor</string>
     <string name="select_tool_title">Select Tool</string>
     <string name="eraser_settings">Eraser Settings</string>
     <string name="pen_style">Pen Style</string>

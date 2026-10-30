@@ -22,4 +22,8 @@
     <string name="line_style_solid">实线</string>
     <string name="line_style_dashed">虚线</string>
     <string name="line_style_dotted">点线</string>
+    <string name="zoom_window_action">放大书写</string>
+    <string name="guides_action">尺规</string>
+    <string name="guide_ruler">尺子</string>
+    <string name="guide_protractor">量角器</string>
 </resources>

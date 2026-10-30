@@ -43,7 +43,7 @@ class ToolbarShapeButtonsTest {
 
         val migrated = PreferencesManager.getToolbarItems(context)
         assertEquals(listOf(ShapeType.AUTO, ShapeType.LINE), shapeTypes(migrated))
-        assertTrue(migrated.last() is ToolbarItem.Eraser)
+        assertTrue(migrated[migrated.size - 3] is ToolbarItem.Eraser)
 
         // User removes the Lines button: it must not come back
         PreferencesManager.saveToolbarItems(context, migrated.filterNot { it.id == "line_tool" })

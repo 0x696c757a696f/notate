@@ -431,6 +431,14 @@ class CanvasActivity : AppCompatActivity() {
                                     // Image, PDF, link or paste: one menu, shared with long-press on the canvas.
                                     binding.canvasView.showInsertMenu()
                                 }
+
+                                com.alexdremov.notate.model.ActionType.ZOOM_WINDOW -> {
+                                    binding.canvasView.toggleZoomWindow()
+                                }
+
+                                com.alexdremov.notate.model.ActionType.GUIDES -> {
+                                    showGuidesPicker()
+                                }
                             }
                         },
                         onOpenSidebar = {
@@ -719,6 +727,20 @@ class CanvasActivity : AppCompatActivity() {
     }
 
     private val externalProjectRepositories = mutableMapOf<String, com.alexdremov.notate.data.ProjectRepository>()
+
+    /** Ruler / protractor picker behind the single toolbar button; each item toggles its guide. */
+    private fun showGuidesPicker() {
+        val canvas = binding.canvasView
+        val labels = arrayOf(getString(R.string.guide_ruler), getString(R.string.guide_protractor))
+        val checked = booleanArrayOf(canvas.isRulerVisible, canvas.isProtractorVisible)
+        androidx.appcompat.app.AlertDialog
+            .Builder(this)
+            .setTitle(R.string.guides_action)
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                if (which == 0) canvas.setRulerVisible(isChecked) else canvas.setProtractorVisible(isChecked)
+            }.setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
 
     private fun handleLinkActivation(link: com.alexdremov.notate.model.LinkItem) {
         // Close existing window if any
