@@ -175,13 +175,15 @@ class CanvasRepositoryJitTest {
 
             val job = session.initializationJob
             assertNotNull(job)
-            assertTrue("Background job should be active", job!!.isActive)
+            // No assertion that the job is still active here: on a fast runner
+            // the background unzip can finish before this line (CI flake). The
+            // contract under test is the post-condition below.
 
             // Trigger save immediately
             val result = repository.saveCanvasSession(path, session)
 
             // By the time save returns, the job must be complete
-            assertTrue("Initialization job should be completed", job.isCompleted)
+            assertTrue("Initialization job should be completed", job!!.isCompleted)
             assertEquals(path, result.savedPath)
 
             // Verify file integrity
