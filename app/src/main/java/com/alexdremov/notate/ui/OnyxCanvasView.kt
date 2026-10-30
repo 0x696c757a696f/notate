@@ -158,6 +158,37 @@ class OnyxCanvasView
         /** Called when the zoom writing window opens or closes. */
         var onZoomWindowChanged: ((Boolean) -> Unit)? = null
 
+        // --- Ruler / protractor (screen-space guides) ---
+        private val ruler = com.alexdremov.notate.ui.guide.Ruler()
+        private val protractor = com.alexdremov.notate.ui.guide.Protractor()
+
+        @Volatile
+        var isRulerVisible = false
+            private set
+
+        @Volatile
+        var isProtractorVisible = false
+            private set
+        private var guideGesture: GuideGesture? = null
+
+        // A stroke starting this close (dp) to a guide's edge follows the guide.
+        private val guideSnapDp = 20f
+
+        /** Finger gesture on a guide: one finger moves it, two rotate it (and resize the protractor). */
+        private class GuideGesture(
+            val isRuler: Boolean,
+            var lastX: Float,
+            var lastY: Float,
+        ) {
+            var twoFinger = false
+            var startPointerAngle = 0f
+            var startGuideAngle = 0f
+            var startPointerDist = 1f
+            var startRadius = 0f
+            var lastMidX = 0f
+            var lastMidY = 0f
+        }
+
         // Immutable snapshot for the raw-input thread (exclusionRects is mutated on main).
         @Volatile
         private var exclusionSnapshot: List<Rect> = emptyList()
@@ -263,6 +294,7 @@ class OnyxCanvasView
             penInputHandler.zoomMatrixAt = { x, y ->
                 if (zoomWindow.isInWriting(x, y)) zoomWindow.worldToWriting() else null
             }
+            penInputHandler.guideSnapAt = { x, y -> guideSnapAt(x, y) }
             penInputHandler.onZoomStrokeFinished = { worldBounds ->
                 if (zoomWindow.advanceAfterStroke(worldBounds)) onZoomTargetMoved()
             }
@@ -463,6 +495,8 @@ class OnyxCanvasView
             if (palmRejectionEnabled) return true // Palm rejection: ignore finger input (stylus draws via RawInputCallback)
 
             if (handleZoomWindowTouch(event)) return true
+
+            if (handleGuideTouch(event)) return true
 
             if (!isReadOnly) detectTwoFingerTap(event)
 
@@ -740,6 +774,8 @@ class OnyxCanvasView
                         cv.drawRect(screenBounds, highlightPaint)
                     }
 
+                    if (isRulerVisible) drawRuler(cv)
+                    if (isProtractorVisible) drawProtractor(cv)
                     if (zoomWindow.isOpen) drawZoomWindow(cv)
 
                     if (CanvasConfig.DEBUG_SHOW_RAM_USAGE) {
@@ -1202,6 +1238,216 @@ class OnyxCanvasView
 
             // Use DU for fast visual update after undo/redo instead of full GC refresh
             EpdController.invalidate(this, UpdateMode.DU)
+        }
+
+        // --- Ruler / protractor ---
+
+        private val guideFillPaint =
+            Paint().apply {
+                color = Color.argb(70, 160, 160, 160)
+                style = Paint.Style.FILL
+            }
+        private val guideLinePaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+            }
+        private val guideTextPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textAlign = Paint.Align.CENTER
+            }
+
+        fun setRulerVisible(visible: Boolean) {
+            if (visible == isRulerVisible) return
+            if (visible) ruler.place(width, height, resources.displayMetrics.density)
+            isRulerVisible = visible
+            onGuidesChanged()
+        }
+
+        fun setProtractorVisible(visible: Boolean) {
+            if (visible == isProtractorVisible) return
+            if (visible) protractor.place(width, height, resources.displayMetrics.density)
+            isProtractorVisible = visible
+            onGuidesChanged()
+        }
+
+        private fun onGuidesChanged() {
+            guideGesture = null
+            drawContent()
+            performHardRefresh()
+        }
+
+        /** Called from the raw-input thread: the guide a stroke starting at (x, y) should follow. */
+        private fun guideSnapAt(
+            x: Float,
+            y: Float,
+        ): com.alexdremov.notate.ui.guide.GuideSnap? {
+            if (zoomWindow.isInBox(x, y)) return null
+            val tolerance = guideSnapDp * resources.displayMetrics.density
+            if (isProtractorVisible) protractor.snapAt(x, y, tolerance)?.let { return it }
+            if (isRulerVisible) ruler.snapAt(x, y, tolerance)?.let { return it }
+            return null
+        }
+
+        private fun handleGuideTouch(event: MotionEvent): Boolean {
+            if (!isRulerVisible && !isProtractorVisible) return false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val x = event.x
+                    val y = event.y
+                    guideGesture =
+                        when {
+                            isProtractorVisible && protractor.contains(x, y) -> GuideGesture(false, x, y)
+                            isRulerVisible && ruler.contains(x, y) -> GuideGesture(true, x, y)
+                            else -> null
+                        }
+                    return guideGesture != null
+                }
+
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    val g = guideGesture ?: return false
+                    if (event.pointerCount >= 2) startTwoFingerGuide(g, event)
+                    return true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val g = guideGesture ?: return false
+                    if (g.twoFinger && event.pointerCount >= 2) {
+                        val angle = pointerAngle(event)
+                        val midX = (event.getX(0) + event.getX(1)) / 2f
+                        val midY = (event.getY(0) + event.getY(1)) / 2f
+                        val rotation = g.startGuideAngle + (angle - g.startPointerAngle)
+                        if (g.isRuler) {
+                            ruler.setRotation(rotation)
+                            ruler.moveBy(midX - g.lastMidX, midY - g.lastMidY)
+                        } else {
+                            protractor.setRotation(rotation)
+                            protractor.setRadius(g.startRadius * pointerDist(event) / g.startPointerDist)
+                            protractor.moveBy(midX - g.lastMidX, midY - g.lastMidY)
+                        }
+                        g.lastMidX = midX
+                        g.lastMidY = midY
+                    } else if (!g.twoFinger) {
+                        val dx = event.x - g.lastX
+                        val dy = event.y - g.lastY
+                        if (g.isRuler) ruler.moveBy(dx, dy) else protractor.moveBy(dx, dy)
+                        g.lastX = event.x
+                        g.lastY = event.y
+                    }
+                    invalidateCanvas()
+                    return true
+                }
+
+                MotionEvent.ACTION_POINTER_UP -> {
+                    val g = guideGesture ?: return false
+                    // Keep moving with the finger that stays down, without a jump.
+                    g.twoFinger = false
+                    val remaining = if (event.actionIndex == 0) 1 else 0
+                    g.lastX = event.getX(remaining)
+                    g.lastY = event.getY(remaining)
+                    return true
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (guideGesture == null) return false
+                    guideGesture = null
+                    drawContent()
+                    EpdController.invalidate(this, UpdateMode.DU)
+                    return true
+                }
+            }
+            return guideGesture != null
+        }
+
+        private fun startTwoFingerGuide(
+            g: GuideGesture,
+            event: MotionEvent,
+        ) {
+            g.twoFinger = true
+            g.startPointerAngle = pointerAngle(event)
+            g.startGuideAngle = if (g.isRuler) ruler.angle else protractor.angle
+            g.startPointerDist = pointerDist(event).coerceAtLeast(1f)
+            g.startRadius = protractor.radius
+            g.lastMidX = (event.getX(0) + event.getX(1)) / 2f
+            g.lastMidY = (event.getY(0) + event.getY(1)) / 2f
+        }
+
+        private fun pointerAngle(event: MotionEvent) =
+            kotlin.math.atan2(event.getY(1) - event.getY(0), event.getX(1) - event.getX(0))
+
+        private fun pointerDist(event: MotionEvent) =
+            kotlin.math.hypot(event.getX(1) - event.getX(0), event.getY(1) - event.getY(0))
+
+        /** Ruler body with millimetre ticks along both edges and its angle in the middle. */
+        private fun drawRuler(cv: Canvas) {
+            val r = ruler
+            val mm = resources.displayMetrics.xdpi / 25.4f
+            val half = r.length / 2f
+            val hw = r.width / 2f
+            cv.save()
+            cv.translate(r.cx, r.cy)
+            cv.rotate(Math.toDegrees(r.angle.toDouble()).toFloat())
+            cv.drawRect(-half, -hw, half, hw, guideFillPaint)
+            cv.drawLine(-half, -hw, half, -hw, guideLinePaint)
+            cv.drawLine(-half, hw, half, hw, guideLinePaint)
+
+            guideTextPaint.textSize = r.width * 0.2f
+            val count = (half / mm).toInt()
+            for (i in -count..count) {
+                val x = i * mm
+                val len =
+                    when {
+                        i % 10 == 0 -> r.width * 0.28f
+                        i % 5 == 0 -> r.width * 0.18f
+                        else -> r.width * 0.1f
+                    }
+                cv.drawLine(x, -hw, x, -hw + len, guideLinePaint)
+                cv.drawLine(x, hw, x, hw - len, guideLinePaint)
+                if (i % 10 == 0 && i != 0) {
+                    cv.drawText(kotlin.math.abs(i / 10).toString(), x, -hw + len + guideTextPaint.textSize, guideTextPaint)
+                }
+            }
+            guideTextPaint.textSize = r.width * 0.3f
+            cv.drawText("${r.degrees}°", 0f, guideTextPaint.textSize * 0.35f + r.width * 0.12f, guideTextPaint)
+            cv.restore()
+        }
+
+        /** Half disc with 1/5/10 degree ticks, labels every 10 degrees and a centre mark. */
+        private fun drawProtractor(cv: Canvas) {
+            val p = protractor
+            val rad = p.radius
+            cv.save()
+            cv.translate(p.cx, p.cy)
+            cv.rotate(Math.toDegrees(p.angle.toDouble()).toFloat())
+            val oval = RectF(-rad, -rad, rad, rad)
+            cv.drawArc(oval, 180f, 180f, true, guideFillPaint)
+            cv.drawArc(oval, 180f, 180f, false, guideLinePaint)
+            cv.drawLine(-rad, 0f, rad, 0f, guideLinePaint)
+
+            guideTextPaint.textSize = (rad * 0.06f).coerceIn(14f, 36f)
+            for (deg in 0..180) {
+                val len =
+                    when {
+                        deg % 10 == 0 -> rad * 0.1f
+                        deg % 5 == 0 -> rad * 0.065f
+                        else -> rad * 0.035f
+                    }
+                val a = Math.toRadians(deg.toDouble())
+                val c = kotlin.math.cos(a).toFloat()
+                val s = -kotlin.math.sin(a).toFloat()
+                cv.drawLine(c * rad, s * rad, c * (rad - len), s * (rad - len), guideLinePaint)
+                if (deg % 10 == 0) {
+                    val lr = rad - len - guideTextPaint.textSize
+                    cv.drawText(deg.toString(), c * lr, s * lr + guideTextPaint.textSize * 0.35f, guideTextPaint)
+                }
+            }
+            // Centre: where angle rays start
+            val mark = rad * 0.04f
+            cv.drawCircle(0f, 0f, mark, guideLinePaint)
+            cv.drawLine(0f, -mark * 2, 0f, 0f, guideLinePaint)
+            cv.restore()
         }
 
         // --- Zoom writing window ---

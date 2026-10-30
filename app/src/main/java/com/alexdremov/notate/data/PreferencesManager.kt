@@ -5,6 +5,7 @@ package com.alexdremov.notate.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Base64
+import com.alexdremov.notate.model.ActionType
 import com.alexdremov.notate.model.PenTool
 import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.Tag
@@ -49,6 +50,7 @@ object PreferencesManager {
     private const val KEY_TOOLBAR_ITEMS = "toolbar_items_config"
     private const val KEY_SHAPE_BUTTONS_MIGRATED = "toolbar_shape_buttons_migrated_v1"
     private const val KEY_ZOOM_BUTTON_MIGRATED = "toolbar_zoom_button_migrated_v1"
+    private const val KEY_GUIDES_BUTTON_MIGRATED = "toolbar_guides_button_migrated_v1"
     private const val KEY_COLORS = "favorite_colors"
     private const val KEY_TAGS = "defined_tags"
     private const val KEY_SORT_OPTION = "browser_sort_option"
@@ -460,7 +462,9 @@ object PreferencesManager {
             return try {
                 val bytes = Base64.decode(data, Base64.DEFAULT)
                 val items = protoBuf.decodeFromByteArray(ListSerializer(ToolbarItem.serializer()), bytes)
-                migrateZoomButton(context, migrateShapeButtons(context, items))
+                var migrated = migrateShapeButtons(context, items)
+                migrated = migrateActionButton(context, migrated, ActionType.ZOOM_WINDOW, KEY_ZOOM_BUTTON_MIGRATED)
+                migrateActionButton(context, migrated, ActionType.GUIDES, KEY_GUIDES_BUTTON_MIGRATED)
             } catch (e: Exception) {
                 // Fallback to JSON
                 try {
@@ -477,6 +481,7 @@ object PreferencesManager {
             .edit()
             .putBoolean(KEY_SHAPE_BUTTONS_MIGRATED, true)
             .putBoolean(KEY_ZOOM_BUTTON_MIGRATED, true)
+            .putBoolean(KEY_GUIDES_BUTTON_MIGRATED, true)
             .apply()
         return defaultToolbarItems()
     }
@@ -511,24 +516,26 @@ object PreferencesManager {
     }
 
     /**
-     * One-time upgrade for toolbars saved before the zoom writing window existed: adds its button after
-     * the last action button (or at the end). Removing it later is respected.
+     * One-time upgrade for toolbars saved before [action] existed (zoom writing window, ruler/protractor):
+     * adds its button after the last action button (or at the end). Removing it later is respected.
      */
-    private fun migrateZoomButton(
+    private fun migrateActionButton(
         context: Context,
         items: List<ToolbarItem>,
+        action: ActionType,
+        flagKey: String,
     ): List<ToolbarItem> {
         val prefs = getPrefs(context)
-        if (prefs.getBoolean(KEY_ZOOM_BUTTON_MIGRATED, false)) return items
+        if (prefs.getBoolean(flagKey, false)) return items
 
-        val zoom = ToolbarItem.Action(com.alexdremov.notate.model.ActionType.ZOOM_WINDOW)
+        val button = ToolbarItem.Action(action)
         val result = items.toMutableList()
-        if (items.none { it.id == zoom.id }) {
+        if (items.none { it.id == button.id }) {
             val lastAction = result.indexOfLast { it is ToolbarItem.Action }
-            result.add(if (lastAction >= 0) lastAction + 1 else result.size, zoom)
+            result.add(if (lastAction >= 0) lastAction + 1 else result.size, button)
             saveToolbarItems(context, result)
         }
-        prefs.edit().putBoolean(KEY_ZOOM_BUTTON_MIGRATED, true).apply()
+        prefs.edit().putBoolean(flagKey, true).apply()
         return result
     }
 
@@ -579,6 +586,10 @@ object PreferencesManager {
         items.add(
             com.alexdremov.notate.model.ToolbarItem
                 .Action(com.alexdremov.notate.model.ActionType.ZOOM_WINDOW),
+        )
+        items.add(
+            com.alexdremov.notate.model.ToolbarItem
+                .Action(com.alexdremov.notate.model.ActionType.GUIDES),
         )
         items.add(
             com.alexdremov.notate.model.ToolbarItem
