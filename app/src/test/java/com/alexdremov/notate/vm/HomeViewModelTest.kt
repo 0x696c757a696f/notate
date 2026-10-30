@@ -2,6 +2,9 @@ package com.alexdremov.notate.vm
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.Configuration
+import androidx.work.testing.SynchronousExecutor
+import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
@@ -24,6 +27,11 @@ class HomeViewModelTest {
     @Before
     fun setup() {
         app = ApplicationProvider.getApplicationContext()
+        // HomeViewModel schedules the OCR backfill worker on start.
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            app,
+            Configuration.Builder().setExecutor(SynchronousExecutor()).build(),
+        )
         viewModel = HomeViewModel(app)
     }
 
