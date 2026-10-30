@@ -55,6 +55,38 @@
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Notate" />
 
+        <!-- Interactive EPUB 3 / offline HTML5 reader with handwritten notes -->
+        <activity
+            android:name=".webdoc.WebDocActivity"
+            android:exported="true"
+            android:label="Notate 阅读与批注"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
+            android:theme="@style/Theme.Notate">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="text/html" />
+                <data android:mimeType="application/xhtml+xml" />
+            </intent-filter>
+            <!-- File managers that report a generic MIME type: match by extension -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.epub" />
+                <data android:pathPattern=".*\\..*\\.epub" />
+                <data android:pathPattern=".*\\.html" />
+                <data android:pathPattern=".*\\.htm" />
+                <data android:pathPattern=".*\\.xhtml" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".NotePickerActivity"
             android:exported="false"
