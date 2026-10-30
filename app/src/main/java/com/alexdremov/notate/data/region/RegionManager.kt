@@ -1665,7 +1665,11 @@ class RegionManager(
                 logForensics {
                     "LOAD-RAW id=$id items=${region?.items?.size} type=${region?.items?.javaClass?.simpleName}"
                 }
-                if (pendingSaveIds.contains(id)) {
+                // Stale re-reads skip this wait: the generation check at install
+                // already guarantees freshness, and a 250ms wait on EVERY retry
+                // under a save storm starved readers (FLOW perf test: a 700ms
+                // loaded window managed 15 reads against ~1300 quiet).
+                if (installAttempts == 0 && pendingSaveIds.contains(id)) {
                     // Bytes on disk may be STALE relative to an in-flight eviction
                     // save — the file usually EXISTS from an earlier generation, so
                     // "file missing" is the wrong trigger. Waiting for the save
@@ -1791,7 +1795,31 @@ class RegionManager(
                         return lineage
                     }
 
-                    // STALE-READ GUARD: no resident or lineage instance exists, but a save
+                    // LIMBO-LINEAGE RULE: a parked copy is the LIVE instance (it was
+                    // mutated after these disk bytes were written, and its save may
+                    // be mid-flight). Installing freshly-read disk bytes alongside
+                    // it forks the lineage: the stale copy becomes resident, queries
+                    // miss recent mutations, and a later save regresses the disk.
+                    // Prefer the parked copy and discard our disk bytes.
+                    val parked = freshestInLimbo(id)
+                    if (parked != null && !parked.isRecycled && parked.retain()) {
+                        logForensics {
+                            "RET-LIMBO id=$id i=${Integer.toHexString(System.identityHashCode(parked))} c=${parked.debugRefCount()}"
+                        }
+                        // This retain IS the residency slot (parked copies are
+                        // slotless); caller-side handoff happens in getRegion.
+                        putResidentAndParkIfSelfEvicted(id, parked)
+                        updateMetadataCache()
+                        // Single-residency-location invariant (see acquireRegion).
+                        if (regionCache.get(id) === parked || overflowRegions[id] === parked) {
+                            removeFromLimbo(id, parked, "limbo-prefer")
+                        }
+                        logForensics { "LOAD-PREFER-LIMBO id=$id items=${parked.items.size}" }
+                        auditRegion(forensics, parked, "LOAD-PREFER-LIMBO")
+                        return parked
+                    }
+
+                    // STALE-READ GUARD: no resident, lineage or parked instance exists, but a save
                     // may have landed AFTER our read — e.g. the live copy was
                     // mutated, saved, went clean and was swept + unlinked while we
                     // were between the read and this lock. Its content is now ONLY
@@ -1818,30 +1846,6 @@ class RegionManager(
                     if (missedOnDisk) {
                         removeRegionIndex(id)
                         logForensics { "LOAD-MISS id=$id index removed" }
-                    }
-
-                    // LIMBO-LINEAGE RULE: a parked copy is the LIVE instance (it was
-                    // mutated after these disk bytes were written, and its save may
-                    // be mid-flight). Installing freshly-read disk bytes alongside
-                    // it forks the lineage: the stale copy becomes resident, queries
-                    // miss recent mutations, and a later save regresses the disk.
-                    // Prefer the parked copy and discard our disk bytes.
-                    val parked = freshestInLimbo(id)
-                    if (parked != null && !parked.isRecycled && parked.retain()) {
-                        logForensics {
-                            "RET-LIMBO id=$id i=${Integer.toHexString(System.identityHashCode(parked))} c=${parked.debugRefCount()}"
-                        }
-                        // This retain IS the residency slot (parked copies are
-                        // slotless); caller-side handoff happens in getRegion.
-                        putResidentAndParkIfSelfEvicted(id, parked)
-                        updateMetadataCache()
-                        // Single-residency-location invariant (see acquireRegion).
-                        if (regionCache.get(id) === parked || overflowRegions[id] === parked) {
-                            removeFromLimbo(id, parked, "limbo-prefer")
-                        }
-                        logForensics { "LOAD-PREFER-LIMBO id=$id items=${parked.items.size}" }
-                        auditRegion(forensics, parked, "LOAD-PREFER-LIMBO")
-                        return parked
                     }
 
                     // CRITICAL FIX: Ensure the global spatial index matches the actual loaded content.

@@ -7,17 +7,37 @@
     android:background="#FFFFFF"
     tools:context=".CanvasActivity">
 
-    <!-- 1. Canvas (Bottom Layer) -->
-    <com.alexdremov.notate.ui.OnyxCanvasView
-        android:id="@+id/canvasView"
+    <!-- 1. Canvas panes (Bottom Layer): one note, or two in split view -->
+    <com.alexdremov.notate.ui.split.SplitPaneLayout
+        android:id="@+id/split_layout"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:layout_marginTop="@dimen/tab_bar_height">
 
-    <!-- 1.5 Cursor Overlay -->
-    <com.alexdremov.notate.ui.CursorView
-        android:id="@+id/cursorView"
+        <FrameLayout
+            android:id="@+id/primary_pane"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <com.alexdremov.notate.ui.OnyxCanvasView
+                android:id="@+id/canvasView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- 1.5 Cursor Overlay -->
+            <com.alexdremov.notate.ui.CursorView
+                android:id="@+id/cursorView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
+    </com.alexdremov.notate.ui.split.SplitPaneLayout>
+
+    <!-- 1.8 Tabs and split-view buttons -->
+    <com.alexdremov.notate.ui.tabs.TabBarView
+        android:id="@+id/tab_bar"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="@dimen/tab_bar_height"
+        android:layout_gravity="top" />
 
     <!-- 2. Toolbar (Middle Layer) -->
     <!-- Initial margins handled by Coordinator -->
@@ -35,7 +55,7 @@
         android:layout_width="200dp"
         android:layout_height="200dp"
         android:layout_gravity="end|top"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="64dp"
         android:layout_marginEnd="16dp"
         android:clipChildren="false"
         android:clipToPadding="false"

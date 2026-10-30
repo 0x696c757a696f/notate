@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Looper
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
@@ -27,6 +28,7 @@ import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.model.TwoFingerTapAction
 import com.alexdremov.notate.ui.controller.CanvasControllerImpl
 import com.alexdremov.notate.ui.controller.ViewportController
+import com.alexdremov.notate.ui.input.PalmGuard
 import com.alexdremov.notate.ui.input.PenInputHandler
 import com.alexdremov.notate.ui.interaction.ViewportInteractor
 import com.alexdremov.notate.ui.render.CanvasRenderer
@@ -94,6 +96,8 @@ class OnyxCanvasView
                 },
                 onInteractionEnd = {
                     canvasRenderer.setInteracting(false)
+                    // Clear the pan's screen updates while the pen is still paused, not under the next stroke.
+                    minimapDrawer?.hideNow()
                     resumeRawDrawing()
                 },
                 lastStrokeEndTimeProvider = { lastStrokeEndTime },
@@ -128,6 +132,13 @@ class OnyxCanvasView
         private var stylusButtonAction: StylusButtonAction = PreferencesManager.getStylusButtonAction(context)
 
         private var lastStrokeEndTime = 0L
+
+        private val palmGuard =
+            PalmGuard(
+                palmMinSizePx = PalmGuard.PALM_MIN_SIZE_MM / 25.4f * context.resources.displayMetrics.xdpi,
+            )
+        private var rejectingPalmGesture = false
+        private var palmSizedGesture = false
 
         private var currentTool: PenTool = PenTool.defaultPens()[0]
         private var isReadOnly = false
@@ -282,7 +293,10 @@ class OnyxCanvasView
                     viewScope,
                     matrix,
                     inverseMatrix,
-                    onStrokeStarted = { onStrokeStarted?.invoke() },
+                    onStrokeStarted = {
+                        palmGuard.onPenDown(SystemClock.uptimeMillis())
+                        onStrokeStarted?.invoke()
+                    },
                     onStrokeFinished = {
                         minimapDrawer?.setDirty()
                         drawContent()
@@ -438,7 +452,9 @@ class OnyxCanvasView
                     onInsertPdf = { onRequestInsertPdf?.invoke() },
                     onInsertLink = { showLinkDialog(worldX, worldY) },
                 )
-            contextMenu?.show(this, viewX, viewY)
+            val origin = IntArray(2)
+            getLocationOnScreen(origin)
+            contextMenu?.show(this, viewX + origin[0], viewY + origin[1])
         }
 
         private fun showLinkDialog(
@@ -513,9 +529,20 @@ class OnyxCanvasView
 
             if (palmRejectionEnabled) return true // Palm rejection: ignore finger input (stylus draws via RawInputCallback)
 
+
             if (handleZoomWindowTouch(event)) return true
 
             if (handleGuideTouch(event)) return true
+
+            // After the zoom window and guides: a finger may hold the ruler while the pen draws along it.
+            if (rejectPalm(event)) {
+                // Two/three-finger taps (undo, redo, ...) still work while the pen hovers; a palm never taps.
+                if (!isReadOnly && !palmSizedGesture) {
+                    detectTwoFingerTap(event)
+                    detectThreeFingerTap(event)
+                }
+                return true
+            }
 
             if (!isReadOnly) detectTwoFingerTap(event)
 
@@ -554,6 +581,35 @@ class OnyxCanvasView
                 }
             }
 
+            return true
+        }
+
+        /**
+         * Drops finger gestures made by the writing hand: any touch while the pen is near the screen,
+         * or one as large as a palm. A pan already under way when the pen arrives is stopped.
+         */
+        private fun rejectPalm(event: MotionEvent): Boolean {
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_DOWN) {
+                rejectingPalmGesture = false
+                palmSizedGesture = false
+            }
+            if (!palmSizedGesture) {
+                palmSizedGesture = palmGuard.isPalmSized(FloatArray(event.pointerCount) { event.getTouchMajor(it) })
+            }
+            if (!rejectingPalmGesture && !selectionInteractor.isInteracting()) {
+                if (palmSizedGesture || palmGuard.isPenNear(SystemClock.uptimeMillis())) {
+                    rejectingPalmGesture = true
+                    if (action != MotionEvent.ACTION_DOWN) {
+                        val cancel = MotionEvent.obtain(event).apply { setAction(MotionEvent.ACTION_CANCEL) }
+                        gestureDetector.onTouchEvent(cancel)
+                        cancel.recycle()
+                        viewportInteractor.cancel()
+                    }
+                }
+            }
+            if (!rejectingPalmGesture) return false
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) rejectingPalmGesture = false
             return true
         }
 
@@ -680,6 +736,7 @@ class OnyxCanvasView
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
+                    palmGuard.onHover(SystemClock.uptimeMillis())
                     val toolType = event.getToolType(0)
                     val isEraserTail = toolType == MotionEvent.TOOL_TYPE_ERASER
                     val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 &&
@@ -689,10 +746,14 @@ class OnyxCanvasView
                 }
 
                 MotionEvent.ACTION_HOVER_ENTER -> {
+                    palmGuard.onHover(SystemClock.uptimeMillis())
+                    // The pen is about to write: redraw what is pending now rather than mid-stroke.
+                    minimapDrawer?.hideNow()
                     penInputHandler.onHoverEnter()
                 }
 
                 MotionEvent.ACTION_HOVER_EXIT -> {
+                    palmGuard.onHoverExit(SystemClock.uptimeMillis())
                     penInputHandler.onHoverExit()
                 }
             }
@@ -976,6 +1037,28 @@ class OnyxCanvasView
             }
         }
 
+        /**
+         * Split view: whether this pane owns the pen. An inactive pane closes its raw-drawing
+         * session entirely (two open sessions fight over the digitizer); it still pans and zooms
+         * with fingers. Re-activate with [setDrawingEnabled] after setting this to true.
+         */
+        var isPaneActive = true
+            private set
+
+        fun setPaneActive(active: Boolean) {
+            if (isPaneActive == active) return
+            isPaneActive = active
+            if (!active) {
+                dismissActionPopup()
+                touchHelper?.setRawDrawingRenderEnabled(false)
+                touchHelper?.setRawDrawingEnabled(false)
+                touchHelper?.closeRawDrawing()
+                isRawDrawingActive = false
+                EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
+                EpdController.leaveScribbleMode(this)
+            }
+        }
+
         fun setReadOnly(readOnly: Boolean) {
             isReadOnly = readOnly
             setDrawingEnabled(!readOnly)
@@ -1160,7 +1243,7 @@ class OnyxCanvasView
                 if (!selectionInteractor.isInteracting()) {
                     sm.getTransformedBounds(selectionBoundsCache)
                     if (!selectionBoundsCache.isEmpty && selectionBoundsCache.width() > 1f && selectionBoundsCache.height() > 1f) {
-                        actionPopup?.show(selectionBoundsCache, matrix)
+                        actionPopup?.show(selectionBoundsCache, popupMatrix())
                     } else {
                         actionPopup?.dismiss()
                     }
@@ -1170,12 +1253,26 @@ class OnyxCanvasView
             }
         }
 
+        private val popupMatrixCache = Matrix()
+
+        /** View matrix shifted into the popup container's coordinates (the view may sit in a split pane). */
+        private fun popupMatrix(): Matrix {
+            popupMatrixCache.set(matrix)
+            val container = actionPopupContainer ?: return popupMatrixCache
+            val a = IntArray(2)
+            val b = IntArray(2)
+            getLocationOnScreen(a)
+            container.getLocationOnScreen(b)
+            popupMatrixCache.postTranslate((a[0] - b[0]).toFloat(), (a[1] - b[1]).toFloat())
+            return popupMatrixCache
+        }
+
         fun updateActionPopup() {
             val sm = canvasController.getSelectionManager()
             if (sm.hasSelection() && actionPopup?.isShowing() == true) {
                 sm.getTransformedBounds(selectionBoundsCache)
                 if (!selectionBoundsCache.isEmpty && selectionBoundsCache.width() > 1f && selectionBoundsCache.height() > 1f) {
-                    actionPopup?.updatePosition(selectionBoundsCache, matrix)
+                    actionPopup?.updatePosition(selectionBoundsCache, popupMatrix())
                 }
             }
         }
@@ -1196,13 +1293,13 @@ class OnyxCanvasView
         /** Hands the screen back to the pen after a pan or guide drag, unless a popup still blocks ink. */
         private fun resumeRawDrawing() {
             if (penInputHandler.inkBlocked) return
-            touchHelper?.setRawDrawingEnabled(true)
+            if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
             EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
             updateTouchHelperTool()
         }
 
         private fun performHardRefresh() {
-            val wasEnabled = touchHelper?.isRawDrawingInputEnabled() == true
+            val wasEnabled = isPaneActive && touchHelper?.isRawDrawingInputEnabled() == true
             if (wasEnabled) {
                 touchHelper?.setRawDrawingEnabled(false)
                 EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
@@ -1216,6 +1313,8 @@ class OnyxCanvasView
         }
 
         private fun setupTouchHelper() {
+            // In split view only the focused pane may own the pen driver.
+            if (!isPaneActive) return
             var isFirstInit = false
             if (touchHelper == null) {
                 // Revert to Mode 2 (true) which handles surface interactions better for panning
@@ -1854,5 +1953,6 @@ class OnyxCanvasView
 
         fun notifyStrokeFinished() {
             lastStrokeEndTime = System.currentTimeMillis()
+            palmGuard.onPenUp(SystemClock.uptimeMillis())
         }
     }

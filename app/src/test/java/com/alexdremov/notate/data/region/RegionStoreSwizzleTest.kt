@@ -47,7 +47,35 @@ class RegionStoreSwizzleTest {
         memoryLimitBytes: Long = 48 * 1024L,
     ): RegionManager =
         RegionManager(RegionStorage(dir).apply { init() }, regionSize = 1000f, memoryLimitBytes = memoryLimitBytes)
-            .also { managers.add(it) }
+            .also {
+                // Forensics on: a MISSING/EXTRA failure dumps the full event
+                // history of the affected regions across every manager that
+                // touched the directory (see [dumpOnFailure]).
+                it.forensicsSetEnabled(true)
+                managers.add(it)
+            }
+
+    /** Every item ever created, by order, so a failure can locate its region. */
+    private val everCreated = HashMap<Long, CanvasItem>()
+
+    private fun dumpOnFailure(
+        message: String?,
+        orders: Collection<Long>,
+    ) {
+        val ids =
+            orders
+                .mapNotNull { everCreated[it] }
+                .map { RegionId(kotlin.math.floor(it.bounds.centerX() / 1000f).toInt(), kotlin.math.floor(it.bounds.centerY() / 1000f).toInt()) }
+                .toSet()
+        val sb = StringBuilder("!!!! SWIZZLE-FAIL $message regions=$ids managers=${managers.size}\n")
+        managers.forEachIndexed { i, m ->
+            for (id in ids) {
+                val d = m.dumpForensics(id.toString())
+                if (d.isNotBlank()) sb.append("--- mgr#$i id=$id ---\n").append(d.lines().takeLast(400).joinToString("\n")).append("\n")
+            }
+        }
+        println(sb)
+    }
 
     private fun stroke(
         centerX: Float,
@@ -133,6 +161,7 @@ class RegionStoreSwizzleTest {
         val actual = all.map { it.order }.toSet()
         val missing = mirror.live - actual
         val extra = actual - mirror.live
+        if (missing.isNotEmpty() || extra.isNotEmpty()) dumpOnFailure(context, missing + extra)
         assertTrue(
             "$context: MISSING=${missing.sorted()} EXTRA=${extra.sorted()}",
             missing.isEmpty() && extra.isEmpty(),
@@ -171,6 +200,8 @@ class RegionStoreSwizzleTest {
     }
 
     private fun swizzleOnce(seed: Long) {
+        managers.clear()
+        everCreated.clear()
         val rng = Random(seed)
         val dir = tmp.newFolder()
         var rm = newManager(dir)
@@ -202,6 +233,7 @@ class RegionStoreSwizzleTest {
                         runBlocking {
                             val added = model.addItem(makeStroke(nextOrder))
                             checkNotNull(added)
+                            everCreated[added.order] = added
                             mirror.applyAdd(added)
                             liveItems[added.order] = added
                             nextOrder++

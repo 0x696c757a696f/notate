@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.core.view.WindowCompat
+import androidx.core.view.doOnLayout
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -40,6 +41,12 @@ import com.alexdremov.notate.ui.SettingsSidebarController
 import com.alexdremov.notate.ui.SidebarCoordinator
 import com.alexdremov.notate.ui.ToolbarCoordinator
 import com.alexdremov.notate.ui.export.ExportAction
+import com.alexdremov.notate.ui.tabs.DocKind
+import com.alexdremov.notate.ui.tabs.DocTab
+import com.alexdremov.notate.ui.tabs.SplitOrientation
+import com.alexdremov.notate.ui.tabs.SplitState
+import com.alexdremov.notate.ui.tabs.Workspace
+import com.alexdremov.notate.ui.tabs.WorkspaceStore
 import com.alexdremov.notate.ui.toolbar.MainToolbar
 import com.alexdremov.notate.ui.view.FloatingWindowView
 import com.alexdremov.notate.util.Logger
@@ -53,6 +60,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.geometry.Rect as ComposeRect
 
@@ -97,6 +105,54 @@ class CanvasActivity : AppCompatActivity() {
     private var floatingWindow: FloatingWindowView? = null
     private var floatingSession: com.alexdremov.notate.data.CanvasSession? = null
 
+    // Tabs and split view
+    private var workspace = Workspace()
+    private var secondary: SecondaryPane? = null
+    private var secondaryActive = false
+    private var isSwitchingTabs = false
+    private var pendingSplitOrientation = SplitOrientation.SIDE_BY_SIDE
+    private val activeCanvasState = mutableStateOf<OnyxCanvasView?>(null)
+    private var progressCallback: ((isVisible: Boolean, message: String?, progress: Int) -> Unit)? = null
+
+    /** The canvas the pen, toolbar and menus act on: the focused pane in split view. */
+    private val activeCanvas: OnyxCanvasView
+        get() = (if (secondaryActive) secondary?.canvas else null) ?: binding.canvasView
+
+    private val allCanvases: List<OnyxCanvasView>
+        get() = listOfNotNull(binding.canvasView, secondary?.canvas)
+
+    private fun activePath(): String? = if (secondaryActive) secondary?.path else currentCanvasPath
+
+    private fun activeSession(): com.alexdremov.notate.data.CanvasSession? =
+        if (secondaryActive) secondary?.session else viewModel.currentSession.value
+
+    /** The second note in split view. Its session is owned here; the main note's by the ViewModel. */
+    private inner class SecondaryPane(
+        val path: String,
+    ) {
+        val container = FrameLayout(this@CanvasActivity)
+        val canvas = OnyxCanvasView(this@CanvasActivity)
+        val cursor = com.alexdremov.notate.ui.CursorView(this@CanvasActivity)
+        var session: com.alexdremov.notate.data.CanvasSession? = null
+        var saveJob: Job? = null
+        val saveMutex = kotlinx.coroutines.sync.Mutex()
+
+        init {
+            // Must never open the pen driver before it is focused.
+            canvas.setPaneActive(false)
+            container.setBackgroundColor(android.graphics.Color.WHITE)
+            container.addView(canvas, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            container.addView(cursor, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            canvas.setCursorView(cursor)
+        }
+    }
+
+    private val splitPickerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val path = result.data?.getStringExtra("NOTE_PATH")
+            if (result.resultCode == RESULT_OK && path != null) startSplit(path, pendingSplitOrientation)
+        }
+
     private var pendingLinkCallback: ((name: String, uuid: String) -> Unit)? = null
     private var pendingFileCallback: ((name: String, path: String) -> Unit)? = null
 
@@ -121,7 +177,7 @@ class CanvasActivity : AppCompatActivity() {
             pendingFileCallback = null
             if (uri != null && callback != null) {
                 lifecycleScope.launch {
-                    val session = viewModel.currentSession.value
+                    val session = activeSession()
                     if (session != null) {
                         val importedPath = canvasRepository.importAsset(session, uri)
                         if (importedPath != null) {
@@ -157,7 +213,7 @@ class CanvasActivity : AppCompatActivity() {
 
     private fun importPdf(uri: Uri) {
         lifecycleScope.launch {
-            val pages = binding.canvasView.getController().importPdf(uri)
+            val pages = activeCanvas.getController().importPdf(uri)
             if (pages > 0) {
                 android.widget.Toast
                     .makeText(this@CanvasActivity, "Imported $pages PDF page(s)", android.widget.Toast.LENGTH_SHORT)
@@ -223,9 +279,9 @@ class CanvasActivity : AppCompatActivity() {
                         }
 
                     val matrix = android.graphics.Matrix()
-                    binding.canvasView.getViewportMatrix(matrix)
-                    val screenCenterX = binding.canvasView.width / 2f
-                    val screenCenterY = binding.canvasView.height / 2f
+                    activeCanvas.getViewportMatrix(matrix)
+                    val screenCenterX = activeCanvas.width / 2f
+                    val screenCenterY = activeCanvas.height / 2f
 
                     val values = FloatArray(9)
                     matrix.getValues(values)
@@ -236,7 +292,7 @@ class CanvasActivity : AppCompatActivity() {
                     val worldX = (screenCenterX - tx) / scale
                     val worldY = (screenCenterY - ty) / scale
 
-                    binding.canvasView.getController().pasteImage(finalUriStr, worldX, worldY, w, h)
+                    activeCanvas.getController().pasteImage(finalUriStr, worldX, worldY, w, h)
                 }
             }
         }
@@ -256,33 +312,7 @@ class CanvasActivity : AppCompatActivity() {
         com.alexdremov.notate.data.SyncManager.isCanvasOpen = true
 
         // Intercept Back Press - Save in background and close immediately
-        onBackPressedDispatcher.addCallback(this) {
-            val path = currentCanvasPath
-            if (path != null) {
-                // Launch on Activity Scope to capture data safely while Activity is alive
-                lifecycleScope.launch {
-                    val finalMetadata =
-                        try {
-                            binding.canvasView.getCanvasData().copy(
-                                toolbarItems = viewModel.toolbarItems.value,
-                            )
-                        } catch (e: Exception) {
-                            Logger.e("CanvasActivity", "Failed to capture final metadata", e)
-                            null
-                        }
-
-                    // Hand off to Process Scope for saving
-                    ProcessLifecycleOwner.get().lifecycleScope.launch {
-                        viewModel.closeSession(path, finalMetadata)
-                    }
-
-                    // Finish after data capture
-                    finish()
-                }
-            } else {
-                finish()
-            }
-        }
+        onBackPressedDispatcher.addCallback(this) { closeAndFinish() }
 
         // Initialize State Holder
         isFixedPageState = mutableStateOf(false)
@@ -323,7 +353,7 @@ class CanvasActivity : AppCompatActivity() {
             CanvasExportCoordinator(
                 this,
                 lifecycleScope,
-                { binding.canvasView.getModel() },
+                { activeCanvas.getModel() },
                 exportLauncher,
             )
 
@@ -337,14 +367,13 @@ class CanvasActivity : AppCompatActivity() {
             ToolbarCoordinator(this, binding.toolbarContainer, binding.root) { _ ->
                 updateExclusionRects()
             }
+        toolbarCoordinator.topInset = resources.getDimensionPixelSize(R.dimen.tab_bar_height)
         toolbarCoordinator.onOrientationChanged = {
             isToolbarHorizontal.value = toolbarCoordinator.getOrientation() == LinearLayout.HORIZONTAL
         }
         toolbarCoordinator.onDragStateChanged = { isDragging ->
             viewModel.setToolbarDragging(isDragging)
         }
-
-        binding.canvasView.setActionPopupContainer(binding.selectionActionsContainer)
 
         val toolbarTouch = com.alexdremov.notate.ui.input.InkGate.Reason.TOOLBAR_TOUCH
         val finishToolbarInteraction = {
@@ -402,11 +431,12 @@ class CanvasActivity : AppCompatActivity() {
                 )
                 setContent {
                     val horizontal by remember { isToolbarHorizontal }
+                    val toolbarCanvas = activeCanvasState.value ?: binding.canvasView
                     MainToolbar(
                         viewModel = viewModel,
                         isHorizontal = horizontal,
-                        canvasController = binding.canvasView.getController(),
-                        canvasModel = binding.canvasView.getModel(),
+                        canvasController = toolbarCanvas.getController(),
+                        canvasModel = toolbarCanvas.getModel(),
                         onToolClick = { item: ToolbarItem, rect: ComposeRect ->
                             val androidRect =
                                 android.graphics.Rect(
@@ -420,20 +450,20 @@ class CanvasActivity : AppCompatActivity() {
                         onActionClick = { action ->
                             when (action) {
                                 com.alexdremov.notate.model.ActionType.UNDO -> {
-                                    lifecycleScope.launch { binding.canvasView.undo() }
+                                    lifecycleScope.launch { activeCanvas.undo() }
                                 }
 
                                 com.alexdremov.notate.model.ActionType.REDO -> {
-                                    lifecycleScope.launch { binding.canvasView.redo() }
+                                    lifecycleScope.launch { activeCanvas.redo() }
                                 }
 
                                 com.alexdremov.notate.model.ActionType.INSERT_IMAGE -> {
                                     // Image, PDF, link or paste: one menu, shared with long-press on the canvas.
-                                    binding.canvasView.showInsertMenu()
+                                    activeCanvas.showInsertMenu()
                                 }
 
                                 com.alexdremov.notate.model.ActionType.ZOOM_WINDOW -> {
-                                    binding.canvasView.toggleZoomWindow()
+                                    activeCanvas.toggleZoomWindow()
                                 }
 
                                 com.alexdremov.notate.model.ActionType.GUIDES -> {
@@ -448,7 +478,7 @@ class CanvasActivity : AppCompatActivity() {
                         onToolbarExpandStart = { toolbarCoordinator.savePosition() },
                         onToolbarExpanded = {
                             toolbarCoordinator.ensureOnScreen()
-                            binding.canvasView.refreshScreen()
+                            activeCanvas.refreshScreen()
                         },
                         onToolbarCollapsed = { toolbarCoordinator.restorePosition() },
                     )
@@ -461,12 +491,12 @@ class CanvasActivity : AppCompatActivity() {
                 this,
                 binding.settingsSidebarContainer,
                 viewModel,
-                getCurrentStyle = { binding.canvasView.getBackgroundStyle() },
+                getCurrentStyle = { activeCanvas.getBackgroundStyle() },
                 isFixedPageMode = {
-                    binding.canvasView.getModel().canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
+                    activeCanvas.getModel().canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
                 },
                 onStyleUpdate = { newStyle ->
-                    lifecycleScope.launch { binding.canvasView.setBackgroundStyle(newStyle) }
+                    lifecycleScope.launch { activeCanvas.setBackgroundStyle(newStyle) }
                 },
                 onExportRequest = { action ->
                     when (action) {
@@ -488,10 +518,10 @@ class CanvasActivity : AppCompatActivity() {
                     lifecycleScope.launch(Dispatchers.Default) {
                         // Calculate visible rect in Model coordinates
                         val matrix = android.graphics.Matrix()
-                        binding.canvasView.getViewportMatrix(matrix)
+                        activeCanvas.getViewportMatrix(matrix)
 
-                        val screenWidth = binding.canvasView.width.toFloat()
-                        val screenHeight = binding.canvasView.height.toFloat()
+                        val screenWidth = activeCanvas.width.toFloat()
+                        val screenHeight = activeCanvas.height.toFloat()
 
                         val invertMatrix = android.graphics.Matrix()
                         matrix.invert(invertMatrix)
@@ -505,84 +535,20 @@ class CanvasActivity : AppCompatActivity() {
                                 intensity,
                                 visibleRect,
                             )
-                        binding.canvasView.getController().addStrokes(strokes)
+                        activeCanvas.getController().addStrokes(strokes)
                     }
                 },
                 onPalmRejectionChanged = { enabled ->
-                    binding.canvasView.setPalmRejectionEnabled(enabled)
+                    allCanvases.forEach { it.setPalmRejectionEnabled(enabled) }
+                    binding.splitLayout.fingerTapActivates = !enabled
                 },
                 onTwoFingerTapActionChange = { action ->
-                    binding.canvasView.setTwoFingerTapAction(action)
+                    allCanvases.forEach { it.setTwoFingerTapAction(action) }
                 },
                 onStylusButtonActionChange = { action ->
-                    binding.canvasView.setStylusButtonAction(action)
+                    allCanvases.forEach { it.setStylusButtonAction(action) }
                 },
             )
-        binding.canvasView.onStrokeStarted = {
-            activePenPopup?.dismiss()
-            activePenPopup = null
-            if (sidebarCoordinator.isOpen) {
-                sidebarCoordinator.close()
-            }
-        }
-
-        // If the driver already inked a stylus tap on the toolbar, repaint it clean.
-        binding.canvasView.onExcludedStrokeDiscarded = {
-            EpdController.invalidate(binding.toolbarContainer, UpdateMode.GC)
-            if (sidebarCoordinator.isOpen) {
-                EpdController.invalidate(binding.settingsSidebarContainer, UpdateMode.GC)
-            }
-        }
-
-        binding.canvasView.onRequestInsertImage = {
-            imagePickerLauncher.launch(arrayOf("image/*"))
-        }
-
-        binding.canvasView.onRequestInsertPdf = {
-            pdfPickerLauncher.launch(arrayOf("application/pdf"))
-        }
-
-        binding.canvasView.onBrowseFiles = { callback ->
-            pendingLinkCallback = callback
-
-            lifecycleScope.launch {
-                val currentPath = currentCanvasPath
-                val projectId =
-                    if (currentPath != null) {
-                        withContext(Dispatchers.IO) {
-                            syncManager.findProjectForFile(currentPath)
-                        }
-                    } else {
-                        null
-                    }
-
-                val currentUuid =
-                    viewModel.currentSession.value
-                        ?.metadata
-                        ?.uuid
-
-                val intent =
-                    Intent(this@CanvasActivity, NotePickerActivity::class.java).apply {
-                        if (projectId != null) {
-                            putExtra("LOCKED_PROJECT_ID", projectId)
-                        }
-                        if (currentUuid != null) {
-                            putExtra("DISABLED_ITEM_UUID", currentUuid)
-                        }
-                    }
-                notePickerLauncher.launch(intent)
-            }
-        }
-
-        binding.canvasView.onSelectFile = { callback ->
-            pendingFileCallback = callback
-            filePickerLauncher.launch(arrayOf("*/*"))
-        }
-
-        binding.canvasView.onLinkActivated = { link ->
-            handleLinkActivation(link)
-        }
-
         // Setup Progress Dialog
         val progressView = layoutInflater.inflate(R.layout.dialog_progress, null)
         val progressDialogBuilder =
@@ -595,7 +561,7 @@ class CanvasActivity : AppCompatActivity() {
         val progressBar = progressView.findViewById<android.widget.ProgressBar>(R.id.progressBar)
         val progressMessage = progressView.findViewById<android.widget.TextView>(R.id.tv_progress_message)
 
-        binding.canvasView.getController().setProgressCallback { isVisible, message, progress ->
+        progressCallback = { isVisible, message, progress ->
             runOnUiThread {
                 if (isVisible) {
                     if (!progressDialog!!.isShowing) {
@@ -613,18 +579,8 @@ class CanvasActivity : AppCompatActivity() {
 
         binding.canvasView.setCursorView(binding.cursorView)
         binding.minimapView.setup(binding.canvasView)
-        binding.canvasView.setPalmRejectionEnabled(
-            com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this),
-        )
-        binding.canvasView.onThreeFingerTap = {
-            viewModel.toggleDistractionFree()
-        }
-        binding.canvasView.setTwoFingerTapAction(
-            com.alexdremov.notate.data.PreferencesManager.getTwoFingerTapAction(this),
-        )
-        binding.canvasView.setStylusButtonAction(
-            com.alexdremov.notate.data.PreferencesManager.getStylusButtonAction(this),
-        )
+        wireCanvas(binding.canvasView)
+        setupTabsAndSplit()
 
         // ViewModel observation
         lifecycleScope.launch {
@@ -636,20 +592,20 @@ class CanvasActivity : AppCompatActivity() {
                 }
                 launch {
                     viewModel.activeTool.collect { tool ->
-                        binding.canvasView.setTool(tool)
-                        if (tool.type == ToolType.ERASER) {
-                            binding.canvasView.setEraser(tool)
+                        allCanvases.forEach { canvas ->
+                            canvas.setTool(tool)
+                            if (tool.type == ToolType.ERASER) canvas.setEraser(tool)
                         }
                     }
                 }
                 launch {
                     viewModel.currentEraser.collect { eraser ->
-                        eraser?.let { binding.canvasView.setEraser(it) }
+                        eraser?.let { e -> allCanvases.forEach { it.setEraser(e) } }
                     }
                 }
                 launch {
                     viewModel.isDrawingEnabled.collect { enabled ->
-                        binding.canvasView.setDrawingEnabled(enabled)
+                        allCanvases.forEach { it.setDrawingEnabled(enabled) }
                     }
                 }
                 launch {
@@ -661,7 +617,7 @@ class CanvasActivity : AppCompatActivity() {
                 }
                 launch {
                     viewModel.isFixedPageCenterHorizontal.collect { enabled ->
-                        binding.canvasView.setFixedPageCenterHorizontal(enabled)
+                        allCanvases.forEach { it.setFixedPageCenterHorizontal(enabled) }
                     }
                 }
 
@@ -704,8 +660,10 @@ class CanvasActivity : AppCompatActivity() {
                                 }
 
                                 val isFixed = session.metadata.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
-                                isFixedPageState?.value = isFixed
-                                viewModel.setFixedPageMode(isFixed)
+                                if (!secondaryActive) {
+                                    isFixedPageState?.value = isFixed
+                                    viewModel.setFixedPageMode(isFixed)
+                                }
 
                                 pendingPdfImport?.let { uri ->
                                     pendingPdfImport = null
@@ -726,11 +684,97 @@ class CanvasActivity : AppCompatActivity() {
         setupAutoSave()
     }
 
+    /** Callbacks and settings shared by the main canvas and the split-view canvas. */
+    private fun wireCanvas(view: OnyxCanvasView) {
+        view.setActionPopupContainer(binding.selectionActionsContainer)
+        view.onStrokeStarted = {
+            activePenPopup?.dismiss()
+            activePenPopup = null
+            if (sidebarCoordinator.isOpen) {
+                sidebarCoordinator.close()
+            }
+        }
+
+        // If the driver already inked a stylus tap on the toolbar, repaint it clean.
+        view.onExcludedStrokeDiscarded = {
+            EpdController.invalidate(binding.toolbarContainer, UpdateMode.GC)
+            if (sidebarCoordinator.isOpen) {
+                EpdController.invalidate(binding.settingsSidebarContainer, UpdateMode.GC)
+            }
+        }
+
+        view.onRequestInsertImage = {
+            imagePickerLauncher.launch(arrayOf("image/*"))
+        }
+
+        view.onRequestInsertPdf = {
+            pdfPickerLauncher.launch(arrayOf("application/pdf"))
+        }
+
+        view.onBrowseFiles = { callback ->
+            pendingLinkCallback = callback
+
+            lifecycleScope.launch {
+                val currentPath = activePath()
+                val projectId =
+                    if (currentPath != null) {
+                        withContext(Dispatchers.IO) {
+                            syncManager.findProjectForFile(currentPath)
+                        }
+                    } else {
+                        null
+                    }
+
+                val currentUuid =
+                    activeSession()
+                        ?.metadata
+                        ?.uuid
+
+                val intent =
+                    Intent(this@CanvasActivity, NotePickerActivity::class.java).apply {
+                        if (projectId != null) {
+                            putExtra("LOCKED_PROJECT_ID", projectId)
+                        }
+                        if (currentUuid != null) {
+                            putExtra("DISABLED_ITEM_UUID", currentUuid)
+                        }
+                    }
+                notePickerLauncher.launch(intent)
+            }
+        }
+
+        view.onSelectFile = { callback ->
+            pendingFileCallback = callback
+            filePickerLauncher.launch(arrayOf("*/*"))
+        }
+
+        view.onLinkActivated = { link ->
+            handleLinkActivation(link)
+        }
+
+        progressCallback?.let { view.getController().setProgressCallback(it) }
+        view.setPalmRejectionEnabled(
+            com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this),
+        )
+        view.onThreeFingerTap = {
+            viewModel.toggleDistractionFree()
+        }
+        view.setTwoFingerTapAction(
+            com.alexdremov.notate.data.PreferencesManager.getTwoFingerTapAction(this),
+        )
+        view.setStylusButtonAction(
+            com.alexdremov.notate.data.PreferencesManager.getStylusButtonAction(this),
+        )
+        view.setTool(viewModel.activeTool.value)
+        viewModel.currentEraser.value?.let { view.setEraser(it) }
+        view.setFixedPageCenterHorizontal(viewModel.isFixedPageCenterHorizontal.value)
+    }
+
     private val externalProjectRepositories = mutableMapOf<String, com.alexdremov.notate.data.ProjectRepository>()
 
     /** Ruler / protractor picker behind the single toolbar button: icon toggles, no text. */
     private fun showGuidesPicker() {
-        val canvas = binding.canvasView
+        val canvas = activeCanvas
         val dp = resources.displayMetrics.density
         val row =
             android.widget.LinearLayout(this).apply {
@@ -1015,6 +1059,343 @@ class CanvasActivity : AppCompatActivity() {
         }
     }
 
+
+    // --- Tabs and split view ---
+
+    private fun setupTabsAndSplit() {
+        val path = currentCanvasPath
+        if (path != null) {
+            workspace = WorkspaceStore.update(this) { it.open(DocTab(DocKind.NOTE, path, WorkspaceStore.titleFor(path))) }
+        }
+        binding.splitLayout.setPanes(binding.primaryPane, null)
+        binding.splitLayout.fingerTapActivates =
+            !com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this)
+        binding.splitLayout.onPaneTouched = { index -> setActivePane(useSecondary = index != primarySlot()) }
+        binding.splitLayout.onDividerDragStateChanged = { dragging ->
+            inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.SPLIT_DIVIDER, dragging)
+            if (dragging) {
+                com.onyx.android.sdk.api.device.EpdDeviceManager
+                    .enterAnimationUpdate(true)
+            } else {
+                com.onyx.android.sdk.api.device.EpdDeviceManager
+                    .exitAnimationUpdate(true)
+                updateExclusionRects()
+            }
+        }
+        binding.splitLayout.onDragReleased = { outcome ->
+            when (outcome) {
+                is com.alexdremov.notate.ui.split.SplitDrag.Outcome.Resize -> {
+                    currentCanvasPath?.let { p -> workspace = WorkspaceStore.update(this) { it.updateSplit(p) { s -> s.copy(ratio = outcome.ratio) } } }
+                }
+
+                is com.alexdremov.notate.ui.split.SplitDrag.Outcome.Collapse -> {
+                    if (outcome.keepIndex == primarySlot()) exitSplit() else secondary?.path?.let { promoteToSingle(it) }
+                }
+            }
+        }
+
+        binding.tabBar.onHome = { closeAndFinish() }
+        binding.tabBar.onTabClick = { tab -> onTabSelected(tab) }
+        binding.tabBar.onTabClose = { tab -> closeTab(tab) }
+        binding.tabBar.onSplit = { orientation -> onSplitButton(orientation) }
+        binding.tabBar.onSwapPanes = {
+            currentCanvasPath?.let { p ->
+                workspace = WorkspaceStore.update(this) { it.updateSplit(p) { s -> s.copy(first = s.second, second = s.first, ratio = 1f - s.ratio) } }
+                layoutPanes()
+            }
+        }
+        binding.tabBar.onExitSplit = { exitSplit() }
+
+        val split = path?.let { workspace.splitFor(it) }
+        val partner = split?.partnerOf(path)
+        if (partner != null) openSecondary(partner)
+        layoutPanes()
+        renderTabs()
+    }
+
+    private fun currentSplit(): SplitState? = currentCanvasPath?.let { workspace.splitFor(it) }
+
+    /** Slot (0 = left/top, 1 = right/bottom) of the main note. */
+    private fun primarySlot(): Int {
+        val split = currentSplit() ?: return 0
+        return if (split.first == currentCanvasPath) 0 else 1
+    }
+
+    private fun layoutPanes() {
+        val split = currentSplit()
+        val pane = secondary
+        val layout = binding.splitLayout
+        if (split == null || pane == null) {
+            layout.setPanes(binding.primaryPane, null)
+        } else {
+            if (primarySlot() == 0) layout.setPanes(binding.primaryPane, pane.container) else layout.setPanes(pane.container, binding.primaryPane)
+            layout.orientation = split.orientation
+            layout.ratio = split.ratio
+            layout.activeIndex = if (secondaryActive) 1 - primarySlot() else primarySlot()
+        }
+        // The minimap belongs to the main pane and gets in the way of a half-width pane.
+        binding.minimapView.visibility = if (layout.isSplit || viewModel.isDistractionFree.value) View.GONE else View.VISIBLE
+        layout.post { updateExclusionRects() }
+        renderTabs()
+    }
+
+    private fun renderTabs() {
+        val shown = setOfNotNull(currentCanvasPath, secondary?.path)
+        binding.tabBar.render(workspace.tabs, activePath(), shown, if (secondary != null) currentSplit() else null)
+    }
+
+    /** Moves the pen (raw drawing), toolbar and menus to the other pane. */
+    private fun setActivePane(useSecondary: Boolean) {
+        val pane = secondary
+        val target = if (useSecondary && pane != null) pane.canvas else binding.canvasView
+        if (target === activeCanvas && target.isPaneActive) return
+        val old = activeCanvas
+        old.setPaneActive(false)
+        secondaryActive = useSecondary && pane != null
+        target.setPaneActive(true)
+        target.doOnLayout { if (it === activeCanvas) target.setDrawingEnabled(inkGate.isInkAllowed) }
+        activeCanvasState.value = target
+
+        val isFixed = target.getModel().canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
+        isFixedPageState?.value = isFixed
+        viewModel.setFixedPageMode(isFixed)
+
+        binding.splitLayout.activeIndex = if (secondaryActive) 1 - primarySlot() else primarySlot()
+        activePath()?.let { p -> workspace = WorkspaceStore.update(this) { it.activate(p) } }
+        updateExclusionRects()
+        renderTabs()
+    }
+
+    private fun onTabSelected(tab: DocTab) {
+        when (tab.path) {
+            activePath() -> return
+            currentCanvasPath -> setActivePane(useSecondary = false)
+            secondary?.path -> setActivePane(useSecondary = true)
+            else -> switchToTab(tab)
+        }
+    }
+
+    private fun closeTab(tab: DocTab) {
+        when (tab.path) {
+            secondary?.path -> {
+                exitSplit()
+                workspace = WorkspaceStore.update(this) { it.close(tab.path) }
+                renderTabs()
+            }
+
+            currentCanvasPath -> {
+                workspace = WorkspaceStore.update(this) { it.close(tab.path) }
+                val next = secondary?.path?.let { workspace.tab(it) } ?: workspace.activePath?.let { workspace.tab(it) }
+                if (next != null) switchToTab(next) else closeAndFinish()
+            }
+
+            else -> {
+                workspace = WorkspaceStore.update(this) { it.close(tab.path) }
+                renderTabs()
+            }
+        }
+    }
+
+    private fun onSplitButton(orientation: SplitOrientation) {
+        val split = currentSplit()
+        if (split != null && secondary != null) {
+            if (split.orientation != orientation) {
+                currentCanvasPath?.let { p -> workspace = WorkspaceStore.update(this) { it.updateSplit(p) { s -> s.copy(orientation = orientation) } } }
+                layoutPanes()
+            }
+            return
+        }
+        pendingSplitOrientation = orientation
+        val current = currentCanvasPath ?: return
+        val candidates = workspace.tabs.filter { it.kind == DocKind.NOTE && it.path != current }
+        val labels = candidates.map { it.title } + "Browse notes\u2026"
+        androidx.appcompat.app.AlertDialog
+            .Builder(this)
+            .setTitle(if (orientation == SplitOrientation.SIDE_BY_SIDE) "Open beside" else "Open below")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which < candidates.size) {
+                    startSplit(candidates[which].path, orientation)
+                } else {
+                    val intent =
+                        Intent(this, NotePickerActivity::class.java).apply {
+                            activeSession()?.metadata?.uuid?.let { putExtra("DISABLED_ITEM_UUID", it) }
+                        }
+                    splitPickerLauncher.launch(intent)
+                }
+            }.show()
+    }
+
+    private fun startSplit(
+        other: String,
+        orientation: SplitOrientation,
+    ) {
+        val current = currentCanvasPath ?: return
+        if (other == current) {
+            android.widget.Toast.makeText(this, "This note is already open", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (secondary != null) closeSecondary()
+        workspace =
+            WorkspaceStore.update(this) {
+                it
+                    .open(DocTab(DocKind.NOTE, other, WorkspaceStore.titleFor(other)))
+                    .split(current, other, orientation)
+            }
+        openSecondary(other)
+        layoutPanes()
+        // Like Notability: the note just opened beside gets the pen.
+        setActivePane(useSecondary = true)
+    }
+
+    /** Leaves split view, keeping the main note full screen. */
+    private fun exitSplit() {
+        val path = currentCanvasPath ?: return
+        setActivePane(useSecondary = false)
+        closeSecondary()
+        workspace = WorkspaceStore.update(this) { it.unsplit(path) }
+        layoutPanes()
+    }
+
+    /** Leaves split view keeping the other note: reopens the editor on it. */
+    private fun promoteToSingle(path: String) {
+        workspace = WorkspaceStore.update(this) { it.unsplit(path) }
+        switchToTab(workspace.tab(path) ?: DocTab(DocKind.NOTE, path, WorkspaceStore.titleFor(path)))
+    }
+
+    /**
+     * Opens a tab that is not on screen: saves this editor, then opens the note (restoring its
+     * split) or the book in the reader.
+     */
+    private fun switchToTab(tab: DocTab) {
+        if (isSwitchingTabs) return
+        isSwitchingTabs = true
+        workspace = WorkspaceStore.update(this) { it.activate(tab.path) }
+        closeAndFinish { startActivity(com.alexdremov.notate.ui.tabs.TabNavigator.intentFor(this, tab)) }
+    }
+
+    /** Saves and closes everything, then finishes. [beforeFinish] runs once the data is captured. */
+    private fun closeAndFinish(beforeFinish: (() -> Unit)? = null) {
+        val path = currentCanvasPath
+        lifecycleScope.launch {
+            closeSecondary()
+            if (path != null) {
+                val finalMetadata =
+                    try {
+                        binding.canvasView.getCanvasData().copy(
+                            toolbarItems = viewModel.toolbarItems.value,
+                        )
+                    } catch (e: Exception) {
+                        Logger.e("CanvasActivity", "Failed to capture final metadata", e)
+                        null
+                    }
+
+                // Hand off to Process Scope for saving
+                ProcessLifecycleOwner.get().lifecycleScope.launch {
+                    viewModel.closeSession(path, finalMetadata)
+                }
+            }
+            beforeFinish?.invoke()
+            finish()
+            if (beforeFinish != null) overridePendingTransition(0, 0)
+        }
+    }
+
+    private fun openSecondary(path: String) {
+        val pane = SecondaryPane(path)
+        secondary = pane
+        wireCanvas(pane.canvas)
+        pane.canvas.onContentChanged = {
+            pane.saveJob?.cancel()
+            pane.saveJob =
+                lifecycleScope.launch {
+                    delay(500)
+                    if (isActive) saveSecondary(pane, commit = false)
+                }
+        }
+        lifecycleScope.launch {
+            val session =
+                try {
+                    withContext(Dispatchers.IO) { canvasRepository.openCanvasSession(path) }
+                } catch (e: Exception) {
+                    Logger.e("CanvasActivity", "Failed to open split note", e, showToUser = true)
+                    null
+                }
+            if (secondary !== pane) {
+                session?.let { withContext(Dispatchers.IO) { canvasRepository.releaseCanvasSession(it) } }
+                return@launch
+            }
+            if (session == null) {
+                exitSplit()
+                return@launch
+            }
+            pane.session = session
+            pane.canvas.getModel().initializeSession(session.regionManager, session.metadata.nextStrokeOrder)
+            pane.canvas.loadMetadata(session.metadata)
+            if (secondaryActive) {
+                val isFixed = session.metadata.canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
+                isFixedPageState?.value = isFixed
+                viewModel.setFixedPageMode(isFixed)
+            }
+        }
+    }
+
+    private suspend fun saveSecondary(
+        pane: SecondaryPane,
+        commit: Boolean,
+    ) {
+        val session = pane.session ?: return
+        val data =
+            withContext(Dispatchers.Main) {
+                try {
+                    pane.canvas.getCanvasData().copy(toolbarItems = viewModel.toolbarItems.value)
+                } catch (e: Exception) {
+                    Logger.e("CanvasActivity", "Failed to capture split note", e)
+                    null
+                }
+            } ?: return
+        withContext(Dispatchers.IO) {
+            pane.saveMutex.withLock {
+                if (session.isClosed()) return@withLock
+                try {
+                    session.updateMetadata(data)
+                    val result = canvasRepository.saveCanvasSession(pane.path, session, commitToZip = commit)
+                    session.updateOrigin(result.newLastModified, result.newSize)
+                    if (result.isConflict) {
+                        Logger.w("CanvasActivity", "Split note changed outside the app. Saved as copy: ${result.savedPath}")
+                    }
+                } catch (e: Exception) {
+                    Logger.e("CanvasActivity", "Failed to save split note", e, showToUser = true)
+                }
+            }
+        }
+    }
+
+    /** Saves the split-view note and releases it. Safe to call from onDestroy. */
+    private fun closeSecondary() {
+        val pane = secondary ?: return
+        if (secondaryActive) setActivePane(useSecondary = false)
+        secondary = null
+        pane.saveJob?.cancel()
+        pane.canvas.setPaneActive(false)
+        val session = pane.session
+        ProcessLifecycleOwner.get().lifecycleScope.launch {
+            if (session != null) {
+                saveSecondary(pane, commit = false)
+                withContext(Dispatchers.IO) {
+                    pane.saveMutex.withLock {
+                        try {
+                            canvasRepository.saveAndCloseSession(pane.path, session)
+                        } catch (e: Exception) {
+                            Logger.e("CanvasActivity", "Failed to close split note", e)
+                            canvasRepository.releaseCanvasSession(session)
+                        }
+                    }
+                }
+            }
+            withContext(Dispatchers.Main) { (pane.container.parent as? ViewGroup)?.removeView(pane.container) }
+        }
+    }
+
     private fun setupAutoSave() {
         binding.canvasView.onContentChanged = {
             scheduleAutoSave()
@@ -1059,6 +1440,7 @@ class CanvasActivity : AppCompatActivity() {
                 try {
                     // 1. Full Save (Blocking in this coroutine)
                     saveCanvasSuspend(commit = true)
+                    secondary?.let { saveSecondary(it, commit = true) }
 
                     // 2. Trigger Sync (only after save completes)
                     val projectId = syncManager.findProjectForFile(path)
@@ -1077,6 +1459,7 @@ class CanvasActivity : AppCompatActivity() {
         super.onDestroy()
         autoSaveJob?.cancel()
         closeFloatingSession()
+        closeSecondary()
         // Session cleanup is handled by ViewModel or explicit close in onBackPressed
     }
 
@@ -1149,7 +1532,12 @@ class CanvasActivity : AppCompatActivity() {
     private fun setDistractionFree(enabled: Boolean) {
         val vis = if (enabled) View.GONE else View.VISIBLE
         binding.toolbarContainer.visibility = vis
-        binding.minimapView.visibility = vis
+        binding.minimapView.visibility = if (enabled || binding.splitLayout.isSplit) View.GONE else View.VISIBLE
+        binding.tabBar.visibility = vis
+        (binding.splitLayout.layoutParams as ViewGroup.MarginLayoutParams).let { lp ->
+            lp.topMargin = if (enabled) 0 else resources.getDimensionPixelSize(R.dimen.tab_bar_height)
+            binding.splitLayout.layoutParams = lp
+        }
         if (enabled) {
             sidebarCoordinator.close()
         }
@@ -1167,7 +1555,7 @@ class CanvasActivity : AppCompatActivity() {
             rects.add(sidebarRect)
         }
 
-        binding.canvasView.setExclusionRects(rects)
+        activeCanvas.setExclusionRects(rects)
     }
 
     private fun handleToolClick(
@@ -1186,9 +1574,9 @@ class CanvasActivity : AppCompatActivity() {
 
         // If clicking same tool (opening settings) OR switching to TEXT/SELECT, preserve selection.
         if (viewModel.activeToolId.value != toolId && !isSelectionSafeTool) {
-            lifecycleScope.launch { binding.canvasView.getController().clearSelection() }
+            lifecycleScope.launch { activeCanvas.getController().clearSelection() }
         }
-        binding.canvasView.dismissActionPopup()
+        activeCanvas.dismissActionPopup()
 
         // The shape pen is a single toolbar button whose shapes live in its popup, so a tap always opens it.
         val opensOnFirstTap = item is ToolbarItem.Pen && item.penTool.isShapeTool
@@ -1214,7 +1602,7 @@ class CanvasActivity : AppCompatActivity() {
                         viewModel.updateTool(updatedTool)
                         if (updatedTool.type == ToolType.TEXT) {
                             lifecycleScope.launch {
-                                binding.canvasView.getController().updateSelectedTextStyle(
+                                activeCanvas.getController().updateSelectedTextStyle(
                                     fontSize = updatedTool.width,
                                     color = updatedTool.color,
                                 )
