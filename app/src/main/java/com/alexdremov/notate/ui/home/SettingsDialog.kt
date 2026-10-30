@@ -50,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.alexdremov.notate.ui.theme.InkMuted
 import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
 import com.alexdremov.notate.data.PreferencesManager
@@ -278,7 +279,7 @@ fun SettingsDialog(
                                 Text(
                                     "Runs after save; older notes run only while charging.",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray,
+                                    color = InkMuted,
                                 )
                             }
                             Switch(
@@ -314,7 +315,7 @@ fun SettingsDialog(
                         Text(
                             "The index stays on this device. Converted text items remain normal synced note content.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray,
+                            color = InkMuted,
                             modifier = Modifier.padding(top = 10.dp),
                         )
                     }
@@ -368,13 +369,13 @@ private fun SettingsMenuItem(
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray,
+                color = InkMuted,
             )
         }
         Icon(
             imageVector = Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = Color.Gray,
+            tint = InkMuted,
         )
     }
 }
@@ -400,7 +401,7 @@ private fun AboutSettings() {
         Text(
             text = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color.Gray,
+            color = InkMuted,
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(

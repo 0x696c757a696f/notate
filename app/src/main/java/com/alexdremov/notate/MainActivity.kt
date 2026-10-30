@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,6 +38,10 @@ import com.alexdremov.notate.data.RemoteStorageType
 import com.alexdremov.notate.data.SortOption
 import com.alexdremov.notate.ui.home.*
 import com.alexdremov.notate.ui.home.components.DeleteConfirmationDialog
+import com.alexdremov.notate.ui.home.components.EmptyState
+import com.alexdremov.notate.ui.home.components.EmptyStateAction
+import com.alexdremov.notate.ui.theme.Ink
+import com.alexdremov.notate.ui.theme.Spacing
 import com.alexdremov.notate.ui.theme.NotateTheme
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.vm.HomeViewModel
@@ -410,27 +416,31 @@ fun MainScreen(
                     )
                 } else if (currentProject == null && selectedTag == null) {
                     // --- Empty State ---
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text =
-                                    when {
-                                        lockedProjectId != null -> "Loading project..."
-                                        projects.isEmpty() -> "Create a project to start taking notes"
-                                        else -> "Select a project from the sidebar"
+                    when {
+                        lockedProjectId != null -> {
+                            EmptyState(title = "Opening project")
+                        }
+
+                        projects.isEmpty() -> {
+                            EmptyState(
+                                title = "No projects yet",
+                                message = "A project holds your notebooks, like a shelf. Create one to start writing.",
+                                icon = Icons.Outlined.FolderOpen,
+                                actions =
+                                    if (isPickerMode) {
+                                        emptyList()
+                                    } else {
+                                        listOf(EmptyStateAction("New project") { showNameDialog = DialogType.ADD_PROJECT })
                                     },
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (lockedProjectId == null && !isPickerMode && projects.isEmpty()) {
-                                Spacer(Modifier.height(16.dp))
-                                OutlinedButton(onClick = { showNameDialog = DialogType.ADD_PROJECT }) {
-                                    Text("New Project", color = Color.Black)
-                                }
-                            }
+                        }
+
+                        else -> {
+                            EmptyState(
+                                title = "Pick a project",
+                                message = "Choose a project from the sidebar to see its notes.",
+                                icon = Icons.Outlined.FolderOpen,
+                            )
                         }
                     }
                 } else {
@@ -468,6 +478,8 @@ fun MainScreen(
                         onSetFileTags = { item, newTags -> if (!isPickerMode) viewModel.setFileTags(item, newTags) },
                         favorites = favorites,
                         recents = recents,
+                        onCreateCanvas = { showNameDialog = DialogType.CREATE_CANVAS },
+                        onCreateFolder = { showNameDialog = DialogType.CREATE_FOLDER },
                         onToggleFavorite = { if (!isPickerMode) viewModel.toggleFavorite(it) },
                     )
                 }
@@ -520,14 +532,16 @@ fun MainScreen(
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.Black,
+                                // Static icon: an animated spinner keeps the e-ink panel refreshing.
+                                Icon(
+                                    imageVector = Icons.Outlined.Save,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(Spacing.lg),
+                                    tint = Ink,
                                 )
-                                Spacer(Modifier.width(8.dp))
+                                Spacer(Modifier.width(Spacing.sm))
                                 Text(
-                                    text = if (savingPaths.size == 1) "Saving canvas..." else "Saving ${savingPaths.size} items...",
+                                    text = if (savingPaths.size == 1) "Saving canvas" else "Saving ${savingPaths.size} canvases",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -584,7 +598,7 @@ fun MainScreen(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Remove Project", color = Color.Red)
+                        Text("Remove project", color = Color.Red)
                     }
                 }
             },
@@ -606,7 +620,7 @@ fun MainScreen(
     val renameTarget = projectToRename
     if (renameTarget != null) {
         TextInputDialog(
-            title = "Rename Project",
+            title = "Rename project",
             initialValue = renameTarget.name,
             confirmText = "Rename",
             onDismiss = { projectToRename = null },
@@ -729,7 +743,7 @@ fun MainScreen(
 
         DialogType.CREATE_FOLDER -> {
             TextInputDialog(
-                title = "New Folder",
+                title = "New folder",
                 onDismiss = { showNameDialog = null },
                 onConfirm = { name ->
                     viewModel.createFolder(name)
