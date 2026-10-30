@@ -199,24 +199,6 @@ class RegionStoreSwizzleTest {
         assertTrue("swizzle failures:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
-    // TEMPORARY (diagnostics for a once-seen CI failure "seed=5 op=71:
-    // MISSING=[0]"): repeat every seed to catch the nondeterministic
-    // interleaving with forensics on. Remove before merging.
-    @Test
-    fun `swizzle repro loop`() {
-        val failures = ArrayList<String>()
-        repeat(12) { round ->
-            for (seed in 1L..6L) {
-                try {
-                    swizzleOnce(seed)
-                } catch (e: Throwable) {
-                    failures.add("round=$round seed=$seed → ${e.message}")
-                }
-            }
-        }
-        assertTrue("swizzle repro failures:\n${failures.joinToString("\n")}", failures.isEmpty())
-    }
-
     private fun swizzleOnce(seed: Long) {
         managers.clear()
         everCreated.clear()
