@@ -57,6 +57,11 @@ import com.alexdremov.notate.util.UriUtils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import com.alexdremov.notate.ui.tabs.DocKind
+import com.alexdremov.notate.ui.tabs.DocTab
+import com.alexdremov.notate.ui.tabs.TabBarView
+import com.alexdremov.notate.ui.tabs.TabNavigator
+import com.alexdremov.notate.ui.tabs.WorkspaceStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -160,6 +165,8 @@ class WebDocActivity : AppCompatActivity() {
     private val toolbarVm: DrawingViewModel by viewModels()
     private var activePenPopup: PenSettingsPopup? = null
     private var prevButton: TextView? = null
+    private var tabBar: TabBarView? = null
+    private var isSwitchingTabs = false
     private var nextButton: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -173,6 +180,7 @@ class WebDocActivity : AppCompatActivity() {
             docId != null -> {
                 val m = library.loadMeta(docId)
                 if (m == null) {
+                    WorkspaceStore.update(this) { it.close(docId) }
                     toast("Document not found or deleted")
                     finish()
                     return
@@ -286,7 +294,18 @@ class WebDocActivity : AppCompatActivity() {
         root.addView(toolbarScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(View(this).apply { setBackgroundColor(Color.BLACK) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
 
-        toolbar.addView(button("‹ Back") { finish() })
+        // Tabs shared with the note editor; Home replaces the old Back button.
+        val tabs =
+            TabBarView(this).apply {
+                splitButtonsVisible = false
+                onHome = { finish() }
+                onTabClick = { tab -> switchToTab(tab) }
+                onTabClose = { tab -> closeTab(tab) }
+            }
+        tabBar = tabs
+        root.addView(tabs, 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, resources.getDimensionPixelSize(R.dimen.tab_bar_height)))
+        WorkspaceStore.update(this) { it.open(DocTab(DocKind.WEB, m.id, m.title)) }
+        renderTabs()
         titleView =
             TextView(this).apply {
                 text = m.title
@@ -346,7 +365,8 @@ class WebDocActivity : AppCompatActivity() {
                     },
                 )
             }
-        root.addView(inkToolbarScroll, 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // Below the tab bar and the reader toolbar.
+        root.addView(inkToolbarScroll, 2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         content = FrameLayout(this)
         webView =
@@ -1234,8 +1254,37 @@ class WebDocActivity : AppCompatActivity() {
         closeNativeInk()
     }
 
+    // ---------------------------------------------------------------- tabs
+
+    private fun renderTabs() {
+        val id = meta?.id ?: return
+        tabBar?.render(WorkspaceStore.load(this).tabs, id, setOf(id), null)
+    }
+
+    /** Opens another tab (note or book); this reader saves in onPause. */
+    private fun switchToTab(tab: DocTab) {
+        if (tab.path == meta?.id || isSwitchingTabs) return
+        isSwitchingTabs = true
+        WorkspaceStore.update(this) { it.activate(tab.path) }
+        startActivity(TabNavigator.intentFor(this, tab))
+        finish()
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
+    }
+
+    private fun closeTab(tab: DocTab) {
+        val workspace = WorkspaceStore.update(this) { it.close(tab.path) }
+        if (tab.path != meta?.id) {
+            renderTabs()
+            return
+        }
+        val next = workspace.activePath?.let { workspace.tab(it) }
+        if (next != null) switchToTab(next) else finish()
+    }
+
     override fun onResume() {
         super.onResume()
+        renderTabs()
         if (::webView.isInitialized) {
             webView.onResume()
             overlay.post { openNativeInk() }
