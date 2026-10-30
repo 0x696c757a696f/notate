@@ -20,8 +20,11 @@ android {
         applicationId = "com.alexdremov.notate"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // CI passes -Pnotate.versionCode=<run number> so every build installs
+        // over the previous one; local builds stay at 1.
+        val ciVersionCode = providers.gradleProperty("notate.versionCode").orNull?.toInt()
+        versionCode = ciVersionCode ?: 1
+        versionName = if (ciVersionCode != null) "1.0.$ciVersionCode" else "1.0"
         ndk {
             // Boox devices are ARM64; the OCR runtime ships ARM64 native code only.
             abiFilters += "arm64-v8a"
@@ -32,6 +35,15 @@ android {
     }
 
     signingConfigs {
+        // Shared debug key committed to the repo, so CI and local debug APKs
+        // carry the same signature and can be installed over each other.
+        // Not a secret: it only signs debug builds.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             val keystoreFile = rootProject.file("keystore.properties")
             if (keystoreFile.exists()) {
@@ -52,7 +64,7 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
         debug {
-            // Standard debug build uses default ~/.android/debug.keystore
+            signingConfig = signingConfigs.getByName("debug")
             enableUnitTestCoverage = true
         }
     }

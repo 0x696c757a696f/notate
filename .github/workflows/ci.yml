@@ -41,7 +41,7 @@ jobs:
 
     # ABI is pinned to arm64-v8a in app/build.gradle.kts (defaultConfig.ndk.abiFilters).
     - name: Build arm64-v8a Debug APK
-      run: ./gradlew assembleDebug
+      run: ./gradlew assembleDebug -Pnotate.versionCode=${{ github.run_number }}
 
     - name: Verify APK only ships arm64-v8a native code
       run: |
@@ -56,7 +56,7 @@ jobs:
     - name: Upload Debug APK
       uses: actions/upload-artifact@v7
       with:
-        name: notate-debug-arm64-v8a-${{ github.sha }}
+        name: notate-debug-arm64-v8a-${{ github.run_number }}-${{ github.sha }}
         path: app/build/outputs/apk/debug/*.apk
         retention-days: 14
 
