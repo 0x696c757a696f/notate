@@ -442,6 +442,12 @@ class PenSettingsPopup(
             updateSliderRange(selectedType)
         }
 
+        // Dashed and dotted lines belong to the Lines tool; regular pens only keep them if already set.
+        for (lineStyle in listOf(StrokeType.DASH, StrokeType.DOT)) {
+            styleViews[lineStyle]?.visibility =
+                if (currentTool.strokeType == lineStyle) View.VISIBLE else View.GONE
+        }
+
         styleViews.forEach { (type, view) ->
             view.setOnClickListener {
                 updateTool { it.copy(strokeType = type) }
