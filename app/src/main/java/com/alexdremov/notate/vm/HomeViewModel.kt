@@ -85,6 +85,7 @@ class HomeViewModel(
         loadProjects()
         loadTags()
         loadSortOption()
+        restoreLastProject()
         startIndexing()
         observeSaveStatus()
         observeGlobalSync()
@@ -385,6 +386,25 @@ class HomeViewModel(
         name: String,
         uri: String,
     ) {
+        val config = registerProject(name, uri)
+        startIndexing()
+        // A freshly created project is what the user wants to work in next.
+        openProject(config)
+    }
+
+    /**
+     * Creates a project stored inside the app, without asking the user to pick a folder
+     * through the system file manager.
+     */
+    fun addLocalProject(name: String) {
+        val dir = ProjectRepository.createLocalProjectFolder(getApplication(), name)
+        addProject(name, dir.absolutePath)
+    }
+
+    private fun registerProject(
+        name: String,
+        uri: String,
+    ): ProjectConfig {
         val config =
             ProjectConfig(
                 id = UUID.randomUUID().toString(),
@@ -393,10 +413,38 @@ class HomeViewModel(
             )
         PreferencesManager.addProject(getApplication(), config)
         loadProjects()
-        startIndexing()
+        return config
     }
 
+    /**
+     * Reopens the project the user last worked in, so the home screen does not start on an
+     * empty "select a project" page. On a fresh install a default on-device project is created
+     * once, so a new notebook is one tap away.
+     */
+    private fun restoreLastProject() {
+        val prefs = homeUiPrefs()
+        if (_projects.value.isEmpty() && !prefs.getBoolean(KEY_DEFAULT_PROJECT_CREATED, false)) {
+            try {
+                val dir = ProjectRepository.createLocalProjectFolder(getApplication(), DEFAULT_PROJECT_NAME)
+                registerProject(DEFAULT_PROJECT_NAME, dir.absolutePath)
+            } catch (e: Exception) {
+                Logger.e("HomeViewModel", "Failed to create default project", e)
+            }
+            prefs.edit().putBoolean(KEY_DEFAULT_PROJECT_CREATED, true).apply()
+        }
+
+        val projects = _projects.value
+        val lastId = prefs.getString(KEY_LAST_PROJECT_ID, null)
+        val target = projects.firstOrNull { it.id == lastId } ?: projects.singleOrNull() ?: return
+        openProject(target)
+    }
+
+    private fun homeUiPrefs() = getApplication<Application>().getSharedPreferences(HOME_UI_PREFS, android.content.Context.MODE_PRIVATE)
+
     fun removeProject(project: ProjectConfig) {
+        if (homeUiPrefs().getString(KEY_LAST_PROJECT_ID, null) == project.id) {
+            homeUiPrefs().edit().remove(KEY_LAST_PROJECT_ID).apply()
+        }
         PreferencesManager.removeProject(getApplication(), project.id)
         loadedRepositories.remove(project.id)
         loadProjects()
@@ -407,6 +455,7 @@ class HomeViewModel(
         _currentProject.value = project
         val repo = getRepository(project)
         repository = repo
+        homeUiPrefs().edit().putString(KEY_LAST_PROJECT_ID, project.id).apply()
 
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -845,4 +894,11 @@ class HomeViewModel(
     }
 
     fun isAtTopLevel(): Boolean = _currentProject.value == null
+
+    companion object {
+        private const val HOME_UI_PREFS = "notate_home_ui"
+        private const val KEY_LAST_PROJECT_ID = "last_project_id"
+        private const val KEY_DEFAULT_PROJECT_CREATED = "default_project_created"
+        private const val DEFAULT_PROJECT_NAME = "My Notes"
+    }
 }
