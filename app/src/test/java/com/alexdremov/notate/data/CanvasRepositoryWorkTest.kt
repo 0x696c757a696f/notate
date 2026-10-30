@@ -8,6 +8,7 @@ import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.alexdremov.notate.data.io.FileLockManager
 import com.alexdremov.notate.data.worker.SaveWorker
+import com.alexdremov.notate.data.worker.OcrIndexWorker
 import com.alexdremov.notate.model.StrokeType
 import io.mockk.every
 import io.mockk.mockk
@@ -89,12 +90,16 @@ class CanvasRepositoryWorkTest {
             val workInfos = workManager.getWorkInfosForUniqueWork(uniqueWorkName).get()
 
             assertFalse("Work request should be enqueued for $uniqueWorkName", workInfos.isEmpty())
+            assertTrue(
+                "OCR indexing should be chained after save",
+                workInfos.any { OcrIndexWorker.TAG in it.tags },
+            )
 
             // Since SynchronousExecutor runs immediately, it might be SUCCEEDED
             val state = workInfos[0].state
             assertTrue(
-                "State should be ENQUEUED or SUCCEEDED (was $state)",
-                state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.SUCCEEDED,
+                "State should be active or succeeded (was $state)",
+                state == WorkInfo.State.ENQUEUED || state == WorkInfo.State.RUNNING || state == WorkInfo.State.SUCCEEDED,
             )
 
             // Also verify session is closed

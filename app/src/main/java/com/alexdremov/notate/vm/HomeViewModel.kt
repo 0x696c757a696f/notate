@@ -11,6 +11,8 @@ import com.alexdremov.notate.model.BreadcrumbItem
 import com.alexdremov.notate.model.Tag
 import com.alexdremov.notate.util.Logger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,6 +74,13 @@ class HomeViewModel(
     private val _savingPaths = MutableStateFlow<Set<String>>(emptySet())
     val savingPaths: StateFlow<Set<String>> = _savingPaths.asStateFlow()
 
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+    private val _searchResults = MutableStateFlow<List<com.alexdremov.notate.ocr.index.OcrSearchResult>>(emptyList())
+    val searchResults: StateFlow<List<com.alexdremov.notate.ocr.index.OcrSearchResult>> = _searchResults.asStateFlow()
+    private var searchJob: Job? = null
+    private val ocrSearchRepository = com.alexdremov.notate.ocr.index.OcrSearchRepository.get(application)
+
     private val _favorites = MutableStateFlow<Set<String>>(emptySet())
     val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
 
@@ -86,7 +95,22 @@ class HomeViewModel(
         startIndexing()
         observeSaveStatus()
         observeGlobalSync()
+        com.alexdremov.notate.data.worker.OcrBackfillScheduler.schedule(application)
         loadFavorites()
+    }
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            _searchResults.value = emptyList()
+            return
+        }
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(150)
+            val results = ocrSearchRepository.search(query)
+            if (_searchQuery.value == query) _searchResults.value = results
+        }
     }
 
     private fun loadFavorites() {

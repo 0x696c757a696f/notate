@@ -67,6 +67,7 @@ object PreferencesManager {
     private const val KEY_PDF_EXPORT_SCALE = "pdf_export_scale"
     private const val KEY_SYNC_PDF_TYPE = "sync_pdf_type"
     private const val KEY_FIXED_PAGE_CENTER_HORIZONTAL = "fixed_page_center_horizontal"
+    private const val KEY_BACKGROUND_OCR_INDEXING = "background_ocr_indexing"
     private const val KEY_TWO_FINGER_TAP_ACTION = "two_finger_tap_action"
     private const val KEY_STYLUS_BUTTON_ACTION = "stylus_button_action"
 
@@ -157,6 +158,16 @@ object PreferencesManager {
         enabled: Boolean,
     ) {
         getPrefs(context).edit().putBoolean(KEY_FIXED_PAGE_CENTER_HORIZONTAL, enabled).apply()
+    }
+
+    fun isBackgroundOcrIndexingEnabled(context: Context): Boolean =
+        getPrefs(context).getBoolean(KEY_BACKGROUND_OCR_INDEXING, true)
+
+    fun setBackgroundOcrIndexingEnabled(
+        context: Context,
+        enabled: Boolean,
+    ) {
+        getPrefs(context).edit().putBoolean(KEY_BACKGROUND_OCR_INDEXING, enabled).apply()
     }
 
     fun getMinLogLevel(context: Context): Int = getPrefs(context).getInt(KEY_MIN_LOG_LEVEL, 4) // Default to NONE (4)

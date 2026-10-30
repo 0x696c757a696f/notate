@@ -348,6 +348,9 @@ class CanvasControllerImpl(
         }
     }
 
+    override suspend fun getSelectedStrokesForOcr(): List<Stroke> =
+        fetchSelectedItems().filterIsInstance<Stroke>()
+
     override suspend fun paste(
         x: Float,
         y: Float,

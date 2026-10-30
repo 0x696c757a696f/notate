@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Notate"
 include(":app")
+include(":ocr-runtime")
