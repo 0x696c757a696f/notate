@@ -451,6 +451,20 @@ class RegionManager(
          */
         private const val PENDING_SAVE_WAIT_MS = 250L
 
+        /**
+         * Max time [saveAll] waits for ONE in-flight save of a region to
+         * release its gate. Unlike [PENDING_SAVE_WAIT_MS] this wait IS a
+         * correctness requirement: a flush that skips a busy region returns
+         * before that region's newest bytes are on disk, and the caller then
+         * packs the container (or [clear]s, aborting the queued save) without
+         * them — strokes lost on reopen. Long enough for any real write; the
+         * bound only guards against a wedged IO dispatcher.
+         */
+        private const val FLUSH_GATE_WAIT_MS = 10_000L
+
+        /** Synchronous re-flush attempts in [saveAll] under concurrent mutation. */
+        private const val FLUSH_MAX_ATTEMPTS = 3
+
         /** Limbo size that triggers a sweep (see [parkInLimbo]). */
         private const val LIMBO_SWEEP_THRESHOLD = 16
     }
@@ -617,6 +631,14 @@ class RegionManager(
                         logForensics {
                             "MUT-APPLIED-IN-EVICTED id=$id i=${iid(region)} items=${region.items.size} " +
                                 "inLimbo=${limbo[id]?.any { it === region } == true}"
+                        }
+                        // A parked copy that just became dirty would otherwise
+                        // wait for a sweep (sticky window) or the next saveAll
+                        // to reach disk; persist it now (gated per id).
+                        if (region.isDirty && !region.isRecycled && regionCache.get(id) !== region &&
+                            overflowRegions[id] !== region
+                        ) {
+                            scheduleSave(region)
                         }
                     }
                 }
@@ -915,13 +937,21 @@ class RegionManager(
         if (region.isRecycled) {
             logForensics { "!!!! PARK-RECYCLED id=$id — parking a RECYCLED instance!" }
         }
-        // computeIfAbsent, NOT getOrPut: getOrPut's check-then-put races two
+        // Atomic per-key compute, NOT getOrPut: getOrPut's check-then-put races two
         // concurrent parks of one id into SEPARATE buckets, and the losing
         // bucket's entries vanish from discoverability entirely (silent
         // orphaning — proven via forensics: parked-dirty copies disappeared
         // with zero removal events; UserSession missing-word class).
-        val bucket = limbo.computeIfAbsent(id) { java.util.concurrent.CopyOnWriteArrayList() }
-        if (bucket.none { it === region }) bucket.add(region)
+        //
+        // The add happens INSIDE compute: adding after computeIfAbsent returned
+        // raced an empty-bucket removal (sweep / removeFromLimbo), and the
+        // region landed in a bucket no longer in the map — unreachable.
+        val bucket =
+            limbo.compute(id) { _, existing ->
+                (existing ?: java.util.concurrent.CopyOnWriteArrayList()).also { b ->
+                    if (b.none { it === region }) b.add(region)
+                }
+            }!!
         if (forensics.enabled && limbo.size % 5 == 0) {
             forensics.log(
                 "PARKMAP-SNAPSHOT map=${System.identityHashCode(limbo)} size=${limbo.size} " +
@@ -988,11 +1018,27 @@ class RegionManager(
             logForensics {
                 "LIMBO-REMOVE id=$id i=${iid(region)} via=$via removed=$removed bucketLeft=${bucket.size}"
             }
-            if (bucket.isEmpty()) {
+            if (removeLimboKeyIfEmpty(id)) {
                 forensics.log("LIMBO-KEY-REMOVE id=$id via=$via")
-                limbo.remove(id, bucket)
             }
         }
+    }
+
+    /**
+     * Drops [id]'s bucket only if it is STILL empty, atomically with respect
+     * to [parkInLimbo] (both run inside the map's per-key compute).
+     */
+    private fun removeLimboKeyIfEmpty(id: RegionId): Boolean {
+        var removed = false
+        limbo.computeIfPresent(id) { _, b ->
+            if (b.isEmpty()) {
+                removed = true
+                null
+            } else {
+                b
+            }
+        }
+        return removed
     }
 
     /**
@@ -1059,17 +1105,27 @@ class RegionManager(
                 // and threw AIOOBE from a background sweeper.
                 for (value in bucket.toArray()) {
                     val region = value as RegionData
-                    // Atomic identity removal: rescue-promotion paths mutate
-                    // this bucket WITHOUT the sweep monitor, so a snapshot
-                    // index can go stale (proven AIOOBE). removeIf re-checks
-                    // against the live list under COWAL's internal lock.
-                    if (!bucket.removeIf { it === region }) {
-                        continue // another actor removed it first
-                    }
                     // NOTE: no hasReferences() gate — refcounts are diagnostic-
                     // only. A reader holding the instance keeps it valid
                     // regardless (non-destructive eviction).
+                    //
+                    // Only CLEAN copies are taken out. The old code removed
+                    // every entry first and never put dirty ones back, so a
+                    // dirty copy inside its sticky window silently vanished
+                    // from limbo; the next load installed stale disk bytes
+                    // and the copy's strokes were lost (CI forensics:
+                    // MUT-APPLIED-IN-EVICTED → SWEEP-STICKY-SKIP → LOAD with
+                    // limbo=null, order 344 gone from memory and disk).
                     if (!region.isDirty) {
+                        // Atomic identity removal: rescue-promotion paths
+                        // mutate this bucket WITHOUT the sweep monitor, so a
+                        // snapshot index can go stale (proven AIOOBE). removeIf
+                        // re-checks against the live list under COWAL's lock.
+                        // Re-check dirtiness inside: a writer may have just
+                        // mutated this parked copy.
+                        if (!bucket.removeIf { it === region && !it.isDirty }) {
+                            continue // removed by another actor, or now dirty
+                        }
                         // CLEAN copies must be dropped promptly: callers (e.g.
                         // EvictionStressTest) rely on prompt dispose-after-
                         // release, and a clean copy reloads from identical
@@ -1100,7 +1156,7 @@ class RegionManager(
                     scheduleSave(region)
                     region.touch()
                 }
-                if (bucket.isEmpty()) mapIt.remove()
+                if (bucket.isEmpty()) removeLimboKeyIfEmpty(key)
             }
         }
     }
@@ -2939,14 +2995,11 @@ class RegionManager(
         // Process dirty regions ONE AT A TIME (bounded memory: only one
         // serialized snapshot exists at a time — critical for canvases larger
         // than the region budget, the RegionManager's primary use case).
+        // Per-region protocol: see [flushRegionBlocking].
         //
-        // Per-region protocol:
-        //  1. READ lock: serialize the region (CPU-only; the read lock excludes
-        //     writers, so the snapshot is consistent) and capture its modCount.
-        //  2. No lock: write bytes / delete (slow IO must not block readers).
-        //  3. WRITE lock: clear the dirty flag ONLY if modCount is unchanged —
-        //     otherwise the region was mutated while we wrote; it stays dirty
-        //     and the next flush persists the newer content.
+        // Snapshot BEFORE scanning for dirty regions: a save that is in flight
+        // now must be waited for even if its region stops looking dirty.
+        val inFlightAtStart = pendingSaveIds.toSet()
         val dirtyIds =
             stateLock.read {
                 // NOTE: limbo MUST be included. A dirty region can sit in limbo
@@ -2968,85 +3021,16 @@ class RegionManager(
             }
 
         for (id in dirtyIds) {
-            // Acquire the per-id save gate BEFORE serializing. This makes the
-            // whole capture→IO window mutually exclusive with [scheduleSave]
-            // and other saveAll iterations for the same id — without it, a
-            // concurrent eviction save could write NEWER bytes that this
-            // stale snapshot then overwrites (last-writer-wins with older
-            // data = silent content loss; caught by RenderPipelineChaosTest).
-            if (!pendingSaveIds.add(id)) continue
+            flushRegionBlocking(id)
+        }
 
-            // Re-read each iteration: the region may have been evicted, mutated
-            // or removed since the list was captured.
-            var bytes: ByteArray? = null
-            var isEmpty = false
-            var modAtSnapshot = -1L
-            var captured = false
-
-            stateLock.read {
-                val region =
-                    regionCache.get(id) ?: overflowRegions[id] ?: freshestInLimbo(id)
-                        ?: return@read
-                if (!region.isDirty) return@read
-                modAtSnapshot = region.modCount
-                if (region.items.isEmpty()) {
-                    logForensics {
-                        "!!!! SAVEALL-EMPTY-DELETE id=$id dirty=${region.isDirty} " +
-                            "recycled=${region.isRecycled} gen=${region.generation} " +
-                            "fromCache=${regionCache.get(id) === region} fromLimbo=${limbo[id]?.any { it === region } == true}"
-                    }
-                    isEmpty = true
-                } else {
-                    try {
-                        bytes = storage.serializeRegion(region)
-                    } catch (e: Exception) {
-                        Logger.e("RegionManager", "Failed to serialize region $id during saveAll", e)
-                        return@read
-                    }
-                }
-                captured = true
-            }
-            if (!captured) {
-                pendingSaveIds.remove(id)
-                continue
-            }
-
-            // IO outside any lock; the gate stays held so concurrent reloads
-            // wait instead of concluding "region missing".
-            val ok =
-                try {
-                    if (isEmpty) {
-                        storage.deleteRegion(id)
-                        true
-                    } else {
-                        storage.saveRegionBytes(id, bytes!!)
-                    }
-                } catch (e: Exception) {
-                    Logger.e("RegionManager", "Failed to persist region $id during saveAll", e)
-                    false
-                } finally {
-                    bumpDiskGen(id)
-                    pendingSaveIds.remove(id)
-                }
-
-            if (ok) {
-                val current =
-                    regionCache.get(id) ?: overflowRegions[id] ?: freshestInLimbo(id)
-                if (current != null) {
-                    var reschedule = false
-                    stateLock.write {
-                        if (current.modCount == modAtSnapshot) {
-                            current.isDirty = false
-                        } else {
-                            // Content changed while our snapshot was in flight:
-                            // the written bytes are stale. Re-queue immediately
-                            // instead of hoping a future flush notices.
-                            reschedule = true
-                        }
-                    }
-                    if (reschedule) scheduleSave(current)
-                }
-            }
+        // Saves that were in flight when this flush started but whose region
+        // is no longer reachable as dirty (already swept, or cleaned by the
+        // running job itself) are still writing: wait until they land, so the
+        // caller never packs/clears with bytes in flight.
+        for (id in inFlightAtStart) {
+            if (id in dirtyIds) continue
+            if (acquireSaveGateBlocking(id)) pendingSaveIds.remove(id)
         }
 
         // Persist the index as well. Index updates happen under the write lock;
@@ -3071,6 +3055,122 @@ class RegionManager(
                 storage.saveIndex(captured.first)
             } catch (e: Exception) {
                 Logger.e("RegionManager", "Failed to save index during saveAll", e)
+            }
+        }
+    }
+
+    /**
+     * Takes the per-id save gate, WAITING for an in-flight save to release it
+     * instead of giving up. Returns false only if the gate stays busy past
+     * [FLUSH_GATE_WAIT_MS] (wedged IO) — logged loudly, never silent.
+     */
+    private fun acquireSaveGateBlocking(id: RegionId): Boolean {
+        if (pendingSaveIds.add(id)) return true
+        val deadline = System.currentTimeMillis() + FLUSH_GATE_WAIT_MS
+        while (!pendingSaveIds.add(id)) {
+            if (System.currentTimeMillis() > deadline) {
+                Logger.e("RegionManager", "saveAll: save gate for $id still busy after ${FLUSH_GATE_WAIT_MS}ms")
+                logForensics { "!!!! FLUSH-GATE-TIMEOUT id=$id" }
+                return false
+            }
+            Thread.sleep(1)
+        }
+        return true
+    }
+
+    /**
+     * One region of [saveAll]: when this returns, disk holds the region's
+     * content as of (at least) the call, unless a write failed.
+     *
+     * Per-region protocol:
+     *  1. Take the save gate, WAITING for any in-flight eviction save. The
+     *     old code skipped busy regions ("someone else is saving it"), but
+     *     that save could still be queued or mid-write when saveAll returned:
+     *     the container was packed without it, and [clear] on close then
+     *     aborted the queued job via [clearEpoch] and dropped its resave
+     *     registration — strokes gone after reopen (UserSessionStressTest
+     *     seed=99 on CI: missing=[600001, 600002, 600003]).
+     *  2. READ lock: serialize (CPU-only; excludes writers) + capture modCount.
+     *  3. No lock: write bytes / delete.
+     *  4. WRITE lock: clear dirty ONLY if modCount is unchanged; otherwise
+     *     flush again synchronously (bounded), then fall back to an async save.
+     */
+    private fun flushRegionBlocking(id: RegionId) {
+        var attempts = 0
+        while (true) {
+            if (!acquireSaveGateBlocking(id)) return
+
+            // Re-read each attempt: the region may have been evicted, mutated,
+            // removed — or cleaned by the save we just waited for.
+            var bytes: ByteArray? = null
+            var isEmpty = false
+            var modAtSnapshot = -1L
+            var captured = false
+
+            stateLock.read {
+                val region =
+                    regionCache.get(id) ?: overflowRegions[id] ?: freshestInLimbo(id)
+                        ?: return@read
+                if (region.isRecycled || !region.isDirty) return@read
+                modAtSnapshot = region.modCount
+                if (region.items.isEmpty()) {
+                    logForensics {
+                        "!!!! SAVEALL-EMPTY-DELETE id=$id dirty=${region.isDirty} " +
+                            "recycled=${region.isRecycled} gen=${region.generation} " +
+                            "fromCache=${regionCache.get(id) === region} fromLimbo=${limbo[id]?.any { it === region } == true}"
+                    }
+                    isEmpty = true
+                } else {
+                    try {
+                        bytes = storage.serializeRegion(region)
+                    } catch (e: Exception) {
+                        Logger.e("RegionManager", "Failed to serialize region $id during saveAll", e)
+                        return@read
+                    }
+                }
+                captured = true
+            }
+            if (!captured) {
+                pendingSaveIds.remove(id)
+                return
+            }
+
+            // IO outside any lock; the gate stays held so concurrent reloads
+            // wait instead of concluding "region missing".
+            val ok =
+                try {
+                    if (isEmpty) {
+                        storage.deleteRegion(id)
+                        true
+                    } else {
+                        storage.saveRegionBytes(id, bytes!!)
+                    }
+                } catch (e: Exception) {
+                    Logger.e("RegionManager", "Failed to persist region $id during saveAll", e)
+                    false
+                } finally {
+                    bumpDiskGen(id)
+                    pendingSaveIds.remove(id)
+                }
+            if (!ok) return
+
+            val current =
+                regionCache.get(id) ?: overflowRegions[id] ?: freshestInLimbo(id)
+                    ?: return
+            var stale = false
+            stateLock.write {
+                if (current.modCount == modAtSnapshot) {
+                    current.isDirty = false
+                } else {
+                    // Content changed while our snapshot was in flight: the
+                    // written bytes are stale.
+                    stale = true
+                }
+            }
+            if (!stale) return
+            if (++attempts >= FLUSH_MAX_ATTEMPTS) {
+                scheduleSave(current)
+                return
             }
         }
     }

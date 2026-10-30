@@ -8,6 +8,7 @@ import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceRequest
@@ -463,6 +464,15 @@ class CanvasActivity : AppCompatActivity() {
                         binding.canvasView.getController().addStrokes(strokes)
                     }
                 },
+                onPalmRejectionChanged = { enabled ->
+                    binding.canvasView.setPalmRejectionEnabled(enabled)
+                },
+                onTwoFingerTapActionChange = { action ->
+                    binding.canvasView.setTwoFingerTapAction(action)
+                },
+                onStylusButtonActionChange = { action ->
+                    binding.canvasView.setStylusButtonAction(action)
+                },
             )
         binding.canvasView.onStrokeStarted = {
             activePenPopup?.dismiss()
@@ -555,6 +565,18 @@ class CanvasActivity : AppCompatActivity() {
 
         binding.canvasView.setCursorView(binding.cursorView)
         binding.minimapView.setup(binding.canvasView)
+        binding.canvasView.setPalmRejectionEnabled(
+            com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this),
+        )
+        binding.canvasView.onThreeFingerTap = {
+            viewModel.toggleDistractionFree()
+        }
+        binding.canvasView.setTwoFingerTapAction(
+            com.alexdremov.notate.data.PreferencesManager.getTwoFingerTapAction(this),
+        )
+        binding.canvasView.setStylusButtonAction(
+            com.alexdremov.notate.data.PreferencesManager.getStylusButtonAction(this),
+        )
 
         // ViewModel observation
         lifecycleScope.launch {
@@ -592,6 +614,10 @@ class CanvasActivity : AppCompatActivity() {
                     viewModel.isFixedPageCenterHorizontal.collect { enabled ->
                         binding.canvasView.setFixedPageCenterHorizontal(enabled)
                     }
+                }
+
+                launch {
+                    viewModel.isDistractionFree.collect { setDistractionFree(it) }
                 }
 
                 launch {
@@ -1010,6 +1036,17 @@ class CanvasActivity : AppCompatActivity() {
     private fun updateDrawingEnabledState() {
         val shouldDisable = sidebarCoordinator.isOpen || isGridOpen || activePenPopup != null
         viewModel.setDrawingEnabled(!shouldDisable)
+    }
+
+    private fun setDistractionFree(enabled: Boolean) {
+        val vis = if (enabled) View.GONE else View.VISIBLE
+        binding.toolbarContainer.visibility = vis
+        binding.minimapView.visibility = vis
+        if (enabled) {
+            sidebarCoordinator.close()
+        }
+        // Recompute stylus exclusion so the hidden toolbar stops reserving area.
+        updateExclusionRects()
     }
 
     private fun updateExclusionRects() {
