@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -141,6 +142,7 @@ fun MainScreen(
     var editingStorage by remember { mutableStateOf<com.alexdremov.notate.data.RemoteStorageConfig?>(null) }
     var showSortMenu by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showWebDocs by remember { mutableStateOf(false) }
 
     // Project Actions State
     var projectToDelete by remember { mutableStateOf<com.alexdremov.notate.data.ProjectConfig?>(null) }
@@ -265,6 +267,11 @@ fun MainScreen(
                             }
 
                             // Browser Actions
+                            if (!isPickerMode) {
+                                IconButton(onClick = { showWebDocs = true }) {
+                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "EPUB / HTML")
+                                }
+                            }
                             if (currentProject != null && selectedTag == null) {
                                 IconButton(onClick = { showNameDialog = DialogType.CREATE_FOLDER }) {
                                     Icon(Icons.Filled.CreateNewFolder, contentDescription = "New Folder")
@@ -276,6 +283,9 @@ fun MainScreen(
                         } else {
                             // Project List Actions
                             if (!isPickerMode) {
+                                IconButton(onClick = { showWebDocs = true }) {
+                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = "EPUB / HTML")
+                                }
                                 IconButton(onClick = { showSettingsDialog = true }) {
                                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                                 }
@@ -494,6 +504,10 @@ fun MainScreen(
     }
 
     // Handle Dialogs
+    if (showWebDocs) {
+        WebDocLibraryDialog(onDismiss = { showWebDocs = false })
+    }
+
     if (showSettingsDialog) {
         SettingsDialog(
             onDismiss = { showSettingsDialog = false },
