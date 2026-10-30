@@ -101,6 +101,10 @@ object SnapshotVerifier {
             diffBitmap.setPixels(diffPixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
             saveBitmap(diffBitmap, diffFile)
 
+            // TEMP: dump the actual image so the reference can be updated from the CI log.
+            val b64 = java.util.Base64.getEncoder().encodeToString(actualFile.readBytes())
+            b64.chunked(1000).forEachIndexed { i, c -> println("SNAPB64 $snapshotName $i $c") }
+
             fail(
                 "Snapshot mismatch! $distinctPixels pixels differ significantly ($diffRatio). \n" +
                     "Check generated outputs at: \n" +
