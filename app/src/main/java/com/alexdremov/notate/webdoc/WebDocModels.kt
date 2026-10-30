@@ -59,8 +59,10 @@ class WebInkStroke(
     val width: Float,
     /** Interleaved x0, y0, x1, y1, ... in CSS px. */
     val points: FloatArray,
-    /** Line style; only [StrokeType.DASH] and [StrokeType.DOT] change how the stroke is drawn. */
+    /** Pen type: decides dashes/dots and, with [pressures], the pen's pressure response. */
     val style: StrokeType = StrokeType.FINELINER,
+    /** Normalized pen pressure (0..1), one per point; null for shapes and strokes saved before pressure was recorded. */
+    val pressures: FloatArray? = null,
 )
 
 @Serializable

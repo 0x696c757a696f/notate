@@ -9,6 +9,7 @@ import com.alexdremov.notate.model.StrokeType
 import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.util.ColorUtils
 import com.alexdremov.notate.util.Logger
+import com.alexdremov.notate.util.StrokeRenderer
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 import com.onyx.android.sdk.data.note.TouchPoint
@@ -53,6 +54,9 @@ class WebInkRawInput(
         private const val OP_MOVE = 2f
         private const val OP_END = 3f
 
+        /** Queue entry: op, x, y, normalized pressure. */
+        private const val OP_STRIDE = 4
+
         /** Creates the native channel, or null on devices without the Onyx pen service. */
         fun createOrNull(overlay: WebInkOverlayView): WebInkRawInput? =
             try {
@@ -81,7 +85,7 @@ class WebInkRawInput(
     // Pen-thread → main-thread hand-off: (op, x, y) triples drained by one posted runnable per batch,
     // instead of one Runnable per point, so long fast strokes don't flood the main looper.
     private val queueLock = Any()
-    private var queue = FloatArray(3 * 256)
+    private var queue = FloatArray(OP_STRIDE * 256)
     private var queueSize = 0
     private var drainPosted = false
     private var drainBuffer = FloatArray(0)
@@ -244,13 +248,13 @@ class WebInkRawInput(
         eraser: Boolean,
     ) {
         lastTimestamp = p.timestamp
-        enqueue(if (eraser) OP_BEGIN_ERASER else OP_BEGIN, p.x, p.y)
+        enqueue(if (eraser) OP_BEGIN_ERASER else OP_BEGIN, p.x, p.y, normalizedPressure(p))
     }
 
     private fun move(p: TouchPoint) {
         if (p.timestamp <= lastTimestamp) return
         lastTimestamp = p.timestamp
-        enqueue(OP_MOVE, p.x, p.y)
+        enqueue(OP_MOVE, p.x, p.y, normalizedPressure(p))
     }
 
     private fun moveAll(list: TouchPointList) {
@@ -259,19 +263,25 @@ class WebInkRawInput(
 
     private fun end(p: TouchPoint) {
         move(p)
-        enqueue(OP_END, p.x, p.y)
+        enqueue(OP_END, p.x, p.y, 0f)
     }
+
+    /** Some firmwares report raw digitizer levels, others 0..1 (same rule as the note canvas renderer). */
+    private fun normalizedPressure(p: TouchPoint): Float =
+        if (p.pressure <= 1f) p.pressure.coerceAtLeast(0f) else (p.pressure / StrokeRenderer.deviceMaxPressure).coerceIn(0f, 1f)
 
     private fun enqueue(
         op: Float,
         x: Float,
         y: Float,
+        pressure: Float,
     ) {
         synchronized(queueLock) {
-            if (queueSize + 3 > queue.size) queue = queue.copyOf(queue.size * 2)
+            if (queueSize + OP_STRIDE > queue.size) queue = queue.copyOf(queue.size * 2)
             queue[queueSize++] = op
             queue[queueSize++] = x
             queue[queueSize++] = y
+            queue[queueSize++] = pressure
             if (!drainPosted) {
                 drainPosted = true
                 overlay.post(drainRunnable)
@@ -289,11 +299,12 @@ class WebInkRawInput(
             drainPosted = false
         }
         var i = 0
-        while (i + 2 < n) {
+        while (i + OP_STRIDE - 1 < n) {
             val op = drainBuffer[i]
             val x = drainBuffer[i + 1]
             val y = drainBuffer[i + 2]
-            i += 3
+            val pressure = drainBuffer[i + 3]
+            i += OP_STRIDE
             when (op) {
                 OP_BEGIN, OP_BEGIN_ERASER -> {
                     if (SystemClock.uptimeMillis() < ignoreBeginUntil) {
@@ -305,12 +316,12 @@ class WebInkRawInput(
                     strokeActive = true
                     if (!hasDirty) dirty.set(x, y, x, y) else dirty.union(x, y)
                     hasDirty = true
-                    overlay.beginStroke(x, y, op == OP_BEGIN_ERASER, native = true)
+                    overlay.beginStroke(x, y, op == OP_BEGIN_ERASER, native = true, pressure = pressure)
                 }
                 OP_MOVE -> {
                     if (!strokeActive || ignoringRestart) continue
                     dirty.union(x, y)
-                    overlay.extendStroke(x, y)
+                    overlay.extendStroke(x, y, pressure)
                 }
                 OP_END -> {
                     if (ignoringRestart) {

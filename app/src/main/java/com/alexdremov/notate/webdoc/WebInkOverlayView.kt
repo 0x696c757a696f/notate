@@ -14,12 +14,15 @@ import android.view.View
 import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.model.PenTool
 import com.alexdremov.notate.model.ShapeType
+import com.alexdremov.notate.model.Stroke
 import com.alexdremov.notate.model.StrokeType
 import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.ui.guide.GuideLayer
 import com.alexdremov.notate.ui.guide.GuidePath
 import com.alexdremov.notate.ui.guide.GuideSnap
 import com.alexdremov.notate.util.ShapeGeometry
+import com.alexdremov.notate.util.StrokeRenderer
+import com.onyx.android.sdk.data.note.TouchPoint
 import java.util.IdentityHashMap
 import kotlin.math.hypot
 
@@ -108,8 +111,13 @@ class WebInkOverlayView(
     private val density = resources.displayMetrics.density
     private val pathCache = IdentityHashMap<WebInkStroke, Pair<Path, RectF>>()
 
+    /** Pressure-recorded pen strokes, drawn by the note canvas renderer so each pen looks the same as on notes. */
+    private val pressureStrokeCache = IdentityHashMap<WebInkStroke, Stroke>()
+    private val pressurePaint = Paint()
+
     // Current stroke
     private val livePoints = FloatArrayBuilder()
+    private val livePressures = FloatArrayBuilder()
     private val livePath = Path()
     private var liveTool: PenTool = tool
     private var erasing = false
@@ -170,11 +178,13 @@ class WebInkOverlayView(
                 val eraser =
                     toolType == MotionEvent.TOOL_TYPE_ERASER ||
                         (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
-                beginStroke(event.x, event.y, eraser, native = false)
+                beginStroke(event.x, event.y, eraser, native = false, pressure = event.pressure)
             }
             MotionEvent.ACTION_MOVE -> {
-                for (h in 0 until event.historySize) extendStroke(event.getHistoricalX(h), event.getHistoricalY(h))
-                extendStroke(event.x, event.y)
+                for (h in 0 until event.historySize) {
+                    extendStroke(event.getHistoricalX(h), event.getHistoricalY(h), event.getHistoricalPressure(h))
+                }
+                extendStroke(event.x, event.y, event.pressure)
             }
             MotionEvent.ACTION_UP -> endStroke(commit = true)
             MotionEvent.ACTION_CANCEL -> endStroke(commit = false)
@@ -196,6 +206,7 @@ class WebInkOverlayView(
         viewY: Float,
         forceEraser: Boolean,
         native: Boolean,
+        pressure: Float = DEFAULT_PRESSURE,
     ) {
         if (page == null) return
         isDrawing = true
@@ -205,6 +216,7 @@ class WebInkOverlayView(
         val eraserTool = if (tool.type == ToolType.ERASER) tool else sideEraser
         eraserRadiusCss = ((eraserTool?.width ?: 30f) / 2f / density).coerceAtLeast(3f)
         livePoints.clear()
+        livePressures.clear()
         livePath.reset()
         shapeStart = null
         guide = null
@@ -227,6 +239,7 @@ class WebInkOverlayView(
                 if (!liveTool.isShapeTool) guide = guides.snapAt(viewX, viewY)
                 guide?.let { startGuide(it, viewX, viewY) }
                 livePoints.add(x, y)
+                livePressures.add(pressure)
                 livePath.moveTo(x, y)
                 dwellEnabled = guide == null && PreferencesManager.isShapePerfectionEnabled(context)
                 if (dwellEnabled) {
@@ -246,6 +259,7 @@ class WebInkOverlayView(
     fun extendStroke(
         viewX: Float,
         viewY: Float,
+        pressure: Float = DEFAULT_PRESSURE,
     ) {
         if (!isDrawing) return
         val x = toDocX(viewX)
@@ -267,6 +281,7 @@ class WebInkOverlayView(
             }
             else -> {
                 if (!livePoints.add(x, y)) return
+                livePressures.add(pressure)
                 val n = livePoints.size
                 if (n >= 4) {
                     // Incremental quadratic smoothing through segment midpoints (no per-frame rebuild).
@@ -292,6 +307,7 @@ class WebInkOverlayView(
         removeCallbacks(dwellRunnable)
         if (commit && !erasing) commitLiveStroke()
         livePoints.clear()
+        livePressures.clear()
         livePath.reset()
         shapeStart = null
         guide = null
@@ -355,7 +371,8 @@ class WebInkOverlayView(
         } else {
             val pts = livePoints.toArray()
             if (pts.size < 2) return
-            p.add(strokeOf(t, pts, 1f))
+            val pressures = livePressures.toArray().takeIf { it.size * 2 == pts.size }
+            p.add(strokeOf(t, pts, 1f, pressures))
         }
     }
 
@@ -363,6 +380,7 @@ class WebInkOverlayView(
         t: PenTool,
         points: FloatArray,
         widthScale: Float,
+        pressures: FloatArray? = null,
     ): WebInkStroke {
         val highlighter = t.strokeType == StrokeType.HIGHLIGHTER
         return WebInkStroke(
@@ -371,6 +389,7 @@ class WebInkOverlayView(
             width = widthCss(t) * widthScale,
             points = points,
             style = t.strokeType,
+            pressures = if (highlighter) null else pressures,
         )
     }
 
@@ -408,7 +427,9 @@ class WebInkOverlayView(
     }
 
     fun notifyPageChanged() {
-        pathCache.keys.retainAll(page?.strokes?.toSet() ?: emptySet())
+        val alive = page?.strokes?.toSet() ?: emptySet()
+        pathCache.keys.retainAll(alive)
+        pressureStrokeCache.keys.retainAll(alive)
         invalidate()
     }
 
@@ -435,7 +456,12 @@ class WebInkOverlayView(
                     if ((s.tool == WebInkTool.HIGHLIGHTER) != (pass == 0)) continue
                     val (path, bounds) = pathCache.getOrPut(s) { buildPath(s.points) }
                     if (!RectF.intersects(visible, inflate(bounds, s.width))) continue
-                    drawStroke(canvas, path, s.tool, s.color, s.width, s.style)
+                    if (usesPressure(s)) {
+                        val stroke = pressureStrokeCache.getOrPut(s) { toPressureStroke(s, path, bounds) }
+                        StrokeRenderer.drawStroke(canvas, pressurePaint, stroke)
+                    } else {
+                        drawStroke(canvas, path, s.tool, s.color, s.width, s.style)
+                    }
                 }
             }
             if (isDrawing && !erasing) drawLive(canvas)
@@ -498,6 +524,28 @@ class WebInkOverlayView(
         paint.pathEffect = dashEffect(style, width)
         canvas.drawPath(path, paint)
         paint.pathEffect = null
+    }
+
+    private fun usesPressure(s: WebInkStroke): Boolean =
+        s.tool == WebInkTool.PEN &&
+            s.pressures != null &&
+            s.pressures.size * 2 == s.points.size &&
+            s.style != StrokeType.DASH &&
+            s.style != StrokeType.DOT
+
+    private fun toPressureStroke(
+        s: WebInkStroke,
+        path: Path,
+        bounds: RectF,
+    ): Stroke {
+        val pressures = s.pressures!!
+        val points = ArrayList<TouchPoint>(pressures.size)
+        for (i in pressures.indices) {
+            // No timestamps are stored: a fixed step keeps the fountain pen's speed thinning neutral.
+            points.add(TouchPoint(s.points[i * 2], s.points[i * 2 + 1], pressures[i], 1f, 0, 0, i * 8L))
+        }
+        val strokeBounds = RectF(bounds).apply { inset(-s.width * 1.5f, -s.width * 1.5f) }
+        return Stroke(path = path, points = points, color = s.color, width = s.width, style = s.style, bounds = strokeBounds)
     }
 
     private fun dashEffect(
@@ -571,6 +619,9 @@ class WebInkOverlayView(
     }
 
     companion object {
+        /** Pressure for points whose source reports none. */
+        const val DEFAULT_PRESSURE = 0.5f
+
         /** Pen movement (px) that restarts the hold-to-snap timer; matches the note canvas. */
         private const val DWELL_MOVE_PX = 20f
     }
