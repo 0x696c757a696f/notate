@@ -94,7 +94,7 @@ class OnyxCanvasView
                 },
                 onInteractionEnd = {
                     canvasRenderer.setInteracting(false)
-                    touchHelper?.setRawDrawingEnabled(true)
+                    if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
                     EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
                     updateTouchHelperTool()
                 },
@@ -440,7 +440,9 @@ class OnyxCanvasView
                     onInsertPdf = { onRequestInsertPdf?.invoke() },
                     onInsertLink = { showLinkDialog(worldX, worldY) },
                 )
-            contextMenu?.show(this, viewX, viewY)
+            val origin = IntArray(2)
+            getLocationOnScreen(origin)
+            contextMenu?.show(this, viewX + origin[0], viewY + origin[1])
         }
 
         private fun showLinkDialog(
@@ -977,6 +979,28 @@ class OnyxCanvasView
             }
         }
 
+        /**
+         * Split view: whether this pane owns the pen. An inactive pane closes its raw-drawing
+         * session entirely (two open sessions fight over the digitizer); it still pans and zooms
+         * with fingers. Re-activate with [setDrawingEnabled] after setting this to true.
+         */
+        var isPaneActive = true
+            private set
+
+        fun setPaneActive(active: Boolean) {
+            if (isPaneActive == active) return
+            isPaneActive = active
+            if (!active) {
+                dismissActionPopup()
+                touchHelper?.setRawDrawingRenderEnabled(false)
+                touchHelper?.setRawDrawingEnabled(false)
+                touchHelper?.closeRawDrawing()
+                isRawDrawingActive = false
+                EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
+                EpdController.leaveScribbleMode(this)
+            }
+        }
+
         fun setReadOnly(readOnly: Boolean) {
             isReadOnly = readOnly
             setDrawingEnabled(!readOnly)
@@ -1161,7 +1185,7 @@ class OnyxCanvasView
                 if (!selectionInteractor.isInteracting()) {
                     sm.getTransformedBounds(selectionBoundsCache)
                     if (!selectionBoundsCache.isEmpty && selectionBoundsCache.width() > 1f && selectionBoundsCache.height() > 1f) {
-                        actionPopup?.show(selectionBoundsCache, matrix)
+                        actionPopup?.show(selectionBoundsCache, popupMatrix())
                     } else {
                         actionPopup?.dismiss()
                     }
@@ -1171,12 +1195,26 @@ class OnyxCanvasView
             }
         }
 
+        private val popupMatrixCache = Matrix()
+
+        /** View matrix shifted into the popup container's coordinates (the view may sit in a split pane). */
+        private fun popupMatrix(): Matrix {
+            popupMatrixCache.set(matrix)
+            val container = actionPopupContainer ?: return popupMatrixCache
+            val a = IntArray(2)
+            val b = IntArray(2)
+            getLocationOnScreen(a)
+            container.getLocationOnScreen(b)
+            popupMatrixCache.postTranslate((a[0] - b[0]).toFloat(), (a[1] - b[1]).toFloat())
+            return popupMatrixCache
+        }
+
         fun updateActionPopup() {
             val sm = canvasController.getSelectionManager()
             if (sm.hasSelection() && actionPopup?.isShowing() == true) {
                 sm.getTransformedBounds(selectionBoundsCache)
                 if (!selectionBoundsCache.isEmpty && selectionBoundsCache.width() > 1f && selectionBoundsCache.height() > 1f) {
-                    actionPopup?.updatePosition(selectionBoundsCache, matrix)
+                    actionPopup?.updatePosition(selectionBoundsCache, popupMatrix())
                 }
             }
         }
@@ -1195,7 +1233,7 @@ class OnyxCanvasView
         }
 
         private fun performHardRefresh() {
-            val wasEnabled = touchHelper?.isRawDrawingInputEnabled() == true
+            val wasEnabled = isPaneActive && touchHelper?.isRawDrawingInputEnabled() == true
             if (wasEnabled) {
                 touchHelper?.setRawDrawingEnabled(false)
                 EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
@@ -1209,6 +1247,8 @@ class OnyxCanvasView
         }
 
         private fun setupTouchHelper() {
+            // In split view only the focused pane may own the pen driver.
+            if (!isPaneActive) return
             var isFirstInit = false
             if (touchHelper == null) {
                 // Revert to Mode 2 (true) which handles surface interactions better for panning
@@ -1319,7 +1359,7 @@ class OnyxCanvasView
             drawContent()
             // A clean refresh once it stops, then hand the screen back to the pen.
             EpdController.invalidate(this, UpdateMode.GU)
-            touchHelper?.setRawDrawingEnabled(true)
+            if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
             EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
             updateTouchHelperTool()
         }
