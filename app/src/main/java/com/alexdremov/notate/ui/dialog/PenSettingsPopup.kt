@@ -477,26 +477,21 @@ class PenSettingsPopup(
         binding.gridStyles.visibility = View.GONE
         val lineStyles =
             listOf(
-                StrokeType.FINELINER to R.string.line_style_solid,
-                StrokeType.DASH to R.string.line_style_dashed,
-                StrokeType.DOT to R.string.line_style_dotted,
+                Triple(StrokeType.FINELINER, R.drawable.ic_line_solid, R.string.line_style_solid),
+                Triple(StrokeType.DASH, R.drawable.ic_line_dashed, R.string.line_style_dashed),
+                Triple(StrokeType.DOT, R.drawable.ic_line_dotted, R.string.line_style_dotted),
             )
-        val styleChips = mutableMapOf<StrokeType, TextView>()
+        val styleChips = mutableMapOf<StrokeType, View>()
         val styleRow =
             LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
             }
-        for ((type, labelRes) in lineStyles) {
+        for ((type, iconRes, labelRes) in lineStyles) {
             val chip =
-                TextView(context).apply {
-                    text = context.getString(labelRes)
-                    gravity = Gravity.CENTER
-                    setTextColor(Color.BLACK)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    setBackgroundResource(R.drawable.bg_tool_selected)
+                iconChip(iconRes, labelRes).apply {
                     layoutParams =
-                        LinearLayout.LayoutParams(context.dpToPx(88), context.dpToPx(40)).apply {
+                        LinearLayout.LayoutParams(context.dpToPx(60), context.dpToPx(48)).apply {
                             marginEnd = context.dpToPx(4)
                         }
                     setOnClickListener {
@@ -518,7 +513,7 @@ class PenSettingsPopup(
 
         val grid =
             GridLayout(context).apply {
-                columnCount = 3
+                columnCount = 4
                 useDefaultMargins = true
             }
         container.addView(
@@ -551,7 +546,7 @@ class PenSettingsPopup(
             setOnClickListener {
                 val sides = (currentTool.polygonSides + delta).coerceIn(3, 12)
                 updateTool { it.copy(polygonSides = sides) }
-                sidesLabel.text = context.getString(R.string.shape_polygon_sides, sides)
+                sidesLabel.text = sides.toString()
                 refreshHighQuality(sidesLabel)
             }
         }
@@ -571,28 +566,25 @@ class PenSettingsPopup(
             },
         )
 
-        val chips = mutableMapOf<ShapeType, TextView>()
+        val chips = mutableMapOf<ShapeType, View>()
 
         fun refreshSelection() {
             chips.forEach { (type, chip) -> chip.isSelected = type == currentTool.shapeType }
             sidesRow.visibility = if (currentTool.shapeType == ShapeType.POLYGON) View.VISIBLE else View.GONE
-            sidesLabel.text = context.getString(R.string.shape_polygon_sides, currentTool.polygonSides)
+            sidesLabel.text = currentTool.polygonSides.toString()
         }
 
         for ((type, labelRes) in options) {
             val chip =
-                TextView(context).apply {
-                    text = context.getString(labelRes)
-                    gravity = Gravity.CENTER
-                    setTextColor(Color.BLACK)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    setBackgroundResource(R.drawable.bg_tool_selected)
-                    val pad = context.dpToPx(6)
-                    setPadding(pad, pad, pad, pad)
+                iconChip(
+                    com.alexdremov.notate.ui.toolbar.ShapeUi
+                        .iconRes(type),
+                    labelRes,
+                ).apply {
                     layoutParams =
                         GridLayout.LayoutParams().apply {
-                            width = context.dpToPx(88)
-                            height = context.dpToPx(40)
+                            width = context.dpToPx(60)
+                            height = context.dpToPx(60)
                         }
                     setOnClickListener {
                         updateTool { it.copy(shapeType = type) }
@@ -605,6 +597,21 @@ class PenSettingsPopup(
         }
 
         refreshSelection()
+    }
+
+    /** Icon-only option button (the label is only the accessibility description). */
+    private fun iconChip(
+        iconRes: Int,
+        labelRes: Int,
+    ) = android.widget.ImageView(context).apply {
+        setImageResource(iconRes)
+        contentDescription = context.getString(labelRes)
+        setBackgroundResource(R.drawable.bg_tool_selected)
+        val pad = context.dpToPx(12)
+        setPadding(pad, pad, pad, pad)
+        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        isClickable = true
+        isFocusable = true
     }
 
     private fun setupPresetsPage() {
