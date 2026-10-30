@@ -85,17 +85,21 @@ data class PenTool(
                 ),
                 PenTool("text_tool", "Text", ToolType.TEXT, Color.BLACK, 40f, StrokeType.FINELINER),
                 defaultShapeTool("shape_tool"),
+                defaultShapeTool("line_tool", ShapeType.LINE),
             )
 
-        fun defaultShapeTool(id: String): PenTool =
+        fun defaultShapeTool(
+            id: String,
+            shapeType: ShapeType = ShapeType.AUTO,
+        ): PenTool =
             PenTool(
                 id = id,
-                name = "Shapes",
+                name = if (shapeType.isLine) "Lines" else "Shapes",
                 type = ToolType.PEN,
                 color = Color.BLACK,
                 width = 6f,
                 strokeType = StrokeType.FINELINER,
-                shapeType = ShapeType.AUTO,
+                shapeType = shapeType,
             )
     }
 }

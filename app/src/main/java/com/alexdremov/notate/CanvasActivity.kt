@@ -1136,7 +1136,14 @@ class CanvasActivity : AppCompatActivity() {
         }
         binding.canvasView.dismissActionPopup()
 
-        if (viewModel.activeToolId.value == toolId) {
+        // The shape pen is a single toolbar button whose shapes live in its popup, so a tap always opens it.
+        val opensOnFirstTap = item is ToolbarItem.Pen && item.penTool.isShapeTool
+        if (viewModel.activeToolId.value != toolId) {
+            viewModel.selectTool(toolId)
+            if (!opensOnFirstTap) return
+        }
+
+        run {
             val tool =
                 when (item) {
                     is ToolbarItem.Pen -> item.penTool
@@ -1177,8 +1184,6 @@ class CanvasActivity : AppCompatActivity() {
             com.alexdremov.notate.util.EpdFastModeController
                 .enterFastMode()
             activePenPopup?.show(binding.root, targetRect)
-        } else {
-            viewModel.selectTool(toolId)
         }
     }
 }

@@ -461,36 +461,54 @@ class PenSettingsPopup(
     }
 
     private fun setupShapeUI() {
-        binding.tvTitle.text = context.getString(R.string.shape_settings)
+        val isLines = currentTool.shapeType.isLine
+        binding.tvTitle.text = context.getString(if (isLines) R.string.line_tool else R.string.shape_settings)
         val container = binding.layoutShapeOptions
         container.visibility = View.VISIBLE
         container.removeAllViews()
 
-        container.addView(
-            TextView(context).apply {
-                text = context.getString(R.string.shape_line_style_hint)
-                setTextColor(Color.DKGRAY)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            },
-        )
+        // Shape pens pick a line style instead of a pen type: solid, dashed or dotted.
+        binding.gridStyles.visibility = View.GONE
+        val lineStyles =
+            listOf(
+                StrokeType.FINELINER to R.string.line_style_solid,
+                StrokeType.DASH to R.string.line_style_dashed,
+                StrokeType.DOT to R.string.line_style_dotted,
+            )
+        val styleChips = mutableMapOf<StrokeType, TextView>()
+        val styleRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+        for ((type, labelRes) in lineStyles) {
+            val chip =
+                TextView(context).apply {
+                    text = context.getString(labelRes)
+                    gravity = Gravity.CENTER
+                    setTextColor(Color.BLACK)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setBackgroundResource(R.drawable.bg_tool_selected)
+                    layoutParams =
+                        LinearLayout.LayoutParams(context.dpToPx(88), context.dpToPx(40)).apply {
+                            marginEnd = context.dpToPx(4)
+                        }
+                    setOnClickListener {
+                        updateTool { it.copy(strokeType = type) }
+                        styleChips.forEach { (t, v) -> v.isSelected = t == type }
+                        refreshHighQuality(styleRow)
+                    }
+                }
+            styleChips[type] = chip
+            styleRow.addView(chip)
+        }
+        styleChips.forEach { (t, v) -> v.isSelected = t == currentTool.strokeType }
+        container.addView(styleRow)
 
         val options =
-            listOf(
-                ShapeType.AUTO to R.string.shape_auto,
-                ShapeType.LINE to R.string.shape_line,
-                ShapeType.ARROW to R.string.shape_arrow,
-                ShapeType.DOUBLE_ARROW to R.string.shape_double_arrow,
-                ShapeType.RECTANGLE to R.string.shape_rectangle,
-                ShapeType.ELLIPSE to R.string.shape_ellipse,
-                ShapeType.TRIANGLE to R.string.shape_triangle,
-                ShapeType.RIGHT_TRIANGLE to R.string.shape_right_triangle,
-                ShapeType.POLYGON to R.string.shape_polygon,
-                ShapeType.AXES to R.string.shape_axes,
-                ShapeType.AXES_QUADRANT to R.string.shape_axes_quadrant,
-                ShapeType.AXES_3D to R.string.shape_axes_3d,
-                ShapeType.GRID to R.string.shape_grid,
-                ShapeType.NUMBER_LINE to R.string.shape_number_line,
-            )
+            com.alexdremov.notate.ui.toolbar.ShapeUi
+                .optionsFor(currentTool.shapeType)
+                .map { it to com.alexdremov.notate.ui.toolbar.ShapeUi.labelRes(it) }
 
         val grid =
             GridLayout(context).apply {
