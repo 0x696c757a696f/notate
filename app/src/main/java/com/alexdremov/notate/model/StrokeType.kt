@@ -25,4 +25,7 @@ enum class StrokeType(
     BRUSH(TouchHelper.STROKE_STYLE_NEO_BRUSH, "Brush"),
     CHARCOAL(TouchHelper.STROKE_STYLE_CHARCOAL, "Charcoal"),
     DASH(TouchHelper.STROKE_STYLE_DASH, "Dash"),
+
+    // Appended last: enum ordinals are persisted, never reorder.
+    DOT(TouchHelper.STROKE_STYLE_DASH, "Dotted"),
 }

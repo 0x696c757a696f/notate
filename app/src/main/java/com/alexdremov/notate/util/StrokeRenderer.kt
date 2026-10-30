@@ -155,6 +155,21 @@ object StrokeRenderer {
         }
     }
 
+    private object DotStrategy : StrokeRenderingStrategy {
+        override fun render(
+            canvas: Canvas,
+            paint: Paint,
+            stroke: Stroke,
+            maxPressure: Float,
+        ) {
+            paint.style = Paint.Style.STROKE
+            // Near-zero "on" interval + round cap renders each dash as a dot of the stroke's width.
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.pathEffect = DashPathEffect(floatArrayOf(0.01f, stroke.width * 2.5f), 0f)
+            canvas.drawPath(stroke.path, paint)
+        }
+    }
+
     /**
      * Contextual data for a single draw call.
      */
@@ -273,6 +288,7 @@ object StrokeRenderer {
                         StrokeType.FOUNTAIN -> FountainStrategy
                         StrokeType.HIGHLIGHTER -> HighlighterStrategy
                         StrokeType.DASH -> DashStrategy
+                        StrokeType.DOT -> DotStrategy
                         else -> SimplePathStrategy
                     }
                 } else if (xfermode == android.graphics.PorterDuff.Mode.CLEAR || xfermode == android.graphics.PorterDuff.Mode.DST_OUT) {
@@ -286,6 +302,7 @@ object StrokeRenderer {
                         StrokeType.CHARCOAL -> CharcoalStrategy
                         StrokeType.BRUSH -> BrushStrategy
                         StrokeType.DASH -> DashStrategy
+                        StrokeType.DOT -> DotStrategy
                         else -> SimplePathStrategy
                     }
                 } else {
@@ -296,6 +313,7 @@ object StrokeRenderer {
                         StrokeType.BRUSH -> BrushStrategy
                         StrokeType.HIGHLIGHTER -> HighlighterStrategy
                         StrokeType.DASH -> DashStrategy
+                        StrokeType.DOT -> DotStrategy
                         else -> SimplePathStrategy
                     }
                 }
