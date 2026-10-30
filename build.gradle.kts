@@ -5,8 +5,8 @@ buildscript {
     dependencies {
         // R8 9.2.14 bundled with AGP 9.2.1 crashes (NPE in its API database)
         // on androidx.core LocationManagerCompat during minifyReleaseWithR8.
-        // Pin a newer R8 until AGP ships one.
-        classpath("com.android.tools:r8:9.2.+")
+        // Pin a newer R8 (9.2.39 builds cleanly) until AGP ships one.
+        classpath("com.android.tools:r8:9.2.39")
     }
 }
 
