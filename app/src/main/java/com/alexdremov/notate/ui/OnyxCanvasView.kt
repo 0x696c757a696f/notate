@@ -17,11 +17,14 @@ import android.view.SurfaceView
 import com.alexdremov.notate.config.CanvasConfig
 import com.alexdremov.notate.data.CanvasData
 import com.alexdremov.notate.data.CanvasType
+import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.model.InfiniteCanvasModel
 import com.alexdremov.notate.model.PenTool
 import com.alexdremov.notate.model.Stroke
+import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.TextItem
 import com.alexdremov.notate.model.ToolType
+import com.alexdremov.notate.model.TwoFingerTapAction
 import com.alexdremov.notate.ui.controller.CanvasControllerImpl
 import com.alexdremov.notate.ui.controller.ViewportController
 import com.alexdremov.notate.ui.input.PenInputHandler
@@ -114,10 +117,25 @@ class OnyxCanvasView
         private var twoFingerPointerId1 = -1
         private var twoFingerPointerId2 = -1
 
+        // Three-Finger Tap Detection (Distraction-free toggle)
+        private var threeFingerTapDownTime = 0L
+        private var isThreeFingerTapCheck = false
+        private val threeFingerStartPts = Array(3) { floatArrayOf(0f, 0f) }
+        private val threeFingerPointerIds = intArrayOf(-1, -1, -1)
+
+        @Volatile
+        private var twoFingerTapAction: TwoFingerTapAction = PreferencesManager.getTwoFingerTapAction(context)
+
+        @Volatile
+        private var stylusButtonAction: StylusButtonAction = PreferencesManager.getStylusButtonAction(context)
+
         private var lastStrokeEndTime = 0L
 
         private var currentTool: PenTool = PenTool.defaultPens()[0]
         private var isReadOnly = false
+
+        @Volatile
+        private var palmRejectionEnabled: Boolean = PreferencesManager.isPalmRejectionEnabled(context)
 
         private val exclusionRects = ArrayList<Rect>()
 
@@ -141,6 +159,8 @@ class OnyxCanvasView
         var onBrowseFiles: ((onResult: (name: String, uuid: String) -> Unit) -> Unit)? = null
         var onSelectFile: ((onResult: (name: String, path: String) -> Unit) -> Unit)? = null
         var onLinkActivated: ((com.alexdremov.notate.model.LinkItem) -> Unit)? = null
+
+        var onThreeFingerTap: (() -> Unit)? = null
 
         private var contextMenu: com.alexdremov.notate.ui.dialog.CanvasContextMenu? = null
         private lateinit var gestureDetector: android.view.GestureDetector
@@ -408,7 +428,14 @@ class OnyxCanvasView
             val isStylus = event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
             if (isStylus) return false // Handled by RawInputCallback
 
+            if (palmRejectionEnabled) return true // Palm rejection: ignore finger input (stylus draws via RawInputCallback)
+
             if (!isReadOnly) detectTwoFingerTap(event)
+
+            if (!isReadOnly) detectThreeFingerTap(event)
+
+            // Reserve 3+ finger gestures for the distraction-free toggle (no pan/zoom/select).
+            if (!isReadOnly && event.pointerCount >= 3) return true
 
             // 1. Gesture Detector (Long Press, Tap)
             if (gestureDetector.onTouchEvent(event)) {
@@ -461,7 +488,22 @@ class OnyxCanvasView
                     if (duration < CanvasConfig.TWO_FINGER_TAP_MAX_DELAY) {
                         if (!isTapSlopExceeded(event)) {
                             if (now - lastTwoFingerTapTime < CanvasConfig.TWO_FINGER_TAP_DOUBLE_TIMEOUT) {
-                                viewScope.launch { undo() }
+                                when (twoFingerTapAction) {
+                                    TwoFingerTapAction.UNDO -> viewScope.launch { undo() }
+                                    TwoFingerTapAction.REDO -> viewScope.launch { redo() }
+                                    TwoFingerTapAction.PASTE -> {
+                                        val inv = Matrix()
+                                        matrix.invert(inv)
+                                        val pts =
+                                            floatArrayOf(
+                                                (twoFingerStartPt1[0] + twoFingerStartPt2[0]) / 2f,
+                                                (twoFingerStartPt1[1] + twoFingerStartPt2[1]) / 2f,
+                                            )
+                                        inv.mapPoints(pts)
+                                        viewScope.launch { canvasController.paste(pts[0], pts[1]) }
+                                    }
+                                    TwoFingerTapAction.NONE -> {}
+                                }
                                 lastTwoFingerTapTime = 0L
                             } else {
                                 lastTwoFingerTapTime = now
@@ -501,12 +543,60 @@ class OnyxCanvasView
             y2: Float,
         ) = (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2)
 
+        fun setPalmRejectionEnabled(enabled: Boolean) {
+            palmRejectionEnabled = enabled
+        }
+
+        private fun detectThreeFingerTap(event: MotionEvent) {
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_POINTER_DOWN && event.pointerCount == 3) {
+                threeFingerTapDownTime = System.currentTimeMillis()
+                isThreeFingerTapCheck = true
+                // Cancel any pending two-finger tap so 3 fingers don't also trigger undo.
+                isTwoFingerTapCheck = false
+                for (i in 0 until 3) {
+                    threeFingerPointerIds[i] = event.getPointerId(i)
+                    threeFingerStartPts[i][0] = event.getX(i)
+                    threeFingerStartPts[i][1] = event.getY(i)
+                }
+            } else if (action == MotionEvent.ACTION_POINTER_UP && event.pointerCount == 3) {
+                if (isThreeFingerTapCheck) {
+                    val duration = System.currentTimeMillis() - threeFingerTapDownTime
+                    if (duration < CanvasConfig.TWO_FINGER_TAP_MAX_DELAY && !isThreeTapSlopExceeded(event)) {
+                        onThreeFingerTap?.invoke()
+                    }
+                    isThreeFingerTapCheck = false
+                }
+            } else if (action == MotionEvent.ACTION_MOVE && isThreeFingerTapCheck) {
+                if (event.pointerCount == 3) {
+                    if (isThreeTapSlopExceeded(event)) {
+                        isThreeFingerTapCheck = false
+                    }
+                } else {
+                    isThreeFingerTapCheck = false
+                }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                isThreeFingerTapCheck = false
+            }
+        }
+
+        private fun isThreeTapSlopExceeded(event: MotionEvent): Boolean {
+            for (i in 0 until 3) {
+                val index = event.findPointerIndex(threeFingerPointerIds[i])
+                if (index == -1) return true
+                val d = distSq(event.getX(index), event.getY(index), threeFingerStartPts[i][0], threeFingerStartPts[i][1])
+                if (d > CanvasConfig.TWO_FINGER_TAP_SLOP_SQ) return true
+            }
+            return false
+        }
+
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
                     val toolType = event.getToolType(0)
                     val isEraserTail = toolType == MotionEvent.TOOL_TYPE_ERASER
-                    val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+                    val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 &&
+                        stylusButtonAction == StylusButtonAction.TEMPORARY_ERASER
                     if (isEraserTail || isStylusButton) penInputHandler.prepareEraser() else penInputHandler.finishEraser()
                     penInputHandler.onHoverMove(event)
                 }
@@ -729,6 +819,14 @@ class OnyxCanvasView
 
         fun setCursorView(view: CursorView) {
             penInputHandler.setCursorView(view)
+        }
+
+        fun setTwoFingerTapAction(action: TwoFingerTapAction) {
+            twoFingerTapAction = action
+        }
+
+        fun setStylusButtonAction(action: StylusButtonAction) {
+            stylusButtonAction = action
         }
 
         suspend fun setBackgroundStyle(style: com.alexdremov.notate.model.BackgroundStyle) {
