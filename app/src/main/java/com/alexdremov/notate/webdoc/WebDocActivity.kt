@@ -12,6 +12,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -46,6 +47,7 @@ import com.alexdremov.notate.model.ActionType
 import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.model.ToolbarItem
 import com.alexdremov.notate.ui.dialog.PenSettingsPopup
+import com.alexdremov.notate.ui.input.PalmGuard
 import com.alexdremov.notate.ui.toolbar.MainToolbar
 import com.alexdremov.notate.util.EpdFastModeController
 import com.alexdremov.notate.vm.DrawingViewModel
@@ -134,6 +136,10 @@ class WebDocActivity : AppCompatActivity() {
     private lateinit var content: FrameLayout
     private var rawInput: WebInkRawInput? = null
     private var fingerPaused = false
+    private var fingerDown = false
+    private var rejectingPalm = false
+    private var gestureOnPage = false
+    private val palmGuard by lazy { PalmGuard(PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi) }
     private var focusPaused = false
     private val fingerResume = Runnable { setFingerPaused(false) }
     private var pageLoaded: CompletableDeferred<String>? = null
@@ -374,7 +380,15 @@ class WebDocActivity : AppCompatActivity() {
             inkChanged()
         }
         overlay.onShapeSnapped = { rawInput?.showOverlayNow() }
-        overlay.onPenHover = { rawInput?.onHover(it) }
+        overlay.onPenHover = {
+            if (it.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
+                palmGuard.onHoverExit(SystemClock.uptimeMillis())
+            } else {
+                palmGuard.onHover(SystemClock.uptimeMillis())
+            }
+            rawInput?.onHover(it)
+            if (it.actionMasked != MotionEvent.ACTION_HOVER_EXIT) resumeForPen()
+        }
         overlay.onGuidesMoved = { ended -> if (ended) epd.onInteractionEnd() else epd.onInteractionStart() }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
@@ -410,6 +424,17 @@ class WebDocActivity : AppCompatActivity() {
         if (::overlay.isInitialized) overlay.nativeInput = false
     }
 
+    /**
+     * The pen came into hover range after a finger scroll: hand the screen back to the pen now
+     * instead of [WebDocEpd.IDLE_DELAY_MS] after the finger lifted, which could be mid-stroke.
+     */
+    private fun resumeForPen() {
+        if (!fingerPaused || fingerDown) return
+        overlay.removeCallbacks(fingerResume)
+        epd.settle()
+        setFingerPaused(false)
+    }
+
     private fun setFingerPaused(paused: Boolean) {
         if (paused == fingerPaused) return
         fingerPaused = paused
@@ -429,7 +454,7 @@ class WebDocActivity : AppCompatActivity() {
         if (::overlay.isInitialized) {
             // Palm rejection: while the pen is writing, a resting hand must not scroll the page under the ink.
             val finger = ev.getToolType(ev.actionIndex) == MotionEvent.TOOL_TYPE_FINGER
-            if (overlay.isPenActive && finger) return true
+            if (finger && rejectPalm(ev)) return true
             if (exporting) return true
             // Pen strokes drawn by the driver must not toggle the screen's refresh mode.
             val nativePen = !finger && rawInput != null && overlay.writeEnabled && !overlay.needsSoftwareInput
@@ -437,21 +462,59 @@ class WebDocActivity : AppCompatActivity() {
                 MotionEvent.ACTION_DOWN -> {
                     epd.onInteractionStart()
                     if (finger) {
+                        fingerDown = true
                         // The page must be able to redraw while the finger scrolls or drags.
                         overlay.removeCallbacks(fingerResume)
                         setFingerPaused(true)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    epd.onInteractionEnd()
-                    if (fingerPaused) {
-                        overlay.removeCallbacks(fingerResume)
-                        overlay.postDelayed(fingerResume, WebDocEpd.IDLE_DELAY_MS)
-                    }
+                    if (finger) fingerDown = false
+                    onGestureEnd()
                 }
             }
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    private fun onGestureEnd() {
+        epd.onInteractionEnd()
+        if (fingerPaused) {
+            overlay.removeCallbacks(fingerResume)
+            overlay.postDelayed(fingerResume, WebDocEpd.IDLE_DELAY_MS)
+        }
+    }
+
+    /**
+     * Palm rejection on the page: a finger gesture made while the pen hovers or writes, or one as large
+     * as a palm, is the writing hand and must not scroll the page. Fingers elsewhere (toolbar) still work.
+     * A scroll already under way when the pen arrives is cancelled.
+     */
+    private fun rejectPalm(ev: MotionEvent): Boolean {
+        val action = ev.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) {
+            rejectingPalm = false
+            val r = android.graphics.Rect()
+            content.getGlobalVisibleRect(r)
+            gestureOnPage = r.contains(ev.rawX.toInt(), ev.rawY.toInt())
+        }
+        if (!rejectingPalm && gestureOnPage) {
+            val sizes = FloatArray(ev.pointerCount) { ev.getTouchMajor(it) }
+            if (overlay.isPenActive || palmGuard.isPenNear(SystemClock.uptimeMillis()) || palmGuard.isPalmSized(sizes)) {
+                rejectingPalm = true
+                if (action != MotionEvent.ACTION_DOWN) {
+                    val cancel = MotionEvent.obtain(ev).apply { setAction(MotionEvent.ACTION_CANCEL) }
+                    super.dispatchTouchEvent(cancel)
+                    cancel.recycle()
+                    fingerDown = false
+                    onGestureEnd()
+                    resumeForPen()
+                }
+            }
+        }
+        if (!rejectingPalm) return false
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) rejectingPalm = false
+        return true
     }
 
     @SuppressLint("SetJavaScriptEnabled")

@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Looper
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
@@ -27,6 +28,7 @@ import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.model.TwoFingerTapAction
 import com.alexdremov.notate.ui.controller.CanvasControllerImpl
 import com.alexdremov.notate.ui.controller.ViewportController
+import com.alexdremov.notate.ui.input.PalmGuard
 import com.alexdremov.notate.ui.input.PenInputHandler
 import com.alexdremov.notate.ui.interaction.ViewportInteractor
 import com.alexdremov.notate.ui.render.CanvasRenderer
@@ -94,6 +96,8 @@ class OnyxCanvasView
                 },
                 onInteractionEnd = {
                     canvasRenderer.setInteracting(false)
+                    // Clear the pan's screen updates while the pen is still paused, not under the next stroke.
+                    minimapDrawer?.hideNow()
                     if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
                     EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
                     updateTouchHelperTool()
@@ -130,6 +134,13 @@ class OnyxCanvasView
         private var stylusButtonAction: StylusButtonAction = PreferencesManager.getStylusButtonAction(context)
 
         private var lastStrokeEndTime = 0L
+
+        private val palmGuard =
+            PalmGuard(
+                palmMinSizePx = PalmGuard.PALM_MIN_SIZE_MM / 25.4f * context.resources.displayMetrics.xdpi,
+            )
+        private var rejectingPalmGesture = false
+        private var palmSizedGesture = false
 
         private var currentTool: PenTool = PenTool.defaultPens()[0]
         private var isReadOnly = false
@@ -284,7 +295,10 @@ class OnyxCanvasView
                     viewScope,
                     matrix,
                     inverseMatrix,
-                    onStrokeStarted = { onStrokeStarted?.invoke() },
+                    onStrokeStarted = {
+                        palmGuard.onPenDown(SystemClock.uptimeMillis())
+                        onStrokeStarted?.invoke()
+                    },
                     onStrokeFinished = {
                         minimapDrawer?.setDirty()
                         drawContent()
@@ -517,9 +531,20 @@ class OnyxCanvasView
 
             if (palmRejectionEnabled) return true // Palm rejection: ignore finger input (stylus draws via RawInputCallback)
 
+
             if (handleZoomWindowTouch(event)) return true
 
             if (handleGuideTouch(event)) return true
+
+            // After the zoom window and guides: a finger may hold the ruler while the pen draws along it.
+            if (rejectPalm(event)) {
+                // Two/three-finger taps (undo, redo, ...) still work while the pen hovers; a palm never taps.
+                if (!isReadOnly && !palmSizedGesture) {
+                    detectTwoFingerTap(event)
+                    detectThreeFingerTap(event)
+                }
+                return true
+            }
 
             if (!isReadOnly) detectTwoFingerTap(event)
 
@@ -558,6 +583,35 @@ class OnyxCanvasView
                 }
             }
 
+            return true
+        }
+
+        /**
+         * Drops finger gestures made by the writing hand: any touch while the pen is near the screen,
+         * or one as large as a palm. A pan already under way when the pen arrives is stopped.
+         */
+        private fun rejectPalm(event: MotionEvent): Boolean {
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_DOWN) {
+                rejectingPalmGesture = false
+                palmSizedGesture = false
+            }
+            if (!palmSizedGesture) {
+                palmSizedGesture = palmGuard.isPalmSized(FloatArray(event.pointerCount) { event.getTouchMajor(it) })
+            }
+            if (!rejectingPalmGesture && !selectionInteractor.isInteracting()) {
+                if (palmSizedGesture || palmGuard.isPenNear(SystemClock.uptimeMillis())) {
+                    rejectingPalmGesture = true
+                    if (action != MotionEvent.ACTION_DOWN) {
+                        val cancel = MotionEvent.obtain(event).apply { setAction(MotionEvent.ACTION_CANCEL) }
+                        gestureDetector.onTouchEvent(cancel)
+                        cancel.recycle()
+                        viewportInteractor.cancel()
+                    }
+                }
+            }
+            if (!rejectingPalmGesture) return false
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) rejectingPalmGesture = false
             return true
         }
 
@@ -684,6 +738,7 @@ class OnyxCanvasView
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
+                    palmGuard.onHover(SystemClock.uptimeMillis())
                     val toolType = event.getToolType(0)
                     val isEraserTail = toolType == MotionEvent.TOOL_TYPE_ERASER
                     val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 &&
@@ -693,10 +748,14 @@ class OnyxCanvasView
                 }
 
                 MotionEvent.ACTION_HOVER_ENTER -> {
+                    palmGuard.onHover(SystemClock.uptimeMillis())
+                    // The pen is about to write: redraw what is pending now rather than mid-stroke.
+                    minimapDrawer?.hideNow()
                     penInputHandler.onHoverEnter()
                 }
 
                 MotionEvent.ACTION_HOVER_EXIT -> {
+                    palmGuard.onHoverExit(SystemClock.uptimeMillis())
                     penInputHandler.onHoverExit()
                 }
             }
@@ -1884,5 +1943,6 @@ class OnyxCanvasView
 
         fun notifyStrokeFinished() {
             lastStrokeEndTime = System.currentTimeMillis()
+            palmGuard.onPenUp(SystemClock.uptimeMillis())
         }
     }
