@@ -67,6 +67,10 @@ class CanvasActivity : AppCompatActivity() {
     private val viewModel: DrawingViewModel by viewModels()
     private var activePenPopup: com.alexdremov.notate.ui.dialog.PenSettingsPopup? = null
     private var isGridOpen = false
+
+    // Every state that turns the stylus into a pointer; drives viewModel.setDrawingEnabled.
+    private val inkGate =
+        com.alexdremov.notate.ui.input.InkGate { allowed -> viewModel.setDrawingEnabled(allowed) }
     private val isToolbarHorizontal = mutableStateOf(true)
     private var progressDialog: androidx.appcompat.app.AlertDialog? = null
 
@@ -342,22 +346,19 @@ class CanvasActivity : AppCompatActivity() {
 
         binding.canvasView.setActionPopupContainer(binding.selectionActionsContainer)
 
-        var isToolbarInteractionActive = false
+        val toolbarTouch = com.alexdremov.notate.ui.input.InkGate.Reason.TOOLBAR_TOUCH
         val finishToolbarInteraction = {
-            if (isToolbarInteractionActive) {
-                isToolbarInteractionActive = false
-                if (!viewModel.isEditMode.value) {
-                    viewModel.setDrawingEnabled(true)
-                }
+            if (inkGate.isBlockedBy(toolbarTouch)) {
+                // Only lifts the toolbar's own block: a popup this tap opened keeps ink off.
+                inkGate.set(toolbarTouch, false)
                 com.onyx.android.sdk.api.device.EpdDeviceManager
                     .exitAnimationUpdate(true)
             }
         }
 
         binding.toolbarContainer.onDown = {
-            if (!isToolbarInteractionActive) {
-                isToolbarInteractionActive = true
-                viewModel.setDrawingEnabled(false)
+            if (!inkGate.isBlockedBy(toolbarTouch)) {
+                inkGate.set(toolbarTouch, true)
                 com.onyx.android.sdk.api.device.EpdDeviceManager
                     .enterAnimationUpdate(true)
             }
@@ -646,6 +647,7 @@ class CanvasActivity : AppCompatActivity() {
                     viewModel.isEditMode.collect { isEdit ->
                         Logger.d("NotateDebug", "CanvasActivity:  isEditMode=$isEdit")
                         binding.toolbarContainer.isDragEnabled = !isEdit
+                        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.TOOLBAR_EDIT_MODE, isEdit)
                     }
                 }
                 launch {
@@ -1077,8 +1079,17 @@ class CanvasActivity : AppCompatActivity() {
     }
 
     private fun updateDrawingEnabledState() {
-        val shouldDisable = sidebarCoordinator.isOpen || isGridOpen || activePenPopup != null
-        viewModel.setDrawingEnabled(!shouldDisable)
+        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.SIDEBAR, sidebarCoordinator.isOpen)
+        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.PAGE_GRID, isGridOpen)
+        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.TOOL_POPUP, activePenPopup != null)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Focusable popups, menus and dialogs (pen settings, toolbar menus, new tool
+        // panels...) take window focus. The Onyx digitizer ignores windows, so without
+        // this the stylus would ink on the canvas underneath them.
+        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.WINDOW_UNFOCUSED, !hasFocus)
     }
 
     private fun setDistractionFree(enabled: Boolean) {

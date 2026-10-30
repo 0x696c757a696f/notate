@@ -690,6 +690,8 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     style = MaterialTheme.typography.titleLarge,
                     color = Color.Black,
                 )
+            } else if (item.penTool.isShapeTool) {
+                Icon(painter = painterResource(R.drawable.ic_tool_shape), contentDescription = item.penTool.name, tint = Color.Black)
             } else {
                 val resId =
                     when (item.penTool.strokeType) {
@@ -699,6 +701,7 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                         StrokeType.BRUSH -> R.drawable.stylus_brush_24
                         StrokeType.CHARCOAL -> R.drawable.stylus_pen_24
                         StrokeType.DASH -> R.drawable.stylus_dash_24
+                        StrokeType.DOT -> R.drawable.stylus_dot_24
                         else -> R.drawable.stylus_fountain_pen_24
                     }
                 Icon(painter = painterResource(resId), contentDescription = item.penTool.name, tint = Color.Black)
@@ -788,6 +791,13 @@ fun ToolbarEditPanel(
                 item = ToolbarItem.Pen(defaultText),
                 label = stringResource(R.string.text_tool),
                 onClick = { viewModel.addToolbarItem(ToolbarItem.Pen(defaultText)) },
+            )
+
+            // Add Shapes
+            AddItemButton(
+                item = ToolbarItem.Pen(PenTool.defaultShapeTool("shape_preview")),
+                label = stringResource(R.string.shape_tool),
+                onClick = { viewModel.addShapeTool() },
             )
         }
 
