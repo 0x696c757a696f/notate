@@ -32,6 +32,9 @@ class ToolbarCoordinator(
 
     private var savedPosition: Pair<Int, Int>? = null
 
+    /** Space reserved at the top of the screen (the tab bar); the toolbar starts below it. */
+    var topInset: Int = 0
+
     var onOrientationChanged: (() -> Unit)? = null
     var onDragStateChanged: ((Boolean) -> Unit)? = null
 
@@ -145,7 +148,7 @@ class ToolbarCoordinator(
         val offset = context.dpToPx(marginDp)
 
         lp.leftMargin = offset
-        lp.topMargin = offset
+        lp.topMargin = offset + topInset
         toolbarContainer.layoutParams = lp
     }
 

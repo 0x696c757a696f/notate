@@ -20,6 +20,9 @@ class InkGate(
         PAGE_GRID,
         TOOLBAR_EDIT_MODE,
 
+        // Dragging the split-view divider.
+        SPLIT_DIVIDER,
+
         // Any focusable popup, menu or dialog of this activity (covers new toolbar
         // buttons and popups without registering them here).
         WINDOW_UNFOCUSED,
