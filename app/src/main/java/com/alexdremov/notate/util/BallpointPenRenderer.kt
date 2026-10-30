@@ -201,7 +201,8 @@ object BallpointPenRenderer {
                     if (i == 1) {
                         activePath.moveTo(p0.x, p0.y)
                     } else {
-                        val pPrev = points[i - 1]
+                        // The previous curve ended at the midpoint of points[i - 2] and p0 (= points[i - 1]).
+                        val pPrev = points[i - 2]
                         val prevMidX = (pPrev.x + p0.x) / 2f
                         val prevMidY = (pPrev.y + p0.y) / 2f
                         activePath.moveTo(prevMidX, prevMidY)
