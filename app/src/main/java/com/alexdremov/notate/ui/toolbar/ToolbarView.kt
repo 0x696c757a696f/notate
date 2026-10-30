@@ -728,7 +728,13 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     ActionType.REDO -> R.drawable.ic_redo
                     ActionType.INSERT_IMAGE -> R.drawable.ic_add
                 }
-            Icon(painter = painterResource(iconRes), contentDescription = item.actionType.name, tint = Color.Black)
+            val description =
+                when (item.actionType) {
+                    ActionType.UNDO -> "Undo"
+                    ActionType.REDO -> "Redo"
+                    ActionType.INSERT_IMAGE -> "Insert"
+                }
+            Icon(painter = painterResource(iconRes), contentDescription = description, tint = Color.Black)
         }
 
         is ToolbarItem.Widget -> {
@@ -862,7 +868,7 @@ fun ToolbarEditPanel(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            // Add Image
+            // Add Insert (image / PDF / link / paste)
             AddItemButton(
                 item = ToolbarItem.Action(ActionType.INSERT_IMAGE),
                 label = stringResource(R.string.image_action),

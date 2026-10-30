@@ -428,7 +428,8 @@ class CanvasActivity : AppCompatActivity() {
                                 }
 
                                 com.alexdremov.notate.model.ActionType.INSERT_IMAGE -> {
-                                    imagePickerLauncher.launch(arrayOf("image/*"))
+                                    // Image, PDF, link or paste: one menu, shared with long-press on the canvas.
+                                    binding.canvasView.showInsertMenu()
                                 }
                             }
                         },
