@@ -1,5 +1,6 @@
 package com.alexdremov.notate.webdoc
 
+import com.alexdremov.notate.model.StrokeType
 import kotlinx.serialization.Serializable
 
 /** What kind of source a web document was imported from. */
@@ -58,6 +59,8 @@ class WebInkStroke(
     val width: Float,
     /** Interleaved x0, y0, x1, y1, ... in CSS px. */
     val points: FloatArray,
+    /** Line style; only [StrokeType.DASH] and [StrokeType.DOT] change how the stroke is drawn. */
+    val style: StrokeType = StrokeType.FINELINER,
 )
 
 @Serializable

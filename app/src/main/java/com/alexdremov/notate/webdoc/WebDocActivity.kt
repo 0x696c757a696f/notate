@@ -34,12 +34,21 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.addCallback
+import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import com.alexdremov.notate.BuildConfig
+import com.alexdremov.notate.R
+import com.alexdremov.notate.model.ActionType
+import com.alexdremov.notate.model.ToolType
+import com.alexdremov.notate.model.ToolbarItem
+import com.alexdremov.notate.ui.dialog.PenSettingsPopup
+import com.alexdremov.notate.ui.toolbar.MainToolbar
+import com.alexdremov.notate.util.EpdFastModeController
+import com.alexdremov.notate.vm.DrawingViewModel
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.OnyxSystemHelper
 import com.alexdremov.notate.util.UriUtils
@@ -138,8 +147,12 @@ class WebDocActivity : AppCompatActivity() {
     private lateinit var epd: WebDocEpd
     private lateinit var toolbar: LinearLayout
     private lateinit var titleView: TextView
-    private val toolButtons = HashMap<WebInkOverlayView.Tool, TextView>()
     private lateinit var modeButton: TextView
+    private var moreButton: View? = null
+
+    // Same toolbar, pens and settings as note pages (shared through PreferencesManager).
+    private val toolbarVm: DrawingViewModel by viewModels()
+    private var activePenPopup: PenSettingsPopup? = null
     private var prevButton: TextView? = null
     private var nextButton: TextView? = null
 
@@ -290,16 +303,44 @@ class WebDocActivity : AppCompatActivity() {
 
         modeButton = button("") { setWriteMode(!overlay.writeEnabled) }
         toolbar.addView(modeButton)
-        for ((tool, label) in listOf(WebInkOverlayView.Tool.PEN to "Pen", WebInkOverlayView.Tool.HIGHLIGHTER to "Highlighter", WebInkOverlayView.Tool.ERASER to "Eraser")) {
-            val b = button(label) { selectTool(tool) }
-            toolButtons[tool] = b
-            toolbar.addView(b)
-        }
-        toolbar.addView(button("Undo") { if (currentInk()?.undo() == true) inkChanged() })
-        toolbar.addView(button("Redo") { if (currentInk()?.redo() == true) inkChanged() })
-        toolbar.addView(separator())
         toolbar.addView(button("Refresh screen") { epd.fullRefresh() })
-        toolbar.addView(button("⋯") { showMoreMenu(it) })
+        moreButton = button("⋯") { showMoreMenu(it) }.also { toolbar.addView(it) }
+
+        // Second row: the note toolbar (pens, highlighter, eraser, Lines, Shapes, ruler/protractor, undo/redo).
+        val inkToolbar =
+            androidx.compose.ui.platform.ComposeView(this).apply {
+                setViewCompositionStrategy(
+                    androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed,
+                )
+                setContent {
+                    MainToolbar(
+                        viewModel = toolbarVm,
+                        isHorizontal = true,
+                        canvasController = null,
+                        canvasModel = null,
+                        onToolClick = { item, rect ->
+                            handleToolClick(
+                                item,
+                                android.graphics.Rect(rect.left.toInt(), rect.top.toInt(), rect.right.toInt(), rect.bottom.toInt()),
+                            )
+                        },
+                        onActionClick = { handleAction(it) },
+                        onOpenSidebar = { moreButton?.let { showMoreMenu(it) } },
+                    )
+                }
+            }
+        val inkToolbarScroll =
+            HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                isFillViewport = true
+                addView(
+                    FrameLayout(this@WebDocActivity).apply {
+                        setPadding(dp(4), 0, dp(4), dp(4))
+                        addView(inkToolbar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
+                    },
+                )
+            }
+        root.addView(inkToolbarScroll, 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         content = FrameLayout(this)
         webView =
@@ -325,11 +366,16 @@ class WebDocActivity : AppCompatActivity() {
 
         epd = WebDocEpd(webView)
         OnyxSystemHelper.ignoreSystemSideButton(overlay)
-        overlay.onStrokeStart = { epd.onInteractionStart() }
+        // Native ink is drawn by the pen driver: switching the whole screen to fast mode (and redrawing
+        // everything when leaving it) would only make the next stroke stutter. Software strokes need it.
+        overlay.onStrokeStart = { native -> if (!native) epd.onInteractionStart() }
         overlay.onInkChanged = {
             epd.onInteractionEnd()
             inkChanged()
         }
+        overlay.onShapeSnapped = { rawInput?.showOverlayNow() }
+        overlay.onPenHover = { rawInput?.onHover(it) }
+        overlay.onGuidesMoved = { ended -> if (ended) epd.onInteractionEnd() else epd.onInteractionStart() }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
             if (!overlay.isPenActive) epd.onContentMoved()
@@ -339,7 +385,7 @@ class WebDocActivity : AppCompatActivity() {
 
         configureWebView(m)
         setWriteMode(true)
-        selectTool(WebInkOverlayView.Tool.PEN)
+        observeToolbar()
         overlay.post { openNativeInk() }
     }
 
@@ -385,7 +431,9 @@ class WebDocActivity : AppCompatActivity() {
             val finger = ev.getToolType(ev.actionIndex) == MotionEvent.TOOL_TYPE_FINGER
             if (overlay.isPenActive && finger) return true
             if (exporting) return true
-            when (ev.actionMasked) {
+            // Pen strokes drawn by the driver must not toggle the screen's refresh mode.
+            val nativePen = !finger && rawInput != null && overlay.writeEnabled && !overlay.needsSoftwareInput
+            if (!nativePen) when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     epd.onInteractionStart()
                     if (finger) {
@@ -944,14 +992,141 @@ class WebDocActivity : AppCompatActivity() {
         rawInput?.setEnabled(write)
         modeButton.text = if (write) "✎ Pen: write" else "☝ Pen: interact"
         styleButton(modeButton, write)
-        toolButtons.values.forEach { it.alpha = if (write) 1f else 0.35f }
     }
 
-    private fun selectTool(tool: WebInkOverlayView.Tool) {
-        overlay.tool = tool
+    // ---------------------------------------------------------------- toolbar (shared with note pages)
+
+    private fun observeToolbar() {
+        lifecycleScope.launch {
+            toolbarVm.activeTool.collect { tool ->
+                overlay.tool = tool
+                rawInput?.updateTool()
+            }
+        }
+        lifecycleScope.launch {
+            toolbarVm.currentEraser.collect { overlay.sideEraser = it }
+        }
+    }
+
+    private fun handleToolClick(
+        item: ToolbarItem,
+        anchor: android.graphics.Rect,
+    ) {
+        val unsupported =
+            when (item) {
+                is ToolbarItem.Pen -> if (item.penTool.type == ToolType.TEXT) "Text boxes are only available on note pages" else null
+                is ToolbarItem.Select -> "Selection is only available on note pages"
+                else -> null
+            }
+        if (unsupported != null) {
+            toast(unsupported)
+            return
+        }
         if (!overlay.writeEnabled) setWriteMode(true)
-        rawInput?.updateTool()
-        toolButtons.forEach { (t, b) -> styleButton(b, t == tool) }
+
+        // Shape and line buttons open their picker on the first tap, like on note pages.
+        val opensOnFirstTap = item is ToolbarItem.Pen && item.penTool.isShapeTool
+        if (toolbarVm.activeToolId.value != item.id) {
+            toolbarVm.selectTool(item.id)
+            if (!opensOnFirstTap) return
+        }
+        val tool =
+            when (item) {
+                is ToolbarItem.Pen -> item.penTool
+                is ToolbarItem.Eraser -> item.penTool
+                else -> null
+            } ?: return
+        showPenSettings(tool, anchor)
+    }
+
+    private fun showPenSettings(
+        tool: com.alexdremov.notate.model.PenTool,
+        anchor: android.graphics.Rect,
+    ) {
+        activePenPopup?.dismiss()
+        rawInput?.pause()
+        val popup =
+            PenSettingsPopup(
+                this,
+                tool,
+                onUpdate = { updated -> toolbarVm.updateTool(updated) },
+                onRemove = { removed -> toolbarVm.removePen(removed.id) },
+                onDismiss = {
+                    EpdFastModeController.exitFastMode()
+                    activePenPopup = null
+                    toolbarVm.setPenPopupOpen(false)
+                    rawInput?.resume()
+                },
+            )
+        activePenPopup = popup
+        toolbarVm.setPenPopupOpen(true)
+        EpdFastModeController.enterFastMode()
+        popup.show(window.decorView, anchor)
+    }
+
+    private fun handleAction(action: ActionType) {
+        when (action) {
+            ActionType.UNDO -> if (currentInk()?.undo() == true) inkChanged()
+            ActionType.REDO -> if (currentInk()?.redo() == true) inkChanged()
+            ActionType.GUIDES -> showGuidesPicker()
+            ActionType.INSERT_IMAGE -> toast("Inserting is only available on note pages")
+            ActionType.ZOOM_WINDOW -> toast("The zoom window is only available on note pages")
+        }
+    }
+
+    /** Ruler / protractor picker, same as on note pages: icon toggles, no text. */
+    private fun showGuidesPicker() {
+        val guides = overlay.guides
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+            }
+        val dialog =
+            AlertDialog
+                .Builder(this)
+                .setView(row)
+                .setOnDismissListener {
+                    // Guides need the software preview: this switches the driver's ink off or back on.
+                    rawInput?.updateTool()
+                    epd.fullRefresh()
+                }.create()
+
+        fun toggle(
+            iconRes: Int,
+            description: String,
+            isOn: () -> Boolean,
+            set: (Boolean) -> Unit,
+        ) = android.widget.ImageView(this).apply {
+            setImageResource(iconRes)
+            contentDescription = description
+            setBackgroundResource(R.drawable.bg_tool_selected)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            isSelected = isOn()
+            layoutParams =
+                LinearLayout.LayoutParams(dp(72), dp(72)).apply {
+                    marginStart = dp(8)
+                    marginEnd = dp(8)
+                }
+            setOnClickListener {
+                set(!isOn())
+                overlay.invalidate()
+                dialog.dismiss()
+            }
+        }
+
+        row.addView(
+            toggle(R.drawable.ic_guide_ruler, "Ruler", { guides.isRulerVisible }) {
+                guides.setRulerVisible(it, overlay.width, overlay.height)
+            },
+        )
+        row.addView(
+            toggle(R.drawable.ic_guide_protractor, "Protractor", { guides.isProtractorVisible }) {
+                guides.setProtractorVisible(it, overlay.width, overlay.height)
+            },
+        )
+        dialog.show()
     }
 
     private fun inkChanged() {

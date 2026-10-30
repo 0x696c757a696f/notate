@@ -9,7 +9,7 @@ class WebInkPage(
 ) {
     private sealed interface Edit {
         class Added(
-            val stroke: WebInkStroke,
+            val strokes: List<WebInkStroke>,
         ) : Edit
 
         class Erased(
@@ -29,10 +29,14 @@ class WebInkPage(
     val canUndo get() = undoStack.isNotEmpty()
     val canRedo get() = redoStack.isNotEmpty()
 
-    fun add(stroke: WebInkStroke) {
-        if (stroke.points.size < 2) return
-        _strokes.add(stroke)
-        push(Edit.Added(stroke))
+    fun add(stroke: WebInkStroke) = addAll(listOf(stroke))
+
+    /** Adds several strokes (e.g. the edges of a shape) as one undo step. */
+    fun addAll(strokes: List<WebInkStroke>) {
+        val valid = strokes.filter { it.points.size >= 2 }
+        if (valid.isEmpty()) return
+        _strokes.addAll(valid)
+        push(Edit.Added(valid))
     }
 
     /** Removes every stroke passing within [radius] CSS px of ([x], [y]). Returns true if anything was erased. */
@@ -63,7 +67,7 @@ class WebInkPage(
     fun undo(): Boolean {
         val edit = undoStack.removeLastOrNull() ?: return false
         when (edit) {
-            is Edit.Added -> _strokes.remove(edit.stroke)
+            is Edit.Added -> _strokes.removeAll(edit.strokes.toSet())
             is Edit.Erased -> edit.strokes.forEach { (i, s) -> _strokes.add(i.coerceAtMost(_strokes.size), s) }
             is Edit.Cleared -> _strokes.addAll(edit.strokes)
         }
@@ -74,7 +78,7 @@ class WebInkPage(
     fun redo(): Boolean {
         val edit = redoStack.removeLastOrNull() ?: return false
         when (edit) {
-            is Edit.Added -> _strokes.add(edit.stroke)
+            is Edit.Added -> _strokes.addAll(edit.strokes)
             is Edit.Erased -> edit.strokes.forEach { (_, s) -> _strokes.remove(s) }
             is Edit.Cleared -> _strokes.clear()
         }
