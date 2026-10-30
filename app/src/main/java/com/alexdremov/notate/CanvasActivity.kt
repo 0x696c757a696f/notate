@@ -728,18 +728,49 @@ class CanvasActivity : AppCompatActivity() {
 
     private val externalProjectRepositories = mutableMapOf<String, com.alexdremov.notate.data.ProjectRepository>()
 
-    /** Ruler / protractor picker behind the single toolbar button; each item toggles its guide. */
+    /** Ruler / protractor picker behind the single toolbar button: icon toggles, no text. */
     private fun showGuidesPicker() {
         val canvas = binding.canvasView
-        val labels = arrayOf(getString(R.string.guide_ruler), getString(R.string.guide_protractor))
-        val checked = booleanArrayOf(canvas.isRulerVisible, canvas.isProtractorVisible)
-        androidx.appcompat.app.AlertDialog
-            .Builder(this)
-            .setTitle(R.string.guides_action)
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                if (which == 0) canvas.setRulerVisible(isChecked) else canvas.setProtractorVisible(isChecked)
-            }.setPositiveButton(android.R.string.ok, null)
-            .show()
+        val dp = resources.displayMetrics.density
+        val row =
+            android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER
+                val pad = (16 * dp).toInt()
+                setPadding(pad, pad, pad, pad)
+            }
+        val dialog =
+            androidx.appcompat.app.AlertDialog
+                .Builder(this)
+                .setView(row)
+                .create()
+
+        fun toggle(
+            iconRes: Int,
+            description: String,
+            isOn: () -> Boolean,
+            set: (Boolean) -> Unit,
+        ) = android.widget.ImageView(this).apply {
+            setImageResource(iconRes)
+            contentDescription = description
+            setBackgroundResource(R.drawable.bg_tool_selected)
+            val pad = (14 * dp).toInt()
+            setPadding(pad, pad, pad, pad)
+            isSelected = isOn()
+            layoutParams =
+                android.widget.LinearLayout.LayoutParams((72 * dp).toInt(), (72 * dp).toInt()).apply {
+                    marginStart = (8 * dp).toInt()
+                    marginEnd = (8 * dp).toInt()
+                }
+            setOnClickListener {
+                set(!isOn())
+                dialog.dismiss()
+            }
+        }
+
+        row.addView(toggle(R.drawable.ic_guide_ruler, "Ruler", { canvas.isRulerVisible }, canvas::setRulerVisible))
+        row.addView(toggle(R.drawable.ic_guide_protractor, "Protractor", { canvas.isProtractorVisible }, canvas::setProtractorVisible))
+        dialog.show()
     }
 
     private fun handleLinkActivation(link: com.alexdremov.notate.model.LinkItem) {

@@ -1294,7 +1294,38 @@ class OnyxCanvasView
             onGuidesChanged()
         }
 
+        private var isGuideInteracting = false
+
+        /**
+         * Like panning the canvas: while a guide is dragged, pause the pen's raw-drawing layer (which
+         * otherwise holds back every surface update) and switch the screen to its fast animation mode.
+         */
+        private fun beginGuideInteraction() {
+            if (isGuideInteracting) return
+            isGuideInteracting = true
+            touchHelper?.setRawDrawingEnabled(false)
+            EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
+            com.onyx.android.sdk.api.device.EpdDeviceManager
+                .enterAnimationUpdate(true)
+            canvasRenderer.setInteracting(true)
+        }
+
+        private fun endGuideInteraction() {
+            if (!isGuideInteracting) return
+            isGuideInteracting = false
+            canvasRenderer.setInteracting(false)
+            com.onyx.android.sdk.api.device.EpdDeviceManager
+                .exitAnimationUpdate(true)
+            drawContent()
+            // A clean refresh once it stops, then hand the screen back to the pen.
+            EpdController.invalidate(this, UpdateMode.GU)
+            touchHelper?.setRawDrawingEnabled(true)
+            EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
+            updateTouchHelperTool()
+        }
+
         private fun onGuidesChanged() {
+            if (guideGesture != null) endGuideInteraction()
             guideGesture = null
             drawContent()
             performHardRefresh()
@@ -1324,6 +1355,7 @@ class OnyxCanvasView
                             isRulerVisible && ruler.contains(x, y) -> GuideGesture(true, x, y)
                             else -> null
                         }
+                    if (guideGesture != null) beginGuideInteraction()
                     return guideGesture != null
                 }
 
@@ -1374,8 +1406,7 @@ class OnyxCanvasView
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (guideGesture == null) return false
                     guideGesture = null
-                    drawContent()
-                    EpdController.invalidate(this, UpdateMode.DU)
+                    endGuideInteraction()
                     return true
                 }
             }
@@ -1401,19 +1432,27 @@ class OnyxCanvasView
         private fun pointerDist(event: MotionEvent) =
             kotlin.math.hypot(event.getX(1) - event.getX(0), event.getY(1) - event.getY(0))
 
-        /** Ruler body with millimetre ticks along both edges and its angle in the middle. */
-        private fun drawRuler(cv: Canvas) {
-            val r = ruler
-            val mm = resources.displayMetrics.xdpi / 25.4f
-            val half = r.length / 2f
-            val hw = r.width / 2f
-            cv.save()
-            cv.translate(r.cx, r.cy)
-            cv.rotate(Math.toDegrees(r.angle.toDouble()).toFloat())
-            cv.drawRect(-half, -hw, half, hw, guideFillPaint)
-            cv.drawLine(-half, -hw, half, -hw, guideLinePaint)
-            cv.drawLine(-half, hw, half, hw, guideLinePaint)
+        // Guide artwork is drawn once into a bitmap (hundreds of ticks and labels) and then only
+        // rotated/moved per frame, so dragging a guide stays cheap.
+        private var rulerArt: android.graphics.Bitmap? = null
+        private var protractorArt: android.graphics.Bitmap? = null
+        private var protractorArtRadius = 0f
+        private val guideBitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
+        private fun rulerArt(): android.graphics.Bitmap {
+            rulerArt?.let { if (it.width == kotlin.math.ceil(ruler.length).toInt()) return it }
+            val r = ruler
+            val w = kotlin.math.ceil(r.length).toInt().coerceAtLeast(1)
+            val h = kotlin.math.ceil(r.width).toInt().coerceAtLeast(1)
+            val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            val mm = resources.displayMetrics.xdpi / 25.4f
+            val half = w / 2f
+            val hw = h / 2f
+            c.translate(half, hw)
+            c.drawRect(-half, -hw, half, hw, guideFillPaint)
+            c.drawLine(-half, -hw + 1f, half, -hw + 1f, guideLinePaint)
+            c.drawLine(-half, hw - 1f, half, hw - 1f, guideLinePaint)
             guideTextPaint.textSize = r.width * 0.2f
             val count = (half / mm).toInt()
             for (i in -count..count) {
@@ -1424,29 +1463,42 @@ class OnyxCanvasView
                         i % 5 == 0 -> r.width * 0.18f
                         else -> r.width * 0.1f
                     }
-                cv.drawLine(x, -hw, x, -hw + len, guideLinePaint)
-                cv.drawLine(x, hw, x, hw - len, guideLinePaint)
+                c.drawLine(x, -hw, x, -hw + len, guideLinePaint)
+                c.drawLine(x, hw, x, hw - len, guideLinePaint)
                 if (i % 10 == 0 && i != 0) {
-                    cv.drawText(kotlin.math.abs(i / 10).toString(), x, -hw + len + guideTextPaint.textSize, guideTextPaint)
+                    c.drawText(kotlin.math.abs(i / 10).toString(), x, -hw + len + guideTextPaint.textSize, guideTextPaint)
                 }
             }
+            rulerArt?.recycle()
+            rulerArt = bmp
+            return bmp
+        }
+
+        /** Ruler body with millimetre ticks along both edges and its angle in the middle. */
+        private fun drawRuler(cv: Canvas) {
+            val r = ruler
+            val art = rulerArt()
+            cv.save()
+            cv.translate(r.cx, r.cy)
+            cv.rotate(Math.toDegrees(r.angle.toDouble()).toFloat())
+            cv.drawBitmap(art, -art.width / 2f, -art.height / 2f, guideBitmapPaint)
             guideTextPaint.textSize = r.width * 0.3f
             cv.drawText("${r.degrees}°", 0f, guideTextPaint.textSize * 0.35f + r.width * 0.12f, guideTextPaint)
             cv.restore()
         }
 
-        /** Half disc with 1/5/10 degree ticks, labels every 10 degrees and a centre mark. */
-        private fun drawProtractor(cv: Canvas) {
-            val p = protractor
-            val rad = p.radius
-            cv.save()
-            cv.translate(p.cx, p.cy)
-            cv.rotate(Math.toDegrees(p.angle.toDouble()).toFloat())
+        private fun protractorArt(radius: Float): android.graphics.Bitmap {
+            protractorArt?.let { if (protractorArtRadius == radius) return it }
+            val rad = radius
+            val w = kotlin.math.ceil(rad * 2 + 4).toInt()
+            val h = kotlin.math.ceil(rad + 4).toInt()
+            val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            c.translate(w / 2f, rad + 2f) // base centre
             val oval = RectF(-rad, -rad, rad, rad)
-            cv.drawArc(oval, 180f, 180f, true, guideFillPaint)
-            cv.drawArc(oval, 180f, 180f, false, guideLinePaint)
-            cv.drawLine(-rad, 0f, rad, 0f, guideLinePaint)
-
+            c.drawArc(oval, 180f, 180f, true, guideFillPaint)
+            c.drawArc(oval, 180f, 180f, false, guideLinePaint)
+            c.drawLine(-rad, 0f, rad, 0f, guideLinePaint)
             guideTextPaint.textSize = (rad * 0.06f).coerceIn(14f, 36f)
             for (deg in 0..180) {
                 val len =
@@ -1456,18 +1508,34 @@ class OnyxCanvasView
                         else -> rad * 0.035f
                     }
                 val a = Math.toRadians(deg.toDouble())
-                val c = kotlin.math.cos(a).toFloat()
-                val s = -kotlin.math.sin(a).toFloat()
-                cv.drawLine(c * rad, s * rad, c * (rad - len), s * (rad - len), guideLinePaint)
+                val cs = kotlin.math.cos(a).toFloat()
+                val sn = -kotlin.math.sin(a).toFloat()
+                c.drawLine(cs * rad, sn * rad, cs * (rad - len), sn * (rad - len), guideLinePaint)
                 if (deg % 10 == 0) {
                     val lr = rad - len - guideTextPaint.textSize
-                    cv.drawText(deg.toString(), c * lr, s * lr + guideTextPaint.textSize * 0.35f, guideTextPaint)
+                    c.drawText(deg.toString(), cs * lr, sn * lr + guideTextPaint.textSize * 0.35f, guideTextPaint)
                 }
             }
-            // Centre: where angle rays start
             val mark = rad * 0.04f
-            cv.drawCircle(0f, 0f, mark, guideLinePaint)
-            cv.drawLine(0f, -mark * 2, 0f, 0f, guideLinePaint)
+            c.drawCircle(0f, 0f, mark, guideLinePaint)
+            c.drawLine(0f, -mark * 2, 0f, 0f, guideLinePaint)
+            protractorArt?.recycle()
+            protractorArt = bmp
+            protractorArtRadius = radius
+            return bmp
+        }
+
+        /** Half disc with 1/5/10 degree ticks, labels every 10 degrees and a centre mark. */
+        private fun drawProtractor(cv: Canvas) {
+            val p = protractor
+            // While pinching, stretch the cached art; it is redrawn sharp at the new size afterwards.
+            val art = if (isGuideInteracting && protractorArt != null) protractorArt!! else protractorArt(p.radius)
+            val scale = p.radius / protractorArtRadius
+            cv.save()
+            cv.translate(p.cx, p.cy)
+            cv.rotate(Math.toDegrees(p.angle.toDouble()).toFloat())
+            cv.scale(scale, scale)
+            cv.drawBitmap(art, -art.width / 2f, -(protractorArtRadius + 2f), guideBitmapPaint)
             cv.restore()
         }
 
