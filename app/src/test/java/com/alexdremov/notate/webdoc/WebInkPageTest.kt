@@ -69,7 +69,12 @@ class WebDocExportPlanTest {
     @Test
     fun `a shape added with addAll is one undo step`() {
         val page = WebInkPage()
-        val edges = listOf(line(0f, 0f, 10f, 0f), line(10f, 0f, 10f, 10f), line(10f, 10f, 0f, 0f))
+        val edges =
+            listOf(
+                floatArrayOf(0f, 0f, 10f, 0f),
+                floatArrayOf(10f, 0f, 10f, 10f),
+                floatArrayOf(10f, 10f, 0f, 0f),
+            ).map { WebInkStroke(WebInkTool.PEN, 0, 2f, it) }
         page.addAll(edges)
         assertEquals(edges, page.strokes)
         assertTrue(page.undo())
