@@ -162,7 +162,22 @@ fun FileBrowserScreen(
                 }
             },
             text = {
+                // Most used first, destructive last and set apart.
                 Column(Modifier.fillMaxWidth()) {
+                    if (currentItem is CanvasItem) {
+                        val isFav = favorites.contains(currentItem.uuid ?: currentItem.path)
+                        OutlinedButton(
+                            onClick = {
+                                onToggleFavorite(currentItem)
+                                managingItemPath = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (isFav) "★ Remove from favorites" else "☆ Add to favorites", color = Color.Black)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     OutlinedButton(
                         onClick = {
                             itemToRename = currentItem
@@ -183,32 +198,6 @@ fun FileBrowserScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Duplicate", color = Color.Black)
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    OutlinedButton(
-                        onClick = {
-                            itemToDelete = currentItem
-                            managingItemPath = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Delete", color = Color.Red)
-                    }
-
-                    if (currentItem is CanvasItem) {
-                        val isFav = favorites.contains(currentItem.uuid ?: currentItem.path)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = {
-                                onToggleFavorite(currentItem)
-                                managingItemPath = null
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (isFav) "★ Unfavorite" else "☆ Favorite", color = Color.Black)
-                        }
                     }
 
                     if (currentItem is CanvasItem && allTags.isNotEmpty()) {
@@ -250,6 +239,17 @@ fun FileBrowserScreen(
                                 )
                             }
                         }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            itemToDelete = currentItem
+                            managingItemPath = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Delete", color = Color.Red)
                     }
                 }
             },

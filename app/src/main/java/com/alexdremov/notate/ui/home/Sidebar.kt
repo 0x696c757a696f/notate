@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Folder
@@ -60,6 +61,7 @@ fun Sidebar(
     onManageTags: () -> Unit,
     onSettingsClick: () -> Unit,
     onTodayClick: () -> Unit,
+    onReadingClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Flat white pane separated by a hairline: a translucent gray fill dithers on e-ink.
@@ -143,6 +145,12 @@ fun Sidebar(
                 icon = Icons.Default.Today,
                 isSelected = false,
                 onClick = onTodayClick,
+            )
+            SidebarItem(
+                text = "Reading",
+                icon = Icons.AutoMirrored.Filled.MenuBook,
+                isSelected = false,
+                onClick = onReadingClick,
             )
             SidebarItem(
                 text = "Settings",
