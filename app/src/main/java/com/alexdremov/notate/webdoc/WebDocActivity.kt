@@ -154,7 +154,7 @@ class WebDocActivity : AppCompatActivity() {
             docId != null -> {
                 val m = library.loadMeta(docId)
                 if (m == null) {
-                    toast("文档不存在或已被删除")
+                    toast("Document not found or deleted")
                     finish()
                     return
                 }
@@ -182,7 +182,7 @@ class WebDocActivity : AppCompatActivity() {
         val progress =
             AlertDialog
                 .Builder(this)
-                .setMessage("正在导入…")
+                .setMessage("Importing…")
                 .setCancelable(false)
                 .show()
         lifecycleScope.launch {
@@ -197,7 +197,7 @@ class WebDocActivity : AppCompatActivity() {
                 .onSuccess { open(it) }
                 .onFailure {
                     Logger.e(TAG, "Import failed for $uri", it)
-                    toast("导入失败：${it.message}")
+                    toast("Import failed: ${it.message}")
                     finish()
                 }
         }
@@ -205,11 +205,11 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun importFile(uri: Uri): WebDocMeta {
         val name = UriUtils.getFileName(this, uri) ?: "document.html"
-        return library.importFile(name, { contentResolver.openInputStream(uri) ?: throw java.io.IOException("无法读取 $uri") })
+        return library.importFile(name, { contentResolver.openInputStream(uri) ?: throw java.io.IOException("Cannot read $uri") })
     }
 
     private fun importFolder(treeUri: Uri): WebDocMeta {
-        val root = DocumentFile.fromTreeUri(this, treeUri) ?: throw java.io.IOException("无法读取文件夹")
+        val root = DocumentFile.fromTreeUri(this, treeUri) ?: throw java.io.IOException("Cannot read folder")
         val files = ArrayList<Pair<String, () -> InputStream>>()
 
         fun walk(
@@ -267,7 +267,7 @@ class WebDocActivity : AppCompatActivity() {
         root.addView(toolbarScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(View(this).apply { setBackgroundColor(Color.BLACK) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
 
-        toolbar.addView(button("‹ 返回") { finish() })
+        toolbar.addView(button("‹ Back") { finish() })
         titleView =
             TextView(this).apply {
                 text = m.title
@@ -282,23 +282,23 @@ class WebDocActivity : AppCompatActivity() {
         toolbar.addView(titleView)
 
         if (m.kind == WebDocKind.EPUB) {
-            toolbar.addView(button("目录") { showToc() })
-            prevButton = button("◀ 上一节") { stepPage(-1) }.also { toolbar.addView(it) }
-            nextButton = button("下一节 ▶") { stepPage(1) }.also { toolbar.addView(it) }
+            toolbar.addView(button("Contents") { showToc() })
+            prevButton = button("◀ Prev") { stepPage(-1) }.also { toolbar.addView(it) }
+            nextButton = button("Next ▶") { stepPage(1) }.also { toolbar.addView(it) }
         }
         toolbar.addView(separator())
 
         modeButton = button("") { setWriteMode(!overlay.writeEnabled) }
         toolbar.addView(modeButton)
-        for ((tool, label) in listOf(WebInkOverlayView.Tool.PEN to "钢笔", WebInkOverlayView.Tool.HIGHLIGHTER to "荧光笔", WebInkOverlayView.Tool.ERASER to "橡皮")) {
+        for ((tool, label) in listOf(WebInkOverlayView.Tool.PEN to "Pen", WebInkOverlayView.Tool.HIGHLIGHTER to "Highlighter", WebInkOverlayView.Tool.ERASER to "Eraser")) {
             val b = button(label) { selectTool(tool) }
             toolButtons[tool] = b
             toolbar.addView(b)
         }
-        toolbar.addView(button("撤销") { if (currentInk()?.undo() == true) inkChanged() })
-        toolbar.addView(button("重做") { if (currentInk()?.redo() == true) inkChanged() })
+        toolbar.addView(button("Undo") { if (currentInk()?.undo() == true) inkChanged() })
+        toolbar.addView(button("Redo") { if (currentInk()?.redo() == true) inkChanged() })
         toolbar.addView(separator())
-        toolbar.addView(button("刷新屏幕") { epd.fullRefresh() })
+        toolbar.addView(button("Refresh screen") { epd.fullRefresh() })
         toolbar.addView(button("⋯") { showMoreMenu(it) })
 
         content = FrameLayout(this)
@@ -461,10 +461,10 @@ class WebDocActivity : AppCompatActivity() {
                         try {
                             startActivity(Intent(Intent.ACTION_VIEW, url))
                         } catch (e: ActivityNotFoundException) {
-                            toast("没有可以打开链接的应用")
+                            toast("No app can open this link")
                         }
                     } else {
-                        toast("已阻止外部链接（可在 ⋯ 中允许联网）")
+                        toast("External link blocked (allow network in ⋯)")
                     }
                     return true
                 }
@@ -515,7 +515,7 @@ class WebDocActivity : AppCompatActivity() {
                     // A heavy or hostile document must not take the whole app down.
                     Logger.e(TAG, "WebView renderer gone (crash=${detail.didCrash()})")
                     saveNow()
-                    toast("文档渲染进程已退出，已保存笔记")
+                    toast("Document renderer exited; notes were saved")
                     (view.parent as? ViewGroup)?.removeView(view)
                     view.destroy()
                     finish()
@@ -581,25 +581,25 @@ class WebDocActivity : AppCompatActivity() {
         val m = meta ?: return
         val popup = PopupMenu(this, anchor)
         popup.menu
-            .add(0, 1, 0, "启用 JavaScript")
+            .add(0, 1, 0, "Enable JavaScript")
             .setCheckable(true)
             .setChecked(m.policy.javaScriptEnabled)
         popup.menu
-            .add(0, 2, 1, "允许联网")
+            .add(0, 2, 1, "Allow network")
             .setCheckable(true)
             .setChecked(m.policy.networkAllowed)
         popup.menu
-            .add(0, 3, 2, "减少动画（E Ink）")
+            .add(0, 3, 2, "Reduce motion (E Ink)")
             .setCheckable(true)
             .setChecked(m.policy.reduceMotion)
         popup.menu
-            .add(0, 7, 3, "文石原生笔迹（低延迟）")
+            .add(0, 7, 3, "Boox native ink (low latency)")
             .setCheckable(true)
             .setChecked(rawInput != null)
-        popup.menu.add(0, 8, 4, "导出批注…")
-        popup.menu.add(0, 4, 5, "清除本页笔记")
-        popup.menu.add(0, 5, 6, "兼容性检查")
-        popup.menu.add(0, 6, 7, "清除网页保存的数据")
+        popup.menu.add(0, 8, 4, "Export annotations…")
+        popup.menu.add(0, 4, 5, "Clear notes on this page")
+        popup.menu.add(0, 5, 6, "Compatibility check")
+        popup.menu.add(0, 6, 7, "Clear data saved by the page")
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> updatePolicy { it.copy(javaScriptEnabled = !it.javaScriptEnabled) }
@@ -608,11 +608,11 @@ class WebDocActivity : AppCompatActivity() {
                 4 ->
                     AlertDialog
                         .Builder(this)
-                        .setMessage("清除当前页面上的全部手写笔记？（可撤销）")
-                        .setPositiveButton("清除") { _, _ ->
+                        .setMessage("Clear all handwritten notes on this page? (Can be undone)")
+                        .setPositiveButton("Clear") { _, _ ->
                             currentInk()?.clear()
                             inkChanged()
-                        }.setNegativeButton("取消", null)
+                        }.setNegativeButton("Cancel", null)
                         .show()
                 5 -> showCompatibility()
                 7 -> toggleNativeInk()
@@ -620,11 +620,11 @@ class WebDocActivity : AppCompatActivity() {
                 6 ->
                     AlertDialog
                         .Builder(this)
-                        .setMessage("清除此文档在 localStorage / IndexedDB 中保存的练习答案和进度？手写笔记不受影响。")
-                        .setPositiveButton("清除") { _, _ ->
+                        .setMessage("Clear exercise answers and progress this document saved in localStorage / IndexedDB? Handwritten notes are not affected.")
+                        .setPositiveButton("Clear") { _, _ ->
                             WebStorage.getInstance().deleteOrigin(WebDocResources.originFor(m.id))
                             webView.reload()
-                        }.setNegativeButton("取消", null)
+                        }.setNegativeButton("Cancel", null)
                         .show()
             }
             true
@@ -637,7 +637,7 @@ class WebDocActivity : AppCompatActivity() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_NATIVE_INK, enable).apply()
         if (enable) {
             openNativeInk()
-            if (rawInput == null) toast("此设备不支持文石原生笔迹，继续使用普通绘制")
+            if (rawInput == null) toast("Native Boox ink is not supported on this device; using regular drawing")
         } else {
             closeNativeInk()
         }
@@ -648,16 +648,16 @@ class WebDocActivity : AppCompatActivity() {
     private fun showExportDialog() {
         val m = meta ?: return
         val annotated = annotatedHrefs()
-        val sectionWord = if (m.kind == WebDocKind.EPUB) "节" else "页"
+        val sectionWord = if (m.kind == WebDocKind.EPUB) "section" else "page"
         val options =
             arrayOf<CharSequence>(
-                "PDF：当前$sectionWord（网页 + 批注）",
-                "PDF：所有有批注的$sectionWord（${annotated.size} 个）",
-                "笔记数据（JSON）",
+                "PDF: current $sectionWord (page + annotations)",
+                "PDF: all annotated ${sectionWord}s (${annotated.size})",
+                "Notes data (JSON)",
             )
         AlertDialog
             .Builder(this)
-            .setTitle("导出批注")
+            .setTitle("Export annotations")
             .setSingleChoiceItems(options, -1) { dialog, which ->
                 dialog.dismiss()
                 val base = safeName(m.title)
@@ -665,22 +665,22 @@ class WebDocActivity : AppCompatActivity() {
                     0 -> {
                         val href = currentHref ?: return@setSingleChoiceItems
                         pendingExport = { uri -> exportPdf(listOf(href), uri) }
-                        createPdf.launch("$base-批注.pdf")
+                        createPdf.launch("$base-annotations.pdf")
                     }
                     1 -> {
                         if (annotated.isEmpty()) {
-                            toast("还没有任何批注")
+                            toast("No annotations yet")
                             return@setSingleChoiceItems
                         }
                         pendingExport = { uri -> exportPdf(annotated, uri) }
-                        createPdf.launch("$base-全部批注.pdf")
+                        createPdf.launch("$base-all-annotations.pdf")
                     }
                     2 -> {
                         pendingExport = { uri -> exportJson(uri) }
-                        createJson.launch("$base-笔记.json")
+                        createJson.launch("$base-notes.json")
                     }
                 }
-            }.setNegativeButton("取消", null)
+            }.setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -716,7 +716,7 @@ class WebDocActivity : AppCompatActivity() {
             withContext(Dispatchers.IO) {
                 runCatching { contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) } }
             }
-        toast(if (ok.isSuccess) "已导出笔记数据" else "导出失败：${ok.exceptionOrNull()?.message}")
+        toast(if (ok.isSuccess) "Notes data exported" else "Export failed: ${ok.exceptionOrNull()?.message}")
     }
 
     /**
@@ -735,7 +735,7 @@ class WebDocActivity : AppCompatActivity() {
         val progress =
             AlertDialog
                 .Builder(this)
-                .setMessage("正在导出…")
+                .setMessage("Exporting…")
                 .setCancelable(false)
                 .show()
         val pdf = PdfDocument()
@@ -747,7 +747,7 @@ class WebDocActivity : AppCompatActivity() {
             val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             for ((i, href) in hrefs.withIndex()) {
-                progress.setMessage("正在导出 ${i + 1}/${hrefs.size}…")
+                progress.setMessage("Exporting ${i + 1}/${hrefs.size}…")
                 if (href != currentHref || webView.progress < 100) loadPageAndWait(href)
                 val contentPx = (webView.contentHeight * currentScale()).roundToInt()
                 for (slice in WebDocExportPlan.slices(contentPx, h)) {
@@ -785,7 +785,7 @@ class WebDocActivity : AppCompatActivity() {
             exporting = false
             rawInput?.resume()
         }
-        toast(if (error == null) "已导出 $pageNo 页 PDF" else "导出失败：${error.message}")
+        toast(if (error == null) "Exported $pageNo-page PDF" else "Export failed: ${error.message}")
     }
 
     private suspend fun loadPageAndWait(href: String) {
@@ -807,23 +807,23 @@ class WebDocActivity : AppCompatActivity() {
         }
         AlertDialog
             .Builder(this)
-            .setTitle("允许此文档联网？")
-            .setMessage("文档中的脚本将可以访问互联网（例如加载在线字体、MathJax CDN 或发送数据）。只对可信来源的文档开启。")
-            .setPositiveButton("允许") { _, _ -> updatePolicy { it.copy(networkAllowed = true) } }
-            .setNegativeButton("取消", null)
+            .setTitle("Allow this document network access?")
+            .setMessage("Scripts in the document will be able to reach the internet (e.g. load web fonts, a MathJax CDN, or send data). Only enable this for trusted documents.")
+            .setPositiveButton("Allow") { _, _ -> updatePolicy { it.copy(networkAllowed = true) } }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
     private fun webViewMajorVersion(): Pair<String, Int?> {
         val pkg = WebView.getCurrentWebViewPackage()
-        val version = pkg?.versionName ?: "未知"
+        val version = pkg?.versionName ?: "unknown"
         return "${pkg?.packageName ?: "WebView"} $version" to version.substringBefore('.').toIntOrNull()
     }
 
     private fun checkWebViewVersion() {
         val (_, major) = webViewMajorVersion()
         if (major != null && major < MIN_RECOMMENDED_WEBVIEW) {
-            toast("系统 WebView 版本较旧（$major），部分交互内容或公式可能无法正常显示")
+            toast("System WebView is outdated ($major); some interactive content or formulas may not display correctly")
         }
     }
 
@@ -832,13 +832,13 @@ class WebDocActivity : AppCompatActivity() {
         val m = meta ?: return
         val base =
             buildString {
-                appendLine("WebView：$label")
-                if (major != null && major < MIN_RECOMMENDED_WEBVIEW) appendLine("⚠ 建议升级到 $MIN_RECOMMENDED_WEBVIEW 以上")
-                appendLine("文档类型：${if (m.kind == WebDocKind.EPUB) "EPUB" + if (m.fixedLayout) "（固定版式）" else "（流式）" else "HTML"}")
-                appendLine("JavaScript：${if (m.policy.javaScriptEnabled) "开启" else "关闭"}　联网：${if (m.policy.networkAllowed) "允许" else "禁止"}")
+                appendLine("WebView: $label")
+                if (major != null && major < MIN_RECOMMENDED_WEBVIEW) appendLine("⚠ Version $MIN_RECOMMENDED_WEBVIEW or newer recommended")
+                appendLine("Document type: ${if (m.kind == WebDocKind.EPUB) "EPUB" + if (m.fixedLayout) " (fixed layout)" else " (reflowable)" else "HTML"}")
+                appendLine("JavaScript: ${if (m.policy.javaScriptEnabled) "on" else "off"}  Network: ${if (m.policy.networkAllowed) "allowed" else "blocked"}")
             }
         if (!m.policy.javaScriptEnabled) {
-            showText("兼容性检查", base + "\n开启 JavaScript 后可检测更多特性。")
+            showText("Compatibility check", base + "\nEnable JavaScript to detect more features.")
             return
         }
         webView.evaluateJavascript(FEATURE_PROBE_JS) { raw ->
@@ -848,7 +848,7 @@ class WebDocActivity : AppCompatActivity() {
                     val names =
                         linkedMapOf(
                             "esModules" to "ES Modules",
-                            "es2020" to "ES2020 语法",
+                            "es2020" to "ES2020 syntax",
                             "mathml" to "MathML",
                             "canvas2d" to "Canvas 2D",
                             "webgl" to "WebGL",
@@ -860,9 +860,9 @@ class WebDocActivity : AppCompatActivity() {
                         )
                     base + "\n" + names.entries.joinToString("\n") { (k, v) -> (if (obj.optBoolean(k)) "✓ " else "✗ ") + v }
                 } catch (e: Exception) {
-                    base + "\n特性检测失败：${e.message}"
+                    base + "\nFeature detection failed: ${e.message}"
                 }
-            showText("兼容性检查", text)
+            showText("Compatibility check", text)
         }
     }
 
@@ -874,7 +874,7 @@ class WebDocActivity : AppCompatActivity() {
             .Builder(this)
             .setTitle(title)
             .setMessage(text)
-            .setPositiveButton("确定", null)
+            .setPositiveButton("OK", null)
             .show()
     }
 
@@ -921,11 +921,11 @@ class WebDocActivity : AppCompatActivity() {
         val current = m.pages.indexOfFirst { it.href == currentHref }
         AlertDialog
             .Builder(this)
-            .setTitle("目录")
+            .setTitle("Contents")
             .setSingleChoiceItems(m.pages.map { it.title }.toTypedArray(), current) { dialog, which ->
                 dialog.dismiss()
                 loadPage(m.pages[which].href)
-            }.setNegativeButton("关闭", null)
+            }.setNegativeButton("Close", null)
             .show()
     }
 
@@ -942,7 +942,7 @@ class WebDocActivity : AppCompatActivity() {
     private fun setWriteMode(write: Boolean) {
         overlay.writeEnabled = write
         rawInput?.setEnabled(write)
-        modeButton.text = if (write) "✎ 笔：书写" else "☝ 笔：交互"
+        modeButton.text = if (write) "✎ Pen: write" else "☝ Pen: interact"
         styleButton(modeButton, write)
         toolButtons.values.forEach { it.alpha = if (write) 1f else 0.35f }
     }
@@ -982,7 +982,7 @@ class WebDocActivity : AppCompatActivity() {
             dirty = false
         } catch (e: Exception) {
             Logger.e(TAG, "Failed to save annotations", e)
-            toast("笔记保存失败：${e.message}")
+            toast("Failed to save notes: ${e.message}")
         }
     }
 

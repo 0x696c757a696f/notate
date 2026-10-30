@@ -79,7 +79,7 @@ fun WebDocLibraryDialog(onDismiss: () -> Unit) {
     AlertDialog(
         modifier = Modifier.border(2.dp, Color.Black, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismiss,
-        title = { Text("交互式 EPUB / HTML") },
+        title = { Text("Interactive EPUB / HTML") },
         text = {
             Column(Modifier.fillMaxWidth()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -93,17 +93,17 @@ fun WebDocLibraryDialog(onDismiss: () -> Unit) {
                                 "application/octet-stream",
                             ),
                         )
-                    }) { Text("导入文件", color = Color.Black) }
-                    OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("导入 HTML 文件夹", color = Color.Black) }
+                    }) { Text("Import file", color = Color.Black) }
+                    OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("Import HTML folder", color = Color.Black) }
                 }
                                 Text(
-                    "支持 .epub、.html、含 index.html 的 .zip，或整个网页文件夹（连同 JS / CSS / 字体 / 图片）。",
+                    "Supports .epub, .html, a .zip containing index.html, or a whole web folder (with its JS / CSS / fonts / images).",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
                 HorizontalDivider(color = Color.Black)
                 if (docs.isEmpty()) {
-                    Text("还没有导入的文档", modifier = Modifier.padding(vertical = 16.dp))
+                    Text("No imported documents yet", modifier = Modifier.padding(vertical = 16.dp))
                 } else {
                     LazyColumn(Modifier.heightIn(max = 420.dp)) {
                         items(docs, key = { it.id }) { doc ->
@@ -122,13 +122,13 @@ fun WebDocLibraryDialog(onDismiss: () -> Unit) {
                                     val kind =
                                         when {
                                             doc.kind == WebDocKind.HTML -> "HTML"
-                                            doc.fixedLayout -> "EPUB · 固定版式 · ${doc.pages.size} 页"
-                                            else -> "EPUB · ${doc.pages.size} 节"
+                                            doc.fixedLayout -> "EPUB · Fixed layout · ${doc.pages.size} pages"
+                                            else -> "EPUB · ${doc.pages.size} sections"
                                         }
                                     Text(kind, style = MaterialTheme.typography.bodySmall, color = Color.DarkGray)
                                 }
                                 IconButton(onClick = { toDelete = doc }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = "删除")
+                                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
                                 }
                             }
                             HorizontalDivider(color = Color.LightGray)
@@ -138,7 +138,7 @@ fun WebDocLibraryDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) { Text("关闭", color = Color.Black) }
+            OutlinedButton(onClick = onDismiss) { Text("Close", color = Color.Black) }
         },
     )
 
@@ -146,8 +146,8 @@ fun WebDocLibraryDialog(onDismiss: () -> Unit) {
         AlertDialog(
             modifier = Modifier.border(2.dp, Color.Black, RoundedCornerShape(28.dp)),
             onDismissRequest = { toDelete = null },
-            title = { Text("删除“${doc.title}”？") },
-            text = { Text("导入的副本、手写笔记以及网页保存的练习数据都会被删除，原文件不受影响。") },
+            title = { Text("Delete \"${doc.title}\"?") },
+            text = { Text("The imported copy, handwritten notes and data saved by the page will be deleted. The original file is not affected.") },
             confirmButton = {
                 OutlinedButton(onClick = {
                     toDelete = null
@@ -158,10 +158,10 @@ fun WebDocLibraryDialog(onDismiss: () -> Unit) {
                             .deleteOrigin(WebDocResources.originFor(doc.id))
                         refresh++
                     }
-                }) { Text("删除", color = Color.Red) }
+                }) { Text("Delete", color = Color.Red) }
             },
             dismissButton = {
-                OutlinedButton(onClick = { toDelete = null }) { Text("取消", color = Color.Black) }
+                OutlinedButton(onClick = { toDelete = null }) { Text("Cancel", color = Color.Black) }
             },
         )
     }

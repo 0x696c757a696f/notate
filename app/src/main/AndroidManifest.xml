@@ -59,7 +59,7 @@
         <activity
             android:name=".webdoc.WebDocActivity"
             android:exported="true"
-            android:label="Notate 阅读与批注"
+            android:label="Notate Reader"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.Notate">
             <intent-filter>

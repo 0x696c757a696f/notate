@@ -104,7 +104,7 @@ object EpubParser {
             spine.mapNotNull { manifest[it] }.mapIndexed { index, item ->
                 WebDocPage(
                     href = item.href,
-                    title = labels[item.href] ?: "第 ${index + 1} 节",
+                    title = labels[item.href] ?: "Section ${index + 1}",
                 )
             }
         if (pages.isEmpty()) throw IOException("EPUB spine is empty")

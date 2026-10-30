@@ -42,7 +42,7 @@ class EpubParserTest {
             """<package><metadata/><manifest><item id="a" href="a.html" media-type="text/html"/></manifest><spine><itemref idref="a"/></spine></package>""",
         )
         val result = EpubParser.parse(root)
-        assertEquals(listOf(WebDocPage("a.html", "第 1 节")), result.pages)
+        assertEquals(listOf(WebDocPage("a.html", "Section 1")), result.pages)
     }
 
     @Test
