@@ -20,11 +20,11 @@ android {
         applicationId = "com.alexdremov.notate"
         minSdk = 26
         targetSdk = 36
-        // CI passes -Pnotate.versionCode=<run number> so every build installs
-        // over the previous one; local builds stay at 1.
-        val ciVersionCode = providers.gradleProperty("notate.versionCode").orNull?.toInt()
-        versionCode = ciVersionCode ?: 1
-        versionName = if (ciVersionCode != null) "1.0.$ciVersionCode" else "1.0"
+        // CI passes -Pnotate.versionCode=<minutes since 2026-01-01> (shared by
+        // debug and release workflows, so any newer build installs over an
+        // older one) and -Pnotate.versionName; local builds stay at 1 / "1.0".
+        versionCode = providers.gradleProperty("notate.versionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("notate.versionName").orNull ?: "1.0"
         ndk {
             // Boox devices are ARM64; the OCR runtime ships ARM64 native code only.
             abiFilters += "arm64-v8a"
@@ -61,7 +61,12 @@ android {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            // Without keystore.properties (no release secrets configured) fall
+            // back to the shared debug key so the release APK is still installable.
+            signingConfig =
+                signingConfigs.getByName(
+                    if (rootProject.file("keystore.properties").exists()) "release" else "debug",
+                )
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")

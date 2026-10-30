@@ -40,8 +40,12 @@ jobs:
         cache-provider: basic
 
     # ABI is pinned to arm64-v8a in app/build.gradle.kts (defaultConfig.ndk.abiFilters).
+    # versionCode = minutes since 2026-01-01 UTC, shared with release.yml so a
+    # newer build (debug or release) always installs over an older one.
     - name: Build arm64-v8a Debug APK
-      run: ./gradlew assembleDebug -Pnotate.versionCode=${{ github.run_number }}
+      run: |
+        code=$(( ($(date -u +%s) - 1767225600) / 60 ))
+        ./gradlew assembleDebug -Pnotate.versionCode=$code -Pnotate.versionName=1.0-ci.${{ github.run_number }}
 
     - name: Verify APK only ships arm64-v8a native code
       run: |
