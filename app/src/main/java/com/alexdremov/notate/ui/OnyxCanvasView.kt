@@ -98,9 +98,7 @@ class OnyxCanvasView
                     canvasRenderer.setInteracting(false)
                     // Clear the pan's screen updates while the pen is still paused, not under the next stroke.
                     minimapDrawer?.hideNow()
-                    if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
-                    EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
-                    updateTouchHelperTool()
+                    resumeRawDrawing()
                 },
                 lastStrokeEndTimeProvider = { lastStrokeEndTime },
             )
@@ -1027,6 +1025,7 @@ class OnyxCanvasView
         fun getBackgroundStyle() = canvasModel.backgroundStyle
 
         fun setDrawingEnabled(enabled: Boolean) {
+            penInputHandler.inkBlocked = !enabled
             if (enabled) {
                 setupTouchHelper()
             } else {
@@ -1291,6 +1290,14 @@ class OnyxCanvasView
             penInputHandler.setScale(viewportInteractor.getCurrentScale())
         }
 
+        /** Hands the screen back to the pen after a pan or guide drag, unless a popup still blocks ink. */
+        private fun resumeRawDrawing() {
+            if (penInputHandler.inkBlocked) return
+            if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
+            EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
+            updateTouchHelperTool()
+        }
+
         private fun performHardRefresh() {
             val wasEnabled = isPaneActive && touchHelper?.isRawDrawingInputEnabled() == true
             if (wasEnabled) {
@@ -1324,16 +1331,21 @@ class OnyxCanvasView
                 setLimitRect(limit, exclusionRects)
 
                 openRawDrawing()
-                setRawDrawingEnabled(true)
-                setRawDrawingRenderEnabled(true)
-                isRawDrawingActive = true
+                // A surface change while a popup is open must not bring the ink back under it.
+                val allowed = !penInputHandler.inkBlocked
+                setRawDrawingEnabled(allowed)
+                setRawDrawingRenderEnabled(allowed)
+                isRawDrawingActive = allowed
 
                 // Mode 2 ignores enableFingerTouch(), so we don't need to call it.
                 // Instead, we use setSingleRegionMode() which is crucial for fast stroke capture in SFTouchRender.
                 setSingleRegionMode()
 
                 EpdController.enterScribbleMode(this@OnyxCanvasView)
-                EpdController.setScreenHandWritingPenState(this@OnyxCanvasView, EpdPenManager.PEN_DRAWING)
+                EpdController.setScreenHandWritingPenState(
+                    this@OnyxCanvasView,
+                    if (allowed) EpdPenManager.PEN_DRAWING else EpdPenManager.PEN_PAUSE,
+                )
             }
             if (isFirstInit) {
                 performHardRefresh()
@@ -1418,9 +1430,7 @@ class OnyxCanvasView
             drawContent()
             // A clean refresh once it stops, then hand the screen back to the pen.
             EpdController.invalidate(this, UpdateMode.GU)
-            if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
-            EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
-            updateTouchHelperTool()
+            resumeRawDrawing()
         }
 
         private fun onGuidesChanged() {

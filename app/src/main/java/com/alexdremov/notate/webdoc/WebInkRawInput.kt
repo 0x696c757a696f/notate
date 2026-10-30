@@ -322,7 +322,8 @@ class WebInkRawInput(
             i += OP_STRIDE
             when (op) {
                 OP_BEGIN, OP_BEGIN_ERASER -> {
-                    if (SystemClock.uptimeMillis() < ignoreBeginUntil) {
+                    // Paused for a popup or dialog: a late stroke from the driver must not land under it.
+                    if (!active || SystemClock.uptimeMillis() < ignoreBeginUntil) {
                         ignoringRestart = true
                         continue
                     }
