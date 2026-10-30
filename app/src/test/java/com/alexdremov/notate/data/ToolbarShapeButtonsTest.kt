@@ -28,13 +28,12 @@ class ToolbarShapeButtonsTest {
         items.filterIsInstance<ToolbarItem.Pen>().map { it.penTool.shapeType }.filter { it != ShapeType.NONE }
 
     @Test
-    fun `default toolbar has separate shape buttons`() {
-        val types = shapeTypes(PreferencesManager.getToolbarItems(context))
-        assertEquals(listOf(ShapeType.AUTO) + PenTool.DEFAULT_SHAPE_BUTTONS, types)
+    fun `default toolbar has one Shapes and one Lines button`() {
+        assertEquals(listOf(ShapeType.AUTO, ShapeType.LINE), shapeTypes(PreferencesManager.getToolbarItems(context)))
     }
 
     @Test
-    fun `old saved toolbar gets shape buttons once, after the last pen`() {
+    fun `old saved toolbar gets both buttons once, after the last pen`() {
         val old =
             listOf(
                 ToolbarItem.Pen(PenTool.defaultPens()[0]),
@@ -43,22 +42,22 @@ class ToolbarShapeButtonsTest {
         PreferencesManager.saveToolbarItems(context, old)
 
         val migrated = PreferencesManager.getToolbarItems(context)
-        assertEquals(listOf(ShapeType.AUTO) + PenTool.DEFAULT_SHAPE_BUTTONS, shapeTypes(migrated))
-        // Inserted between the pen and the eraser
-        assertTrue(migrated.first() is ToolbarItem.Pen && (migrated.first() as ToolbarItem.Pen).penTool.shapeType == ShapeType.NONE)
+        assertEquals(listOf(ShapeType.AUTO, ShapeType.LINE), shapeTypes(migrated))
         assertTrue(migrated.last() is ToolbarItem.Eraser)
 
-        // User removes the polygon button: it must not come back
-        val withoutPolygon =
-            migrated.filterNot { it is ToolbarItem.Pen && it.penTool.shapeType == ShapeType.POLYGON }
-        PreferencesManager.saveToolbarItems(context, withoutPolygon)
-        assertTrue(ShapeType.POLYGON !in shapeTypes(PreferencesManager.getToolbarItems(context)))
+        // User removes the Lines button: it must not come back
+        PreferencesManager.saveToolbarItems(context, migrated.filterNot { it.id == "line_tool" })
+        assertEquals(listOf(ShapeType.AUTO), shapeTypes(PreferencesManager.getToolbarItems(context)))
     }
 
     @Test
-    fun `existing shape pen is not duplicated`() {
-        PreferencesManager.saveToolbarItems(context, listOf(ToolbarItem.Pen(PenTool.defaultShapeTool("mine", ShapeType.AUTO))))
-        val types = shapeTypes(PreferencesManager.getToolbarItems(context))
-        assertEquals(1, types.count { it == ShapeType.AUTO })
+    fun `toolbar that already has a shape pen only gains the Lines button`() {
+        PreferencesManager.saveToolbarItems(context, listOf(ToolbarItem.Pen(PenTool.defaultShapeTool("mine", ShapeType.POLYGON))))
+        assertEquals(listOf(ShapeType.POLYGON, ShapeType.LINE), shapeTypes(PreferencesManager.getToolbarItems(context)))
+    }
+
+    @Test
+    fun `line and shape families do not mix`() {
+        assertTrue(ShapeType.entries.filter { it.isLine }.toSet() == setOf(ShapeType.LINE, ShapeType.ARROW, ShapeType.DOUBLE_ARROW))
     }
 }

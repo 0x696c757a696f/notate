@@ -23,7 +23,6 @@
     <string name="lasso_selection">Lasso</string>
     <string name="shape_tool">Shapes</string>
     <string name="shape_settings">Shapes</string>
-    <string name="shape_line_style_hint">Line style: pick Fineliner for solid, Dash or Dotted above</string>
     <string name="shape_auto">Auto</string>
     <string name="shape_line">Line</string>
     <string name="shape_arrow">Arrow</string>
@@ -39,4 +38,8 @@
     <string name="shape_grid">Grid axes</string>
     <string name="shape_number_line">Number line</string>
     <string name="shape_polygon_sides">Sides: %1$d</string>
+    <string name="line_tool">Lines</string>
+    <string name="line_style_solid">Solid</string>
+    <string name="line_style_dashed">Dashed</string>
+    <string name="line_style_dotted">Dotted</string>
 </resources>

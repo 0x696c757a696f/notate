@@ -6,8 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
@@ -693,6 +691,7 @@ fun RenderToolbarItemIcon(item: ToolbarItem) {
                     color = Color.Black,
                 )
             } else if (item.penTool.isShapeTool) {
+                // Shows the shape currently picked on this button
                 Icon(
                     painter = painterResource(ShapeUi.iconRes(item.penTool.shapeType)),
                     contentDescription = stringResource(ShapeUi.labelRes(item.penTool.shapeType)),
@@ -757,7 +756,6 @@ fun ToolbarEditPanel(
                 .border(1.dp, Color.Black, RoundedCornerShape(11.dp))
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.White)
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -798,6 +796,25 @@ fun ToolbarEditPanel(
                 item = ToolbarItem.Pen(defaultText),
                 label = stringResource(R.string.text_tool),
                 onClick = { viewModel.addToolbarItem(ToolbarItem.Pen(defaultText)) },
+            )
+
+            // Add Shapes
+            AddItemButton(
+                item = ToolbarItem.Pen(PenTool.defaultShapeTool("shape_preview")),
+                label = stringResource(R.string.shape_tool),
+                onClick = { viewModel.addShapeTool() },
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            // Add Lines
+            AddItemButton(
+                item = ToolbarItem.Pen(PenTool.defaultShapeTool("line_preview", ShapeType.LINE)),
+                label = stringResource(R.string.line_tool),
+                onClick = { viewModel.addShapeTool(ShapeType.LINE) },
             )
         }
 
@@ -862,29 +879,6 @@ fun ToolbarEditPanel(
             }
         }
 
-        androidx.compose.material3.Divider()
-
-        // Shapes: each type can be added as its own toolbar button
-        Text(stringResource(R.string.shape_tool), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-
-        ShapeUi.ORDERED.chunked(3).forEach { rowTypes ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                rowTypes.forEach { type ->
-                    AddItemButton(
-                        item = ToolbarItem.Pen(PenTool.defaultShapeTool("shape_preview_${type.name}", type)),
-                        label = stringResource(ShapeUi.labelRes(type)),
-                        onClick = { viewModel.addShapeTool(type) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                // Keep columns aligned on a short last row
-                repeat(3 - rowTypes.size) { Spacer(modifier = Modifier.weight(1f)) }
-            }
-        }
-
         Spacer(modifier = Modifier.height(8.dp))
 
         TextButton(
@@ -901,12 +895,11 @@ fun AddItemButton(
     item: ToolbarItem,
     label: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier =
-            modifier
+            Modifier
                 .clickable { onClick() }
                 .padding(4.dp),
     ) {
@@ -920,13 +913,7 @@ fun AddItemButton(
         ) {
             RenderToolbarItemIcon(item)
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color.Black,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
+        Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = Color.Black)
     }
 }
 

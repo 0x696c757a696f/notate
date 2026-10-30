@@ -26,6 +26,9 @@ object ShapeUi {
             ShapeType.NUMBER_LINE,
         )
 
+    /** Choices shown in the popup of a button whose current type is [current]: lines or shapes, never both. */
+    fun optionsFor(current: ShapeType): List<ShapeType> = ORDERED.filter { it.isLine == current.isLine }
+
     @DrawableRes
     fun iconRes(type: ShapeType): Int =
         when (type) {
