@@ -52,6 +52,18 @@ class PenInputHandler(
     @Volatile
     private var isStrokeInProgress = false
 
+    /**
+     * Set while a popup, menu or sidebar covers the canvas. Tool updates made from that popup
+     * must not switch the driver's ink back on, and any stroke the driver still reports is dropped.
+     */
+    @Volatile
+    var inkBlocked = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) updateTouchHelperTool()
+        }
+
     // --- Selection State ---
     private var isSelecting = false // True if drawing selection lasso/rect
 
@@ -331,6 +343,7 @@ class PenInputHandler(
             )
         // Next to a ruler/protractor the raw pen path would wobble off the guide: show only the preview.
         if (isHoveringGuide || activeGuide != null) helper.setRawDrawingRenderEnabled(false)
+        if (inkBlocked) helper.setRawDrawingRenderEnabled(false)
     }
 
     // Deprecated: Use setScale instead
@@ -360,6 +373,13 @@ class PenInputHandler(
     ) {
         // Cancel any pending refresh as the user has resumed writing
         refreshHandler.removeCallbacks(refreshRunnable)
+
+        if (inkBlocked) {
+            isStrokeInProgress = true
+            isIgnoringCurrentStroke = true
+            lastProcessedTimestamp = touchPoint.timestamp
+            return
+        }
 
         // A stylus tap on the toolbar is a click, never ink — even if the driver's
         // exclusion rects are stale. Leave the selection alone too, so tools can act on it.
