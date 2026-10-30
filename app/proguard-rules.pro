@@ -32,3 +32,4 @@
 -keep class com.google.api.services.drive.** { *; }
 -dontwarn com.google.api.client.**
 -dontwarn com.google.api.services.drive.**
+
