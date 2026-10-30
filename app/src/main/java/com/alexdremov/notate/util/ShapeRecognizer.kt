@@ -179,7 +179,7 @@ object ShapeRecognizer {
             // It's a triangle candidate.
             if (polyScore < roundScore) {
                 Logger.d("ShapeRecognizer", "Recognized as TRIANGLE (Score: $polyScore vs $roundScore)")
-                return createPolygonResult(RecognizedShape.TRIANGLE, simplified)
+                return createPolygonResult(RecognizedShape.TRIANGLE, ShapeBeautifier.triangle(uniqueVertices(simplified)))
             }
         } else if (vertexCount == 4) {
             // Quadrilateral vs Round.
@@ -189,7 +189,7 @@ object ShapeRecognizer {
                     createRectangleResult(simplified)
                 } else {
                     Logger.d("ShapeRecognizer", "Recognized as quadrilateral POLYGON (Score: $polyScore vs $roundScore)")
-                    createPolygonResult(RecognizedShape.POLYGON, simplified)
+                    createPolygonResult(RecognizedShape.POLYGON, ShapeBeautifier.quadrilateral(uniqueVertices(simplified)))
                 }
             } else {
                 Logger.d("ShapeRecognizer", "Recognized as round (Override 4-vertex) (Score: $roundScore vs $polyScore)")
@@ -204,7 +204,7 @@ object ShapeRecognizer {
                     createRegularPolygonResult(type, simplified)
                 } else {
                     Logger.d("ShapeRecognizer", "Recognized as irregular POLYGON ($vertexCount)")
-                    createPolygonResult(RecognizedShape.POLYGON, simplified)
+                    createPolygonResult(RecognizedShape.POLYGON, ShapeBeautifier.level(uniqueVertices(simplified)))
                 }
             } else {
                 Logger.d("ShapeRecognizer", "Recognized as round (Override $vertexCount-vertex) (Score: $roundScore vs $polyScore)")
@@ -443,7 +443,7 @@ object ShapeRecognizer {
             vertices.add(PointF(px, py))
         }
 
-        return RecognitionResult(type, closedSegments(vertices))
+        return RecognitionResult(type, closedSegments(ShapeBeautifier.level(vertices)))
     }
 
     private fun createRectangleResult(points: List<PointF>): RecognitionResult {
@@ -483,8 +483,8 @@ object ShapeRecognizer {
         var baseAngle = avg4Angle / 4f
         // baseAngle is now in range (-PI/4, PI/4], i.e., (-45, 45] degrees
 
-        // Snap to axis (0 degrees) if within 5 degrees
-        val snapThreshold = 5.0 * PI / 180.0
+        // Snap to axis (0 degrees) if within the beautifier's leveling tolerance
+        val snapThreshold = ShapeBeautifier.LEVEL_TOLERANCE_DEG * PI / 180.0
         if (abs(baseAngle) < snapThreshold) {
             baseAngle = 0f
         }
@@ -511,8 +511,13 @@ object ShapeRecognizer {
         }
 
         // Each dimension is contributed to by 2 sides (approx)
-        val avgW = sumW / 2f
-        val avgH = sumH / 2f
+        var avgW = sumW / 2f
+        var avgH = sumH / 2f
+        // Nearly equal sides: a square
+        if (abs(avgW - avgH) / max(max(avgW, avgH), EPSILON) < ShapeBeautifier.SIDE_TOLERANCE) {
+            avgW = (avgW + avgH) / 2f
+            avgH = avgW
+        }
 
         // Construct 4 vertices for a rectangle centered at cx, cy
         val vertices = mutableListOf<PointF>()
