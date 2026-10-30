@@ -65,4 +65,21 @@ class WebDocExportPlanTest {
         assertEquals(listOf(WebDocExportPlan.Slice(0, 0, 800)), WebDocExportPlan.slices(300, 800))
         assertEquals(5, WebDocExportPlan.slices(100_000, 100, maxSlices = 5).size)
     }
+
+    @Test
+    fun `a shape added with addAll is one undo step`() {
+        val page = WebInkPage()
+        val edges =
+            listOf(
+                floatArrayOf(0f, 0f, 10f, 0f),
+                floatArrayOf(10f, 0f, 10f, 10f),
+                floatArrayOf(10f, 10f, 0f, 0f),
+            ).map { WebInkStroke(WebInkTool.PEN, 0, 2f, it) }
+        page.addAll(edges)
+        assertEquals(edges, page.strokes)
+        assertTrue(page.undo())
+        assertTrue(page.strokes.isEmpty())
+        assertTrue(page.redo())
+        assertEquals(edges, page.strokes)
+    }
 }

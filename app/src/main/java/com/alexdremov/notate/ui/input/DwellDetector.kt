@@ -50,11 +50,17 @@ class DwellDetector(
             }
         }
 
+    // Read once per stroke: onMove runs on the pen thread for every point.
+    private var enabled = false
+    private var delayMs = 600L
+
     fun onStart(
         startPoint: TouchPoint,
         tool: PenTool,
     ) {
         cancel()
+        enabled = PreferencesManager.isShapePerfectionEnabled(context)
+        delayMs = PreferencesManager.getShapePerfectionDelay(context)
         isShapeRecognized = false
         lastDwellPoint = startPoint
         lastDwellIndex = 1
@@ -100,9 +106,8 @@ class DwellDetector(
     }
 
     private fun scheduleDwell(tool: PenTool) {
-        if (tool.type != ToolType.ERASER && PreferencesManager.isShapePerfectionEnabled(context)) {
-            val delay = PreferencesManager.getShapePerfectionDelay(context)
-            handler.postDelayed(dwellRunnable, delay)
+        if (tool.type != ToolType.ERASER && enabled) {
+            handler.postDelayed(dwellRunnable, delayMs)
         }
     }
 
