@@ -44,3 +44,25 @@ class WebInkPageTest {
         assertEquals(listOf(a, c), page.strokes)
     }
 }
+
+class WebDocExportPlanTest {
+    @Test
+    fun `slices cover the page exactly once`() {
+        val slices = WebDocExportPlan.slices(contentHeightPx = 2500, viewportHeightPx = 1000)
+        assertEquals(
+            listOf(
+                WebDocExportPlan.Slice(0, 0, 1000),
+                WebDocExportPlan.Slice(1000, 0, 1000),
+                WebDocExportPlan.Slice(1500, 500, 500),
+            ),
+            slices,
+        )
+        assertEquals(2500, slices.sumOf { it.height })
+    }
+
+    @Test
+    fun `short page is a single screen and cap is respected`() {
+        assertEquals(listOf(WebDocExportPlan.Slice(0, 0, 800)), WebDocExportPlan.slices(300, 800))
+        assertEquals(5, WebDocExportPlan.slices(100_000, 100, maxSlices = 5).size)
+    }
+}

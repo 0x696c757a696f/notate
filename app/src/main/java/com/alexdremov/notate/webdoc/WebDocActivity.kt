@@ -4,7 +4,10 @@ import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.pdf.PdfDocument
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -31,6 +34,7 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.addCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
@@ -39,11 +43,13 @@ import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.OnyxSystemHelper
 import com.alexdremov.notate.util.UriUtils
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.InputStream
@@ -61,6 +67,8 @@ class WebDocActivity : AppCompatActivity() {
         private const val TAG = "WebDocActivity"
         const val EXTRA_DOC_ID = "WEBDOC_ID"
         const val EXTRA_IS_FOLDER = "WEBDOC_IS_FOLDER"
+        private const val PREFS = "webdoc"
+        private const val PREF_NATIVE_INK = "native_ink"
 
         /** Chromium versions below this miss parts of ES2020+/MathML Core that interactive books use. */
         const val MIN_RECOMMENDED_WEBVIEW = 109
@@ -114,6 +122,18 @@ class WebDocActivity : AppCompatActivity() {
     private var dirty = false
 
     private lateinit var webView: WebView
+    private lateinit var content: FrameLayout
+    private var rawInput: WebInkRawInput? = null
+    private var fingerPaused = false
+    private var focusPaused = false
+    private val fingerResume = Runnable { setFingerPaused(false) }
+    private var pageLoaded: CompletableDeferred<String>? = null
+    private var exporting = false
+    private var pendingExport: (suspend (Uri) -> Unit)? = null
+    private val createPdf =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri -> runPendingExport(uri) }
+    private val createJson =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> runPendingExport(uri) }
     private lateinit var overlay: WebInkOverlayView
     private lateinit var epd: WebDocEpd
     private lateinit var toolbar: LinearLayout
@@ -281,7 +301,7 @@ class WebDocActivity : AppCompatActivity() {
         toolbar.addView(button("刷新屏幕") { epd.fullRefresh() })
         toolbar.addView(button("⋯") { showMoreMenu(it) })
 
-        val content = FrameLayout(this)
+        content = FrameLayout(this)
         webView =
             WebView(this).apply {
                 setBackgroundColor(Color.WHITE)
@@ -312,21 +332,75 @@ class WebDocActivity : AppCompatActivity() {
         }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
-            if (!overlay.isDrawing) epd.onContentMoved()
+            if (!overlay.isPenActive) epd.onContentMoved()
         }
+
+        overlay.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> rawInput?.updateLimitRect() }
 
         configureWebView(m)
         setWriteMode(true)
         selectTool(WebInkOverlayView.Tool.PEN)
+        overlay.post { openNativeInk() }
+    }
+
+    // ---------------------------------------------------------------- Onyx native pen channel
+
+    private fun nativeInkPreferred() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_NATIVE_INK, true)
+
+    private fun openNativeInk() {
+        if (rawInput != null || !::overlay.isInitialized || !nativeInkPreferred() || isFinishing) return
+        rawInput = WebInkRawInput.createOrNull(overlay)
+        overlay.nativeInput = rawInput != null
+        rawInput?.let { raw ->
+            raw.setEnabled(overlay.writeEnabled)
+            if (fingerPaused) raw.pause()
+            if (focusPaused || exporting) raw.pause()
+        }
+    }
+
+    private fun closeNativeInk() {
+        rawInput?.close()
+        rawInput = null
+        if (::overlay.isInitialized) overlay.nativeInput = false
+    }
+
+    private fun setFingerPaused(paused: Boolean) {
+        if (paused == fingerPaused) return
+        fingerPaused = paused
+        if (paused) rawInput?.pause() else rawInput?.resume()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Dialogs and menus take focus; without this the pen would draw over them instead of tapping them.
+        val pause = !hasFocus
+        if (pause == focusPaused) return
+        focusPaused = pause
+        if (pause) rawInput?.pause() else rawInput?.resume()
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (::overlay.isInitialized) {
             // Palm rejection: while the pen is writing, a resting hand must not scroll the page under the ink.
-            if (overlay.isDrawing && ev.getToolType(ev.actionIndex) == MotionEvent.TOOL_TYPE_FINGER) return true
+            val finger = ev.getToolType(ev.actionIndex) == MotionEvent.TOOL_TYPE_FINGER
+            if (overlay.isPenActive && finger) return true
+            if (exporting) return true
             when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> epd.onInteractionStart()
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> epd.onInteractionEnd()
+                MotionEvent.ACTION_DOWN -> {
+                    epd.onInteractionStart()
+                    if (finger) {
+                        // The page must be able to redraw while the finger scrolls or drags.
+                        overlay.removeCallbacks(fingerResume)
+                        setFingerPaused(true)
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    epd.onInteractionEnd()
+                    if (fingerPaused) {
+                        overlay.removeCallbacks(fingerResume)
+                        overlay.postDelayed(fingerResume, WebDocEpd.IDLE_DELAY_MS)
+                    }
+                }
             }
         }
         return super.dispatchTouchEvent(ev)
@@ -422,6 +496,16 @@ class WebDocActivity : AppCompatActivity() {
                     }
                     updateNavButtons()
                     epd.onContentMoved()
+                    if (href != null) pageLoaded?.complete(href)
+                }
+
+                override fun onScaleChanged(
+                    view: WebView,
+                    oldScale: Float,
+                    newScale: Float,
+                ) {
+                    overlay.invalidate()
+                    rawInput?.updateTool()
                 }
 
                 override fun onRenderProcessGone(
@@ -508,9 +592,14 @@ class WebDocActivity : AppCompatActivity() {
             .add(0, 3, 2, "减少动画（E Ink）")
             .setCheckable(true)
             .setChecked(m.policy.reduceMotion)
-        popup.menu.add(0, 4, 3, "清除本页笔记")
-        popup.menu.add(0, 5, 4, "兼容性检查")
-        popup.menu.add(0, 6, 5, "清除网页保存的数据")
+        popup.menu
+            .add(0, 7, 3, "文石原生笔迹（低延迟）")
+            .setCheckable(true)
+            .setChecked(rawInput != null)
+        popup.menu.add(0, 8, 4, "导出批注…")
+        popup.menu.add(0, 4, 5, "清除本页笔记")
+        popup.menu.add(0, 5, 6, "兼容性检查")
+        popup.menu.add(0, 6, 7, "清除网页保存的数据")
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> updatePolicy { it.copy(javaScriptEnabled = !it.javaScriptEnabled) }
@@ -526,6 +615,8 @@ class WebDocActivity : AppCompatActivity() {
                         }.setNegativeButton("取消", null)
                         .show()
                 5 -> showCompatibility()
+                7 -> toggleNativeInk()
+                8 -> showExportDialog()
                 6 ->
                     AlertDialog
                         .Builder(this)
@@ -539,6 +630,173 @@ class WebDocActivity : AppCompatActivity() {
             true
         }
         popup.show()
+    }
+
+    private fun toggleNativeInk() {
+        val enable = rawInput == null
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_NATIVE_INK, enable).apply()
+        if (enable) {
+            openNativeInk()
+            if (rawInput == null) toast("此设备不支持文石原生笔迹，继续使用普通绘制")
+        } else {
+            closeNativeInk()
+        }
+    }
+
+    // ---------------------------------------------------------------- export
+
+    private fun showExportDialog() {
+        val m = meta ?: return
+        val annotated = annotatedHrefs()
+        val sectionWord = if (m.kind == WebDocKind.EPUB) "节" else "页"
+        val options =
+            arrayOf<CharSequence>(
+                "PDF：当前$sectionWord（网页 + 批注）",
+                "PDF：所有有批注的$sectionWord（${annotated.size} 个）",
+                "笔记数据（JSON）",
+            )
+        AlertDialog
+            .Builder(this)
+            .setTitle("导出批注")
+            .setSingleChoiceItems(options, -1) { dialog, which ->
+                dialog.dismiss()
+                val base = safeName(m.title)
+                when (which) {
+                    0 -> {
+                        val href = currentHref ?: return@setSingleChoiceItems
+                        pendingExport = { uri -> exportPdf(listOf(href), uri) }
+                        createPdf.launch("$base-批注.pdf")
+                    }
+                    1 -> {
+                        if (annotated.isEmpty()) {
+                            toast("还没有任何批注")
+                            return@setSingleChoiceItems
+                        }
+                        pendingExport = { uri -> exportPdf(annotated, uri) }
+                        createPdf.launch("$base-全部批注.pdf")
+                    }
+                    2 -> {
+                        pendingExport = { uri -> exportJson(uri) }
+                        createJson.launch("$base-笔记.json")
+                    }
+                }
+            }.setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** Pages with ink, in reading order (spine order for EPUB, then any other HTML pages). */
+    private fun annotatedHrefs(): List<String> {
+        val m = meta ?: return emptyList()
+        val withInk = snapshotAnnotations().strokes.filterValues { it.isNotEmpty() }.keys
+        val ordered = m.pages.map { it.href }.filter { it in withInk }
+        return ordered + (withInk - ordered.toSet()).sorted()
+    }
+
+    private fun safeName(title: String) = title.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(60).ifBlank { "notes" }
+
+    private fun runPendingExport(uri: Uri?) {
+        val job = pendingExport
+        pendingExport = null
+        if (uri == null || job == null) return
+        lifecycleScope.launch { job(uri) }
+    }
+
+    private suspend fun exportJson(uri: Uri) {
+        val m = meta ?: return
+        val bundle =
+            WebDocNotesExport(
+                title = m.title,
+                kind = m.kind,
+                sourceName = m.sourceName,
+                pages = m.pages,
+                annotations = snapshotAnnotations(),
+            )
+        val text = WebDocLibrary.json.encodeToString(WebDocNotesExport.serializer(), bundle)
+        val ok =
+            withContext(Dispatchers.IO) {
+                runCatching { contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) } }
+            }
+        toast(if (ok.isSuccess) "已导出笔记数据" else "导出失败：${ok.exceptionOrNull()?.message}")
+    }
+
+    /**
+     * Renders each page as it looks on screen (scripts, canvas, MathML included) with its ink,
+     * one PDF page per screen-height slice. Capturing what the WebView actually painted keeps
+     * the ink aligned with the content it was written on.
+     */
+    private suspend fun exportPdf(
+        hrefs: List<String>,
+        uri: Uri,
+    ) {
+        val startHref = currentHref
+        rememberScroll()
+        exporting = true
+        rawInput?.pause()
+        val progress =
+            AlertDialog
+                .Builder(this)
+                .setMessage("正在导出…")
+                .setCancelable(false)
+                .show()
+        val pdf = PdfDocument()
+        var pageNo = 0
+        var error: Throwable? = null
+        try {
+            val w = content.width
+            val h = content.height
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            for ((i, href) in hrefs.withIndex()) {
+                progress.setMessage("正在导出 ${i + 1}/${hrefs.size}…")
+                if (href != currentHref || webView.progress < 100) loadPageAndWait(href)
+                val contentPx = (webView.contentHeight * currentScale()).roundToInt()
+                for (slice in WebDocExportPlan.slices(contentPx, h)) {
+                    webView.scrollTo(0, slice.scrollY)
+                    delay(300) // let Chromium raster the newly exposed area
+                    bitmap.eraseColor(Color.WHITE)
+                    content.draw(canvas)
+                    val page = pdf.startPage(PdfDocument.PageInfo.Builder(w, slice.height, ++pageNo).create())
+                    page.canvas.drawBitmap(
+                        bitmap,
+                        android.graphics.Rect(0, slice.srcTop, w, slice.srcTop + slice.height),
+                        android.graphics.Rect(0, 0, w, slice.height),
+                        null,
+                    )
+                    pdf.finishPage(page)
+                }
+            }
+            bitmap.recycle()
+            withContext(Dispatchers.IO) {
+                contentResolver.openOutputStream(uri, "wt")!!.use { pdf.writeTo(it) }
+            }
+        } catch (t: Throwable) {
+            error = t
+            Logger.e(TAG, "PDF export failed", t)
+        } finally {
+            pdf.close()
+            progress.dismiss()
+            if (startHref != null) {
+                if (startHref != currentHref) {
+                    loadPage(startHref)
+                } else {
+                    webView.scrollTo(0, ((scrollY[startHref] ?: 0f) * currentScale()).roundToInt())
+                }
+            }
+            exporting = false
+            rawInput?.resume()
+        }
+        toast(if (error == null) "已导出 $pageNo 页 PDF" else "导出失败：${error.message}")
+    }
+
+    private suspend fun loadPageAndWait(href: String) {
+        val wait = CompletableDeferred<String>()
+        pageLoaded = wait
+        loadPage(href)
+        // A redirect inside the document finishes on another href; export whatever was loaded.
+        withTimeoutOrNull(15_000) { wait.await() }
+        pageLoaded = null
+        delay(800) // scripts, fonts and MathJax/KaTeX typesetting
+        webView.scrollTo(0, 0)
     }
 
     private fun confirmNetworkToggle() {
@@ -683,6 +941,7 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun setWriteMode(write: Boolean) {
         overlay.writeEnabled = write
+        rawInput?.setEnabled(write)
         modeButton.text = if (write) "✎ 笔：书写" else "☝ 笔：交互"
         styleButton(modeButton, write)
         toolButtons.values.forEach { it.alpha = if (write) 1f else 0.35f }
@@ -691,6 +950,7 @@ class WebDocActivity : AppCompatActivity() {
     private fun selectTool(tool: WebInkOverlayView.Tool) {
         overlay.tool = tool
         if (!overlay.writeEnabled) setWriteMode(true)
+        rawInput?.updateTool()
         toolButtons.forEach { (t, b) -> styleButton(b, t == tool) }
     }
 
@@ -733,14 +993,19 @@ class WebDocActivity : AppCompatActivity() {
             saveNow()
             webView.onPause()
         }
+        closeNativeInk()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::webView.isInitialized) webView.onResume()
+        if (::webView.isInitialized) {
+            webView.onResume()
+            overlay.post { openNativeInk() }
+        }
     }
 
     override fun onDestroy() {
+        closeNativeInk()
         if (::epd.isInitialized) epd.release()
         if (::webView.isInitialized) {
             (webView.parent as? ViewGroup)?.removeView(webView)

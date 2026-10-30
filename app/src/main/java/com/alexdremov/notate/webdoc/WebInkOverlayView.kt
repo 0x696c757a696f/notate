@@ -54,9 +54,13 @@ class WebInkOverlayView(
     var onStrokeStart: (() -> Unit)? = null
     var onInkChanged: (() -> Unit)? = null
 
-    /** True while the pen is down on the overlay; the host drops finger events meanwhile (palm rejection). */
+    /** True while a stroke is being built. */
     var isDrawing = false
         private set
+
+    /** True while the pen touches the overlay; the host drops finger events meanwhile (palm rejection). */
+    val isPenActive get() = penDown || isDrawing
+    private var penDown = false
 
     private val pathCache = IdentityHashMap<WebInkStroke, Pair<Path, RectF>>()
     private val livePoints = FloatArrayBuilder()
@@ -75,48 +79,87 @@ class WebInkOverlayView(
         isClickable = false
     }
 
+    /**
+     * When the Onyx native channel ([WebInkRawInput]) supplies the points, MotionEvents from the pen
+     * are only swallowed here (so the page never sees them) and used for palm rejection.
+     */
+    var nativeInput = false
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val toolType = event.getToolType(0)
         val isPen = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
-        if (!isDrawing && (!writeEnabled || !isPen || page == null)) return false
+        if (!penDown && (!writeEnabled || !isPen || page == null)) return false
 
-        val x = toDocX(event.x)
-        val y = toDocY(event.y)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> penDown = true
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> penDown = false
+        }
+        if (nativeInput) return true
+
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                isDrawing = true
-                erasing =
-                    tool == Tool.ERASER ||
+                val eraser =
                     toolType == MotionEvent.TOOL_TYPE_ERASER ||
-                    (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
-                liveTool = tool
-                livePoints.clear()
-                onStrokeStart?.invoke()
-                if (erasing) eraseAt(x, y) else livePoints.add(x, y)
-                invalidate()
+                        (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+                beginStroke(event.x, event.y, eraser)
             }
             MotionEvent.ACTION_MOVE -> {
-                if (erasing) {
-                    for (h in 0 until event.historySize) eraseAt(toDocX(event.getHistoricalX(h)), toDocY(event.getHistoricalY(h)))
-                    eraseAt(x, y)
-                } else {
-                    for (h in 0 until event.historySize) livePoints.add(toDocX(event.getHistoricalX(h)), toDocY(event.getHistoricalY(h)))
-                    livePoints.add(x, y)
-                    invalidate()
-                }
+                for (h in 0 until event.historySize) extendStroke(event.getHistoricalX(h), event.getHistoricalY(h))
+                extendStroke(event.x, event.y)
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (!erasing && event.actionMasked == MotionEvent.ACTION_UP) commitLiveStroke()
-                livePoints.clear()
-                isDrawing = false
-                erasing = false
-                invalidate()
-                onInkChanged?.invoke()
-            }
+            MotionEvent.ACTION_UP -> endStroke(commit = true)
+            MotionEvent.ACTION_CANCEL -> endStroke(commit = false)
         }
         return true
     }
+
+    /** Starts a stroke at view coordinates. [forceEraser]: stylus eraser end or side button. */
+    fun beginStroke(
+        viewX: Float,
+        viewY: Float,
+        forceEraser: Boolean,
+    ) {
+        if (page == null) return
+        isDrawing = true
+        erasing = forceEraser || tool == Tool.ERASER
+        liveTool = tool
+        livePoints.clear()
+        onStrokeStart?.invoke()
+        val x = toDocX(viewX)
+        val y = toDocY(viewY)
+        if (erasing) eraseAt(x, y) else livePoints.add(x, y)
+        if (!nativeInput) invalidate()
+    }
+
+    fun extendStroke(
+        viewX: Float,
+        viewY: Float,
+    ) {
+        if (!isDrawing) return
+        val x = toDocX(viewX)
+        val y = toDocY(viewY)
+        if (erasing) {
+            eraseAt(x, y)
+        } else {
+            livePoints.add(x, y)
+            // With the native channel the panel already shows the live stroke.
+            if (!nativeInput) invalidate()
+        }
+    }
+
+    fun endStroke(commit: Boolean) {
+        if (!isDrawing) return
+        if (commit && !erasing) commitLiveStroke()
+        livePoints.clear()
+        isDrawing = false
+        erasing = false
+        invalidate()
+        onInkChanged?.invoke()
+    }
+
+    /** Device px per CSS px at the current zoom. */
+    fun viewportScale(): Float = viewport.scale
 
     private fun eraseAt(
         x: Float,
