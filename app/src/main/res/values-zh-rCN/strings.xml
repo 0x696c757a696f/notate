@@ -18,6 +18,7 @@
     <string name="shape_number_line">数轴</string>
     <string name="shape_polygon_sides">边数：%1$d</string>
     <string name="line_tool">线</string>
+    <string name="image_action">插入</string>
     <string name="line_style_solid">实线</string>
     <string name="line_style_dashed">虚线</string>
     <string name="line_style_dotted">点线</string>

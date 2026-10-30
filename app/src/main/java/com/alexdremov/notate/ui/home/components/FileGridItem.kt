@@ -4,10 +4,12 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -19,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -31,6 +32,13 @@ import com.alexdremov.notate.data.CanvasItem
 import com.alexdremov.notate.data.FileSystemItem
 import com.alexdremov.notate.data.ProjectItem
 import com.alexdremov.notate.data.SyncStatus
+import com.alexdremov.notate.ui.theme.BorderWidth
+import com.alexdremov.notate.ui.theme.CardShape
+import com.alexdremov.notate.ui.theme.Ink
+import com.alexdremov.notate.ui.theme.InkMuted
+import com.alexdremov.notate.ui.theme.Paper
+import com.alexdremov.notate.ui.theme.PaperDim
+import com.alexdremov.notate.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -61,16 +69,19 @@ fun FileGridItem(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.85f)
-                .padding(8.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .padding(Spacing.sm)
+                .clip(CardShape)
                 .alpha(if (enabled) 1f else 0.5f)
                 .combinedClickable(
                     enabled = enabled,
                     onClick = onClick,
                     onLongClick = onLongClick,
                 ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        // Flat card with a full hairline border: shadows dither into a gray smear on e-ink.
+        shape = CardShape,
+        border = BorderStroke(BorderWidth, Ink),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        colors = CardDefaults.cardColors(containerColor = Paper),
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -82,8 +93,7 @@ fun FileGridItem(
                     Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .background(Color(0xFFF5F5F7)),
-                // Light Apple-like Gray
+                        .background(PaperDim),
                 contentAlignment = Alignment.Center,
             ) {
                 if (item is CanvasItem && !item.thumbnail.isNullOrEmpty()) {
@@ -111,15 +121,15 @@ fun FileGridItem(
                             bitmap = state.bitmap,
                             contentDescription = null,
                             contentScale = ContentScale.Fit, // Contain within box
-                            modifier = Modifier.fillMaxSize().padding(8.dp),
+                            modifier = Modifier.fillMaxSize().padding(Spacing.sm),
                         )
                     } else if (state is ThumbnailState.Failed) {
                         // Fallback icon
                         Icon(
                             imageVector = Icons.Default.Description,
                             contentDescription = null,
-                            tint = Color.Gray,
-                            modifier = Modifier.size(48.dp),
+                            tint = InkMuted,
+                            modifier = Modifier.size(Spacing.xxxl),
                         )
                     }
                 } else {
@@ -127,8 +137,8 @@ fun FileGridItem(
                     Icon(
                         imageVector = if (item is ProjectItem) Icons.Default.Folder else Icons.Default.Description,
                         contentDescription = null,
-                        tint = if (item is ProjectItem) Color(0xFF5AC8FA) else Color.Gray, // Apple-like Blue for folders
-                        modifier = Modifier.size(56.dp),
+                        tint = if (item is ProjectItem) Ink else InkMuted,
+                        modifier = Modifier.size(Spacing.xxxl),
                     )
                 }
 
@@ -139,15 +149,16 @@ fun FileGridItem(
                         modifier =
                             Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .size(24.dp)
-                                .background(Color.White.copy(alpha = 0.8f), androidx.compose.foundation.shape.CircleShape)
-                                .padding(2.dp),
+                                .padding(Spacing.sm)
+                                .size(Spacing.xl)
+                                .background(Paper, CircleShape)
+                                .border(BorderWidth, Ink, CircleShape)
+                                .padding(Spacing.xs),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Sync,
                             contentDescription = "Syncing",
-                            tint = if (item.syncStatus == SyncStatus.SYNCING) Color(0xFF007AFF) else Color.Gray,
+                            tint = if (item.syncStatus == SyncStatus.SYNCING) Ink else InkMuted,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -158,15 +169,16 @@ fun FileGridItem(
                         modifier =
                             Modifier
                                 .align(Alignment.TopStart)
-                                .padding(8.dp)
-                                .size(24.dp)
-                                .background(Color.White.copy(alpha = 0.8f), androidx.compose.foundation.shape.CircleShape)
-                                .padding(2.dp),
+                                .padding(Spacing.sm)
+                                .size(Spacing.xl)
+                                .background(Paper, CircleShape)
+                                .border(BorderWidth, Ink, CircleShape)
+                                .padding(Spacing.xs),
                     ) {
                         Icon(
                             imageVector = Icons.Default.Star,
                             contentDescription = "Favorite",
-                            tint = Color(0xFFFFB300),
+                            tint = Ink,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -178,7 +190,7 @@ fun FileGridItem(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
+                        .padding(Spacing.md),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
@@ -186,7 +198,7 @@ fun FileGridItem(
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = Color.Black,
+                    color = Ink,
                 )
 
                 val date =
@@ -197,7 +209,7 @@ fun FileGridItem(
                 Text(
                     text = date,
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
+                    color = InkMuted,
                     maxLines = 1,
                 )
             }

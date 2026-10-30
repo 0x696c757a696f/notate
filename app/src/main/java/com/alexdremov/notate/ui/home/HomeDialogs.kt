@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import com.alexdremov.notate.ui.theme.InkMuted
 import com.alexdremov.notate.config.CanvasConfig
 import com.alexdremov.notate.config.Orientation
 import com.alexdremov.notate.config.PaperSize
@@ -104,7 +105,7 @@ fun NewProjectDialog(
     AlertDialog(
         modifier = Modifier.border(2.dp, Color.Black, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismiss,
-        title = { Text(text = "New Project") },
+        title = { Text(text = "New project") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
@@ -137,7 +138,7 @@ fun NewProjectDialog(
                 enabled = name.isNotBlank(),
                 onClick = { onConfirm(name.trim(), location) },
             ) {
-                Text(if (location == ProjectLocation.CUSTOM_FOLDER) "Choose Folder" else "Create")
+                Text(if (location == ProjectLocation.CUSTOM_FOLDER) "Choose folder" else "Create")
             }
         },
         dismissButton = {
@@ -168,7 +169,7 @@ private fun ProjectLocationOption(
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.DarkGray,
+                color = InkMuted,
             )
         }
     }
@@ -192,7 +193,7 @@ fun CreateCanvasDialog(
     AlertDialog(
         modifier = Modifier.border(2.dp, Color.Black, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismiss,
-        title = { Text(text = "New Canvas") },
+        title = { Text(text = "New canvas") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
@@ -204,7 +205,7 @@ fun CreateCanvasDialog(
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Canvas Type", style = MaterialTheme.typography.titleSmall)
+                Text("Canvas type", style = MaterialTheme.typography.titleSmall)
 
                 // Canvas Type Selection
                 Row(
@@ -223,7 +224,7 @@ fun CreateCanvasDialog(
                         onClick = null,
                     )
                     Text(
-                        text = "Infinite Canvas",
+                        text = "Infinite canvas",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(start = 8.dp),
                     )
@@ -245,7 +246,7 @@ fun CreateCanvasDialog(
                         onClick = null,
                     )
                     Text(
-                        text = "Fixed Pages",
+                        text = "Fixed pages",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(start = 8.dp),
                     )
@@ -255,7 +256,7 @@ fun CreateCanvasDialog(
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                     // Paper Size Selection
-                    Text("Paper Size", style = MaterialTheme.typography.titleSmall)
+                    Text("Paper size", style = MaterialTheme.typography.titleSmall)
                     PaperSize.values().forEach { size ->
                         Row(
                             Modifier
