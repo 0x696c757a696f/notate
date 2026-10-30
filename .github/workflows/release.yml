@@ -87,6 +87,9 @@ jobs:
           echo "filename=notate-pr-${{ github.event.pull_request.number }}-arm64-v8a.apk" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: List available R8 versions (temporary)
+      run: curl -s https://dl.google.com/android/maven2/com/android/tools/r8/maven-metadata.xml | grep -o '<version>9\.[0-9.]*</version>' | tail -20 || true
+
     - name: Build Release APK
       run: ./gradlew assembleRelease -Pnotate.versionCode=${{ steps.version.outputs.code }} -Pnotate.versionName=${{ steps.version.outputs.name }}
 
