@@ -75,6 +75,9 @@ class PenInputHandler(
 
     private var isIgnoringCurrentStroke = false
 
+    // The current stroke started on the toolbar/sidebar: discard it and repaint that UI.
+    private var isDiscardingExcludedStroke = false
+
     private lateinit var dwellDetector: DwellDetector
 
     init {
@@ -303,6 +306,17 @@ class PenInputHandler(
         // Cancel any pending refresh as the user has resumed writing
         refreshHandler.removeCallbacks(refreshRunnable)
 
+        // A stylus tap on the toolbar is a click, never ink — even if the driver's
+        // exclusion rects are stale. Leave the selection alone too, so tools can act on it.
+        val canvasView = view as? com.alexdremov.notate.ui.OnyxCanvasView
+        if (canvasView != null && canvasView.isInExclusionZone(touchPoint.x, touchPoint.y)) {
+            isStrokeInProgress = true
+            isIgnoringCurrentStroke = true
+            isDiscardingExcludedStroke = true
+            lastProcessedTimestamp = touchPoint.timestamp
+            return
+        }
+
         isStrokeInProgress = true
         isSelecting = false
         isIgnoringCurrentStroke = false
@@ -411,6 +425,10 @@ class PenInputHandler(
             isStrokeInProgress = false
             com.onyx.android.sdk.api.device.EpdDeviceManager
                 .exitAnimationUpdate(true)
+            if (isDiscardingExcludedStroke) {
+                isDiscardingExcludedStroke = false
+                view.post { (view as? com.alexdremov.notate.ui.OnyxCanvasView)?.onExcludedStrokeDiscarded?.invoke() }
+            }
             return
         }
 
