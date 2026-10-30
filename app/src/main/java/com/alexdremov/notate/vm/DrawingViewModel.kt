@@ -382,6 +382,12 @@ class DrawingViewModel
             selectTool(newId)
         }
 
+        fun addShapeTool() {
+            val newId = "shape_${System.currentTimeMillis()}"
+            addToolbarItem(ToolbarItem.Pen(PenTool.defaultShapeTool(newId)))
+            selectTool(newId)
+        }
+
         fun addToolbarItem(item: ToolbarItem) {
             val currentList = _toolbarItems.value.toMutableList()
 

@@ -73,8 +73,9 @@ object PenToolConfigurator {
                     setStrokeStyle(currentTool.strokeType.touchHelperStyle)
                     setStrokeWidth(pixelWidth)
 
-                    // Disable hardware render if stroke is too large
-                    val enableHardware = !isLargeStrokeMode
+                    // Disable hardware render if stroke is too large, and for drag shapes,
+                    // which show a software preview of the shape instead of the raw pen path.
+                    val enableHardware = !isLargeStrokeMode && !currentTool.isDragShapeTool
                     setRawDrawingRenderEnabled(enableHardware)
 
                     // Ensure eraser channel is off for pen

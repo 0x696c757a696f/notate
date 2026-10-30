@@ -5,13 +5,16 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -22,6 +25,7 @@ import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.databinding.DialogPenSettingsBinding
 import com.alexdremov.notate.databinding.ItemColorCircleBinding
 import com.alexdremov.notate.model.PenTool
+import com.alexdremov.notate.model.ShapeType
 import com.alexdremov.notate.model.StrokeType
 import com.alexdremov.notate.ui.dpToPx
 import com.alexdremov.notate.ui.mmToPx
@@ -103,6 +107,9 @@ class PenSettingsPopup(
             setupEraserUI()
         } else if (currentTool.type == com.alexdremov.notate.model.ToolType.SELECT) {
             setupSelectUI()
+        } else if (currentTool.isShapeTool) {
+            setupPenUI()
+            setupShapeUI()
         } else {
             setupPenUI()
         }
@@ -409,6 +416,7 @@ class PenSettingsPopup(
                 StrokeType.BRUSH to binding.styleBrush,
                 StrokeType.CHARCOAL to binding.styleCharcoal,
                 StrokeType.DASH to binding.styleDash,
+                StrokeType.DOT to binding.styleDot,
             )
 
         fun updateSliderRange(type: StrokeType) {
@@ -450,6 +458,129 @@ class PenSettingsPopup(
                 .getColorName(currentTool.color)
 
         setupColorAdapter()
+    }
+
+    private fun setupShapeUI() {
+        binding.tvTitle.text = context.getString(R.string.shape_settings)
+        val container = binding.layoutShapeOptions
+        container.visibility = View.VISIBLE
+        container.removeAllViews()
+
+        container.addView(
+            TextView(context).apply {
+                text = context.getString(R.string.shape_line_style_hint)
+                setTextColor(Color.DKGRAY)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            },
+        )
+
+        val options =
+            listOf(
+                ShapeType.AUTO to R.string.shape_auto,
+                ShapeType.LINE to R.string.shape_line,
+                ShapeType.ARROW to R.string.shape_arrow,
+                ShapeType.DOUBLE_ARROW to R.string.shape_double_arrow,
+                ShapeType.RECTANGLE to R.string.shape_rectangle,
+                ShapeType.ELLIPSE to R.string.shape_ellipse,
+                ShapeType.TRIANGLE to R.string.shape_triangle,
+                ShapeType.RIGHT_TRIANGLE to R.string.shape_right_triangle,
+                ShapeType.POLYGON to R.string.shape_polygon,
+                ShapeType.AXES to R.string.shape_axes,
+                ShapeType.AXES_QUADRANT to R.string.shape_axes_quadrant,
+                ShapeType.AXES_3D to R.string.shape_axes_3d,
+                ShapeType.GRID to R.string.shape_grid,
+                ShapeType.NUMBER_LINE to R.string.shape_number_line,
+            )
+
+        val grid =
+            GridLayout(context).apply {
+                columnCount = 3
+                useDefaultMargins = true
+            }
+        container.addView(
+            grid,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = context.dpToPx(8)
+            },
+        )
+
+        val sidesLabel =
+            TextView(context).apply {
+                setTextColor(Color.BLACK)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                gravity = Gravity.CENTER
+                minWidth = context.dpToPx(72)
+            }
+
+        fun stepButton(
+            label: String,
+            delta: Int,
+        ) = TextView(context).apply {
+            text = label
+            gravity = Gravity.CENTER
+            setTextColor(Color.BLACK)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setBackgroundResource(R.drawable.bg_tool_selected)
+            isSelected = true
+            layoutParams = LinearLayout.LayoutParams(context.dpToPx(44), context.dpToPx(44))
+            setOnClickListener {
+                val sides = (currentTool.polygonSides + delta).coerceIn(3, 12)
+                updateTool { it.copy(polygonSides = sides) }
+                sidesLabel.text = context.getString(R.string.shape_polygon_sides, sides)
+                refreshHighQuality(sidesLabel)
+            }
+        }
+
+        val sidesRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                addView(stepButton("−", -1))
+                addView(sidesLabel)
+                addView(stepButton("+", 1))
+            }
+        container.addView(
+            sidesRow,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = context.dpToPx(8)
+            },
+        )
+
+        val chips = mutableMapOf<ShapeType, TextView>()
+
+        fun refreshSelection() {
+            chips.forEach { (type, chip) -> chip.isSelected = type == currentTool.shapeType }
+            sidesRow.visibility = if (currentTool.shapeType == ShapeType.POLYGON) View.VISIBLE else View.GONE
+            sidesLabel.text = context.getString(R.string.shape_polygon_sides, currentTool.polygonSides)
+        }
+
+        for ((type, labelRes) in options) {
+            val chip =
+                TextView(context).apply {
+                    text = context.getString(labelRes)
+                    gravity = Gravity.CENTER
+                    setTextColor(Color.BLACK)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setBackgroundResource(R.drawable.bg_tool_selected)
+                    val pad = context.dpToPx(6)
+                    setPadding(pad, pad, pad, pad)
+                    layoutParams =
+                        GridLayout.LayoutParams().apply {
+                            width = context.dpToPx(88)
+                            height = context.dpToPx(40)
+                        }
+                    setOnClickListener {
+                        updateTool { it.copy(shapeType = type) }
+                        refreshSelection()
+                        refreshHighQuality(container)
+                    }
+                }
+            chips[type] = chip
+            grid.addView(chip)
+        }
+
+        refreshSelection()
     }
 
     private fun setupPresetsPage() {
