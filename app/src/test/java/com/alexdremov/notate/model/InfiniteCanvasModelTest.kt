@@ -197,7 +197,7 @@ class InfiniteCanvasModelTest {
 
     @Test
     fun `erase never removes locked images such as imported PDF pages`() =
-        runBlocking {
+        runBlocking<Unit> {
             model.initializeSession(regionManager)
             val pageBounds = RectF(0f, 0f, 100f, 100f)
             val pdfPage =
