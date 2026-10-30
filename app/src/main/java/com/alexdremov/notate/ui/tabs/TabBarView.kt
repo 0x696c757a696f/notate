@@ -50,6 +50,9 @@ class TabBarView
 
         private val bottomLine = Paint().apply { color = Color.BLACK }
 
+        /** The reader has no split view yet; it hides the split buttons. */
+        var splitButtonsVisible = true
+
         init {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -88,6 +91,8 @@ class TabBarView
             }
             sideButton.isSelected = split?.orientation == SplitOrientation.SIDE_BY_SIDE
             stackedButton.isSelected = split?.orientation == SplitOrientation.STACKED
+            sideButton.visibility = if (splitButtonsVisible) View.VISIBLE else View.GONE
+            stackedButton.visibility = if (splitButtonsVisible) View.VISIBLE else View.GONE
             swapButton.visibility = if (split != null) View.VISIBLE else View.GONE
             exitButton.visibility = if (split != null) View.VISIBLE else View.GONE
             activeView?.let { v -> scroll.post { scroll.requestChildRectangleOnScreen(tabRow, android.graphics.Rect(v.left, 0, v.right, v.height), false) } }

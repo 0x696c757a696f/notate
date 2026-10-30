@@ -1171,7 +1171,7 @@ class CanvasActivity : AppCompatActivity() {
             activePath() -> return
             currentCanvasPath -> setActivePane(useSecondary = false)
             secondary?.path -> setActivePane(useSecondary = true)
-            else -> switchToNote(tab.path)
+            else -> switchToTab(tab)
         }
     }
 
@@ -1185,8 +1185,8 @@ class CanvasActivity : AppCompatActivity() {
 
             currentCanvasPath -> {
                 workspace = WorkspaceStore.update(this) { it.close(tab.path) }
-                val next = secondary?.path ?: workspace.activePath
-                if (next != null) switchToNote(next) else closeAndFinish()
+                val next = secondary?.path?.let { workspace.tab(it) } ?: workspace.activePath?.let { workspace.tab(it) }
+                if (next != null) switchToTab(next) else closeAndFinish()
             }
 
             else -> {
@@ -1259,21 +1259,18 @@ class CanvasActivity : AppCompatActivity() {
     /** Leaves split view keeping the other note: reopens the editor on it. */
     private fun promoteToSingle(path: String) {
         workspace = WorkspaceStore.update(this) { it.unsplit(path) }
-        switchToNote(path)
+        switchToTab(workspace.tab(path) ?: DocTab(DocKind.NOTE, path, WorkspaceStore.titleFor(path)))
     }
 
-    /** Opens another tab: save this editor and reopen it on [path] (restoring that tab's split). */
-    private fun switchToNote(path: String) {
+    /**
+     * Opens a tab that is not on screen: saves this editor, then opens the note (restoring its
+     * split) or the book in the reader.
+     */
+    private fun switchToTab(tab: DocTab) {
         if (isSwitchingTabs) return
         isSwitchingTabs = true
-        workspace = WorkspaceStore.update(this) { it.activate(path) }
-        closeAndFinish {
-            startActivity(
-                Intent(this, CanvasActivity::class.java)
-                    .putExtra("CANVAS_PATH", path)
-                    .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION),
-            )
-        }
+        workspace = WorkspaceStore.update(this) { it.activate(tab.path) }
+        closeAndFinish { startActivity(com.alexdremov.notate.ui.tabs.TabNavigator.intentFor(this, tab)) }
     }
 
     /** Saves and closes everything, then finishes. [beforeFinish] runs once the data is captured. */
