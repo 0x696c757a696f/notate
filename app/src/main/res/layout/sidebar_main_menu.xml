@@ -6,49 +6,6 @@
     android:orientation="vertical"
     android:padding="0dp">
 
-    <!-- Background Item -->
-    <LinearLayout
-        android:id="@+id/menu_item_background"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:background="?attr/selectableItemBackground"
-        android:clickable="true"
-        android:focusable="true"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
-
-        <ImageView
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_crop_square"
-            app:tint="#000000" />
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Background"
-            android:textSize="@dimen/text_size_body"
-            android:textStyle="bold"
-            android:textColor="#000000"
-            android:layout_marginStart="16dp" />
-
-        <ImageView
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_chevron_right"
-            app:tint="#000000" />
-
-    </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/ui_stroke_standard"
-        android:background="#000000"
-        android:layout_marginStart="56dp" />
-
     <!-- Writing Item -->
     <LinearLayout
         android:id="@+id/menu_item_writing"
@@ -135,7 +92,50 @@
         android:background="#000000"
         android:layout_marginStart="56dp" />
 
-    <!-- Document Item -->
+    <!-- Page background -->
+    <LinearLayout
+        android:id="@+id/menu_item_background"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp">
+
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_crop_square"
+            app:tint="#000000" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Page background"
+            android:textSize="@dimen/text_size_body"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:layout_marginStart="16dp" />
+
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_chevron_right"
+            app:tint="#000000" />
+
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/ui_stroke_standard"
+        android:background="#000000"
+        android:layout_marginStart="56dp" />
+
+    <!-- Page layout (fixed-page documents only) -->
     <LinearLayout
         android:id="@+id/menu_item_document"
         android:layout_width="match_parent"
@@ -158,7 +158,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Document"
+            android:text="Page layout"
             android:textSize="@dimen/text_size_body"
             android:textStyle="bold"
             android:textColor="#000000"
@@ -178,6 +178,8 @@
         android:layout_height="@dimen/ui_stroke_standard"
         android:background="#000000"
         android:layout_marginStart="56dp" />
+
+    <!-- Export -->
     <LinearLayout
         android:id="@+id/menu_item_export"
         android:layout_width="match_parent"
@@ -220,7 +222,14 @@
         android:background="#000000"
         android:layout_marginStart="56dp" />
 
-    <!-- Debug Item -->
+    <!-- Developer tools: shown in debug builds only -->
+    <View
+        android:id="@+id/divider_debug"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/ui_stroke_standard"
+        android:background="#000000"
+        android:layout_marginTop="24dp" />
+
     <LinearLayout
         android:id="@+id/menu_item_debug"
         android:layout_width="match_parent"
@@ -256,11 +265,5 @@
             app:tint="#000000" />
 
     </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/ui_stroke_standard"
-        android:background="#000000"
-        android:layout_marginStart="56dp" />
 
 </LinearLayout>
