@@ -23,10 +23,8 @@ android {
         versionCode = 1
         versionName = "1.0"
         ndk {
-            // OCR ships ARM64 native code only (Boox devices). x86_64 stays packaged so the
-            // Maestro E2E suite can still install on the CI emulator; OCR reports itself
-            // unavailable there (PaddleLiteOcrEngine.isAvailable checks the ABI).
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // Boox devices are ARM64; the OCR runtime ships ARM64 native code only.
+            abiFilters += "arm64-v8a"
         }
         vectorDrawables {
             useSupportLibrary = true
