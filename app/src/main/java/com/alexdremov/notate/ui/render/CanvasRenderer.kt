@@ -345,17 +345,24 @@ class CanvasRenderer(
         scale: Float = 1.0f,
         xfermode: android.graphics.PorterDuff.Mode? = null,
     ) {
-        val paint =
-            Paint().apply {
-                isAntiAlias = true
-                isDither = true
-                style = Paint.Style.STROKE
-                strokeJoin = Paint.Join.ROUND
-                strokeCap = Paint.Cap.ROUND
-                strokeMiter = 4.0f
-            }
+        // Called once per item per tile from TileManager workers: reuse a per-thread Paint
+        // instead of allocating a native Paint for every item.
+        val paint = itemPaint.get()!!
+        resetItemPaint(paint)
 
         StrokeRenderer.drawItem(canvas, item, debug, paint, context, scale, xfermode = xfermode)
+    }
+
+    private val itemPaint = ThreadLocal.withInitial { Paint() }
+
+    private fun resetItemPaint(paint: Paint) {
+        paint.reset()
+        paint.isAntiAlias = true
+        paint.isDither = true
+        paint.style = Paint.Style.STROKE
+        paint.strokeJoin = Paint.Join.ROUND
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.strokeMiter = 4.0f
     }
 
     /**

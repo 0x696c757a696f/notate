@@ -50,7 +50,15 @@ class ProjectRepository(
     private val rootUriString: String? = null,
 ) {
     private val localStorage by lazy {
-        val dir = File(context.filesDir, "projects").apply { if (!exists()) mkdirs() }
+        // A project created "on this device" stores its own absolute folder path as its root;
+        // anything else (no root, legacy configs) falls back to the shared app projects folder.
+        val dir =
+            if (rootUriString != null && rootUriString.startsWith("/")) {
+                File(rootUriString)
+            } else {
+                defaultLocalRoot(context)
+            }
+        dir.apply { if (!exists()) mkdirs() }
         LocalStorageProvider(context, dir)
     }
 
@@ -82,6 +90,30 @@ class ProjectRepository(
     }
 
     fun getRootPath(): String = rootUriString ?: localStorage.getRootPath()
+
+    companion object {
+        fun defaultLocalRoot(context: Context): File = File(context.filesDir, "projects")
+
+        /**
+         * Creates a fresh folder for a new on-device project under the app's projects folder.
+         * The folder name is derived from [name]; a numeric suffix keeps it unique.
+         */
+        fun createLocalProjectFolder(
+            context: Context,
+            name: String,
+        ): File {
+            val root = defaultLocalRoot(context).apply { if (!exists()) mkdirs() }
+            val base = name.trim().replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim('.', ' ').ifEmpty { "Project" }.take(64)
+            var dir = File(root, base)
+            var i = 2
+            while (dir.exists()) {
+                dir = File(root, "$base ($i)")
+                i++
+            }
+            dir.mkdirs()
+            return dir
+        }
+    }
 
     fun getItems(path: String?): List<FileSystemItem> = getProvider(path).getItems(path)
 
