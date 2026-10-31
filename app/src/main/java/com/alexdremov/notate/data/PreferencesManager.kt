@@ -11,12 +11,16 @@ import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.Tag
 import com.alexdremov.notate.model.ToolbarItem
 import com.alexdremov.notate.model.TwoFingerTapAction
+import com.alexdremov.notate.ui.input.Handedness
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.protobuf.ProtoBuf
 import kotlinx.serialization.protobuf.ProtoNumber
+
+/** What a finger does on the page. */
+enum class FingerMode { SCROLL, OFF }
 
 @Serializable
 enum class SortOption(
@@ -57,6 +61,9 @@ object PreferencesManager {
     private const val KEY_SORT_OPTION = "browser_sort_option"
     private const val KEY_SCRIBBLE_TO_ERASE = "scribble_to_erase"
     private const val KEY_PALM_REJECTION = "palm_rejection_enabled"
+    private const val KEY_FINGER_MODE = "finger_mode"
+    private const val KEY_HANDEDNESS = "handedness"
+    private const val KEY_SHOW_FINGER_MIGRATION_BANNER = "show_finger_migration_banner"
     private const val KEY_DISTRACTION_FREE = "distraction_free_enabled"
     private const val KEY_OPEN_DAILY_ON_START = "open_daily_on_start"
     private const val KEY_FAVORITES = "favorite_notes"
@@ -249,13 +256,66 @@ object PreferencesManager {
         getPrefs(context).edit().putBoolean(KEY_SCRIBBLE_TO_ERASE, enabled).apply()
     }
 
-    fun isPalmRejectionEnabled(context: Context): Boolean = getPrefs(context).getBoolean(KEY_PALM_REJECTION, false)
+    /**
+     * Replaces the old "Palm Rejection (stylus only)" switch, which swallowed every finger touch. Palm
+     * rejection is now automatic; the only finger choice left is scroll-and-zoom or off. The old switch
+     * being on maps to SCROLL as well, and shows a one-time banner explaining the change.
+     */
+    fun migratePalmRejectionSetting(context: Context) {
+        val prefs = getPrefs(context)
+        if (prefs.contains(KEY_FINGER_MODE)) return
+        val wasOn = prefs.getBoolean(KEY_PALM_REJECTION, false)
+        prefs
+            .edit()
+            .putString(KEY_FINGER_MODE, FingerMode.SCROLL.name)
+            .putBoolean(KEY_SHOW_FINGER_MIGRATION_BANNER, wasOn)
+            .remove(KEY_PALM_REJECTION)
+            .apply()
+    }
 
-    fun setPalmRejectionEnabled(
+    fun getFingerMode(context: Context): FingerMode {
+        migratePalmRejectionSetting(context)
+        val name = getPrefs(context).getString(KEY_FINGER_MODE, FingerMode.SCROLL.name)
+        return try {
+            FingerMode.valueOf(name ?: FingerMode.SCROLL.name)
+        } catch (e: Exception) {
+            FingerMode.SCROLL
+        }
+    }
+
+    fun setFingerMode(
         context: Context,
-        enabled: Boolean,
+        mode: FingerMode,
     ) {
-        getPrefs(context).edit().putBoolean(KEY_PALM_REJECTION, enabled).apply()
+        migratePalmRejectionSetting(context)
+        getPrefs(context).edit().putString(KEY_FINGER_MODE, mode.name).apply()
+    }
+
+    fun isFingerOff(context: Context): Boolean = getFingerMode(context) == FingerMode.OFF
+
+    fun getHandedness(context: Context): Handedness {
+        val name = getPrefs(context).getString(KEY_HANDEDNESS, Handedness.RIGHT.name)
+        return try {
+            Handedness.valueOf(name ?: Handedness.RIGHT.name)
+        } catch (e: Exception) {
+            Handedness.RIGHT
+        }
+    }
+
+    fun setHandedness(
+        context: Context,
+        handedness: Handedness,
+    ) {
+        getPrefs(context).edit().putString(KEY_HANDEDNESS, handedness.name).apply()
+    }
+
+    /** True once after an upgrade from the old switch being on; reading it clears it. */
+    fun consumeFingerMigrationBanner(context: Context): Boolean {
+        migratePalmRejectionSetting(context)
+        val prefs = getPrefs(context)
+        val show = prefs.getBoolean(KEY_SHOW_FINGER_MIGRATION_BANNER, false)
+        if (show) prefs.edit().putBoolean(KEY_SHOW_FINGER_MIGRATION_BANNER, false).apply()
+        return show
     }
 
     fun isDistractionFreeEnabled(context: Context): Boolean = getPrefs(context).getBoolean(KEY_DISTRACTION_FREE, false)

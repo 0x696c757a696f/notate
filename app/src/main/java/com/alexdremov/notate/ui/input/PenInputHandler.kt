@@ -58,6 +58,9 @@ class PenInputHandler(
      */
     @Volatile
     var inkBlocked = false
+
+    /** A stroke was discarded without a normal end: whoever tracks the pen should forget it. */
+    var onPenCut: (() -> Unit)? = null
         set(value) {
             if (field == value) return
             field = value
@@ -375,6 +378,7 @@ class PenInputHandler(
         refreshHandler.removeCallbacks(refreshRunnable)
 
         if (inkBlocked) {
+            onPenCut?.invoke()
             isStrokeInProgress = true
             isIgnoringCurrentStroke = true
             lastProcessedTimestamp = touchPoint.timestamp

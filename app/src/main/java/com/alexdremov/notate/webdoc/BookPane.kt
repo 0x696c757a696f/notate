@@ -71,7 +71,13 @@ class BookPane(
     private var inkAllowed = true
     private var fingerPaused = false
     private var rejectingPalm = false
-    private val palmGuard = PalmGuard(PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi)
+    private var downX = 0f
+    private var downY = 0f
+    private val palmGuard =
+        PalmGuard(
+            PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi,
+            pxPerCm = resources.displayMetrics.xdpi / 2.54f,
+        ).also { it.handedness = com.alexdremov.notate.data.PreferencesManager.getHandedness(context) }
     private var exclusionRects: List<Rect> = emptyList()
     private val fingerResume = Runnable { setFingerPaused(false) }
     private val saveRunnable = Runnable { saveNow() }
@@ -126,7 +132,7 @@ class BookPane(
             if (it.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
                 palmGuard.onHoverExit(SystemClock.uptimeMillis())
             } else {
-                palmGuard.onHover(SystemClock.uptimeMillis())
+                palmGuard.onHover(SystemClock.uptimeMillis(), it.rawX, it.rawY)
                 if (fingerPaused) {
                     removeCallbacks(fingerResume)
                     epd.settle()
@@ -188,7 +194,7 @@ class BookPane(
         if (rawInput != null) return
         overlay.post {
             if (!isActive || rawInput != null || !isAttachedToWindow) return@post
-            rawInput = WebInkRawInput.createOrNull(overlay)
+            rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmGuard.reset() } }
             overlay.nativeInput = rawInput != null
             rawInput?.let { raw ->
                 raw.exclusionRects = exclusionRects
@@ -246,12 +252,19 @@ class BookPane(
     }
 
     /** A finger gesture while the pen hovers or writes, or one palm-sized, is the writing hand: ignore it. */
+    private fun fingerOff() = com.alexdremov.notate.data.PreferencesManager.isFingerOff(context)
+
     private fun rejectPalm(ev: MotionEvent): Boolean {
         val action = ev.actionMasked
-        if (action == MotionEvent.ACTION_DOWN) rejectingPalm = false
+        if (action == MotionEvent.ACTION_DOWN) {
+            rejectingPalm = false
+            downX = ev.rawX
+            downY = ev.rawY
+            palmGuard.observeFingerDown(ev.getTouchMajor(0))
+        }
         if (!rejectingPalm) {
             val sizes = FloatArray(ev.pointerCount) { ev.getTouchMajor(it) }
-            if (overlay.isPenActive || palmGuard.isPenNear(SystemClock.uptimeMillis()) || palmGuard.isPalmSized(sizes)) {
+            if (fingerOff() || overlay.isPenActive || palmGuard.shouldReject(SystemClock.uptimeMillis(), downX, downY) || palmGuard.isPalmSized(sizes)) {
                 rejectingPalm = true
                 if (action != MotionEvent.ACTION_DOWN) {
                     val cancel = MotionEvent.obtain(ev).apply { setAction(MotionEvent.ACTION_CANCEL) }

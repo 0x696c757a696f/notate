@@ -54,7 +54,9 @@ import androidx.compose.ui.unit.sp
 import com.alexdremov.notate.ui.theme.InkMuted
 import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
+import com.alexdremov.notate.data.FingerMode
 import com.alexdremov.notate.data.PreferencesManager
+import com.alexdremov.notate.ui.input.Handedness
 import com.alexdremov.notate.ui.settings.InputSettingsPanel
 import com.alexdremov.notate.ui.settings.InputSettingsState
 import com.alexdremov.notate.ui.settings.InterfaceSettingsPanel
@@ -170,7 +172,8 @@ fun SettingsDialog(
                         var angleSnapping by remember { mutableStateOf(PreferencesManager.isAngleSnappingEnabled(context)) }
                         var axisLocking by remember { mutableStateOf(PreferencesManager.isAxisLockingEnabled(context)) }
                         var shapeDelay by remember { mutableFloatStateOf(PreferencesManager.getShapePerfectionDelay(context).toFloat()) }
-                        var palmRejection by remember { mutableStateOf(PreferencesManager.isPalmRejectionEnabled(context)) }
+                        var fingerOff by remember { mutableStateOf(PreferencesManager.isFingerOff(context)) }
+                        var handedness by remember { mutableStateOf(PreferencesManager.getHandedness(context)) }
                         var twoFingerTapAction by remember { mutableStateOf(PreferencesManager.getTwoFingerTapAction(context)) }
                         var stylusButtonAction by remember { mutableStateOf(PreferencesManager.getStylusButtonAction(context)) }
 
@@ -182,7 +185,8 @@ fun SettingsDialog(
                                     angleSnapping,
                                     axisLocking,
                                     shapeDelay,
-                                    palmRejection,
+                                    fingerOff,
+                                    handedness,
                                     twoFingerTapAction,
                                     stylusButtonAction,
                                 ),
@@ -190,9 +194,13 @@ fun SettingsDialog(
                                 scribbleEnabled = it
                                 PreferencesManager.setScribbleToEraseEnabled(context, it)
                             },
-                            onPalmRejectionChange = {
-                                palmRejection = it
-                                PreferencesManager.setPalmRejectionEnabled(context, it)
+                            onFingerOffChange = {
+                                fingerOff = it
+                                PreferencesManager.setFingerMode(context, if (it) FingerMode.OFF else FingerMode.SCROLL)
+                            },
+                            onHandednessChange = {
+                                handedness = it
+                                PreferencesManager.setHandedness(context, it)
                             },
                             onShapeChange = {
                                 shapeEnabled = it

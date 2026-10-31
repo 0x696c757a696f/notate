@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.TwoFingerTapAction
+import com.alexdremov.notate.ui.input.Handedness
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -51,6 +52,43 @@ class QuickWinPreferencesTest {
 
         assertEquals(TwoFingerTapAction.REDO, PreferencesManager.getTwoFingerTapAction(context))
         assertEquals(StylusButtonAction.NONE, PreferencesManager.getStylusButtonAction(context))
+    }
+
+    private fun rawPrefs() = context.getSharedPreferences("notate_prefs", Context.MODE_PRIVATE)
+
+    @Test
+    fun `fresh install lets fingers scroll with no banner`() {
+        assertEquals(FingerMode.SCROLL, PreferencesManager.getFingerMode(context))
+        assertFalse(PreferencesManager.isFingerOff(context))
+        assertFalse(PreferencesManager.consumeFingerMigrationBanner(context))
+    }
+
+    @Test
+    fun `old palm rejection on migrates to scroll and shows the banner once`() {
+        rawPrefs().edit().putBoolean("palm_rejection_enabled", true).commit()
+
+        assertEquals(FingerMode.SCROLL, PreferencesManager.getFingerMode(context))
+        assertFalse(rawPrefs().contains("palm_rejection_enabled"))
+        assertTrue(PreferencesManager.consumeFingerMigrationBanner(context))
+        assertFalse(PreferencesManager.consumeFingerMigrationBanner(context))
+    }
+
+    @Test
+    fun `old palm rejection off migrates to scroll without a banner`() {
+        rawPrefs().edit().putBoolean("palm_rejection_enabled", false).commit()
+
+        assertEquals(FingerMode.SCROLL, PreferencesManager.getFingerMode(context))
+        assertFalse(PreferencesManager.consumeFingerMigrationBanner(context))
+    }
+
+    @Test
+    fun `finger mode and handedness persist`() {
+        assertEquals(Handedness.RIGHT, PreferencesManager.getHandedness(context))
+        PreferencesManager.setFingerMode(context, FingerMode.OFF)
+        PreferencesManager.setHandedness(context, Handedness.LEFT)
+
+        assertTrue(PreferencesManager.isFingerOff(context))
+        assertEquals(Handedness.LEFT, PreferencesManager.getHandedness(context))
     }
 
     @Test
