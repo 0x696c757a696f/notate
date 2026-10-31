@@ -296,6 +296,10 @@ class WebInkRawInput(
             strokeActive = false
             overlay.endStroke(commit = true)
         }
+        // The driver's temporary ink is only on the panel; when the driver steps aside (tool change,
+        // popup, palm) that ink must be replaced by the overlay's own rendering right away, or the
+        // next screen refresh would wipe the words from the screen until the page is redrawn.
+        if (!want && hasDirty && !strokeActive) flush()
     }
 
     private fun visibleRect(): Rect = Rect().also { overlay.getLocalVisibleRect(it) }
