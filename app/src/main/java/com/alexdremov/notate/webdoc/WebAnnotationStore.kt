@@ -97,6 +97,15 @@ class WebAnnotationStore internal constructor(
     @Volatile
     var lastPage: String? = base.lastPage
 
+    /** Write / Interact for this document; shared by every holder, saved with the notes. */
+    @Volatile
+    var penMode: PenMode = PenMode.parse(base.penMode)
+        set(value) {
+            if (field == value) return
+            field = value
+            synchronized(lock) { changeSeq++ }
+        }
+
     /** Latest snapshot not yet written, with the change counter it covers. */
     private var pending: Pair<WebDocAnnotations, Long>? = null
     private var changeSeq = 0L
@@ -149,6 +158,7 @@ class WebAnnotationStore internal constructor(
             lastPage = lastPage,
             scrollY = HashMap(scroll),
             layoutWidth = HashMap(layout),
+            penMode = penMode.name,
         )
     }
 

@@ -65,6 +65,8 @@ class BookPane(
     private val titleView: TextView
     private val prevButton: TextView
     private val nextButton: TextView
+    private val writeTab: TextView
+    private val interactTab: TextView
 
     private var rawInput: WebInkRawInput? = null
     private var isActive = false
@@ -110,6 +112,10 @@ class BookPane(
             true
         }
         header.addView(titleView, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        writeTab = modeTab("✎ Write") { setPenMode(PenMode.WRITE) }
+        interactTab = modeTab("☝ Interact") { setPenMode(PenMode.INTERACT) }
+        header.addView(writeTab)
+        header.addView(interactTab)
         prevButton = headerButton("◀") { stepPage(-1) }
         nextButton = headerButton("▶") { stepPage(1) }
         if (meta.kind == WebDocKind.EPUB) {
@@ -157,7 +163,7 @@ class BookPane(
         }
 
         // Not focused yet: the pen only taps until this pane gets focus.
-        overlay.writeEnabled = false
+        applyPenMode()
         configureWebView()
         val start =
             store.lastPage?.takeIf { href -> meta.kind == WebDocKind.HTML || meta.pages.any { it.href == href } }
@@ -176,11 +182,46 @@ class BookPane(
         overlay.sideEraser = tool
     }
 
+    /** Write / Interact of this pane's book (saved with the book). */
+    var penMode: PenMode
+        get() = store.penMode
+        private set(value) {
+            store.penMode = value
+        }
+
+    /** Called after the mode changed, so the host can refresh its own button. */
+    var onPenModeChanged: ((PenMode) -> Unit)? = null
+
+    fun setPenMode(mode: PenMode) {
+        if (released) return
+        val changed = penMode != mode
+        penMode = mode
+        applyPenMode()
+        if (changed) {
+            removeCallbacks(saveRunnable)
+            postDelayed(saveRunnable, SAVE_DELAY_MS)
+            onPenModeChanged?.invoke(mode)
+        }
+    }
+
+    fun togglePenMode() = setPenMode(penMode.toggled())
+
+    /** True when the pen writes here right now: focused and in Write mode. */
+    val writeEnabled: Boolean get() = overlay.writeEnabled
+
+    private fun applyPenMode() {
+        val write = isActive && penMode == PenMode.WRITE
+        overlay.writeEnabled = write
+        rawInput?.setEnabled(write)
+        styleModeTab(writeTab, penMode == PenMode.WRITE)
+        styleModeTab(interactTab, penMode == PenMode.INTERACT)
+    }
+
     /** Split view: only the focused pane holds the pen driver. */
     fun setPaneActive(active: Boolean) {
         if (isActive == active) return
         isActive = active
-        overlay.writeEnabled = active
+        applyPenMode()
         if (active) openNativeInk() else closeNativeInk()
     }
 
@@ -208,6 +249,7 @@ class BookPane(
             overlay.nativeInput = rawInput != null
             rawInput?.let { raw ->
                 raw.exclusionRects = exclusionRects
+                raw.setEnabled(overlay.writeEnabled)
                 if (!inkAllowed) raw.pause()
                 if (fingerPaused) raw.setFingerPaused(true)
             }
@@ -511,6 +553,31 @@ class BookPane(
         epd.release()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.destroy()
+    }
+
+    private fun modeTab(
+        label: String,
+        onClick: () -> Unit,
+    ) = TextView(context).apply {
+        text = label
+        textSize = 13f
+        gravity = Gravity.CENTER
+        setPadding(dp(8), 0, dp(8), 0)
+        layoutParams = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)).apply { marginEnd = dp(2) }
+        setOnClickListener { onClick() }
+    }
+
+    private fun styleModeTab(
+        tab: TextView,
+        selected: Boolean,
+    ) {
+        tab.background =
+            android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(if (selected) Color.BLACK else Color.WHITE)
+                setStroke(dp(1), Color.BLACK)
+            }
+        tab.setTextColor(if (selected) Color.WHITE else Color.BLACK)
     }
 
     private fun headerButton(
