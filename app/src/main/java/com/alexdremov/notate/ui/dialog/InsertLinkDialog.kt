@@ -18,7 +18,6 @@ import android.widget.RadioGroup
 import androidx.appcompat.app.AppCompatDialog
 import com.alexdremov.notate.R
 import com.alexdremov.notate.data.LinkType
-import com.alexdremov.notate.util.EpdFastModeController
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 
@@ -178,8 +177,8 @@ class InsertLinkDialog(
 
         // EPD Optimization: Force refresh on show
         window?.decorView?.post {
-            EpdFastModeController.exitFastMode()
-            EpdController.invalidate(window?.decorView, UpdateMode.GC)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("link-dialog")
+            window?.decorView?.let { com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(it, com.alexdremov.notate.ui.epd.EpdMode.GC) }
         }
     }
 

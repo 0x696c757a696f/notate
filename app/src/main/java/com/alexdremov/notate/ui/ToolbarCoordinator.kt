@@ -10,7 +10,6 @@ import android.view.ViewTreeObserver
 import android.widget.LinearLayout
 import androidx.core.os.HandlerCompat
 import com.alexdremov.notate.ui.dpToPx
-import com.onyx.android.sdk.api.device.EpdDeviceManager
 
 /**
  * Manages the toolbar's position, orientation, and EPD optimizations.
@@ -79,7 +78,7 @@ class ToolbarCoordinator(
         toolbarContainer.onDragStart = {
             cancelCollapseTimer()
             onDragStateChanged?.invoke(true)
-            EpdDeviceManager.enterAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("toolbar")
         }
 
         toolbarContainer.onDragEnd = {
@@ -91,17 +90,17 @@ class ToolbarCoordinator(
 
             resetCollapseTimer()
             onDragStateChanged?.invoke(false)
-            EpdDeviceManager.exitAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("toolbar")
         }
 
         toolbarContainer.onDown = {
             cancelCollapseTimer()
-            EpdDeviceManager.enterAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("toolbar")
         }
 
         toolbarContainer.onUp = {
             resetCollapseTimer()
-            EpdDeviceManager.exitAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("toolbar")
         }
 
         resetToTopLeft()

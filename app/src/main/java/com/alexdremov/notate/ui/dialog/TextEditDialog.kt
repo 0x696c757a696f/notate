@@ -14,7 +14,6 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import com.alexdremov.notate.R
 import com.alexdremov.notate.ui.dpToPx
-import com.onyx.android.sdk.api.device.EpdDeviceManager
 import io.noties.markwon.Markwon
 import io.noties.markwon.editor.MarkwonEditor
 import io.noties.markwon.editor.MarkwonEditorTextWatcher
@@ -96,12 +95,12 @@ class TextEditDialog(
     override fun onStart() {
         super.onStart()
         // Enter animation mode for responsive typing on E-Ink
-        EpdDeviceManager.enterAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("text-dialog")
     }
 
     override fun onStop() {
         super.onStop()
-        EpdDeviceManager.exitAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("text-dialog")
     }
 
     override fun dismiss() {

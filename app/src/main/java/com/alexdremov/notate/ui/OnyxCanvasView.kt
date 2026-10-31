@@ -948,7 +948,7 @@ class OnyxCanvasView
                     if (mode == UpdateMode.GC) {
                         performHardRefresh()
                     } else {
-                        EpdController.invalidate(this@OnyxCanvasView, mode)
+                        com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(this@OnyxCanvasView, com.alexdremov.notate.ui.epd.toEpdMode(mode))
                     }
                 }
             }
@@ -1122,13 +1122,9 @@ class OnyxCanvasView
             if (width == 0 || height == 0) return
             val limit = Rect()
             getLocalVisibleRect(limit)
-            if (isRawDrawingActive) {
-                helper.setRawDrawingEnabled(false)
-                helper.setLimitRect(limit, exclusionRects)
-                helper.setRawDrawingEnabled(true)
-            } else {
-                helper.setLimitRect(limit, exclusionRects)
-            }
+            helper.setLimitRect(limit, exclusionRects)
+            // The driver only picks up a new limit when raw drawing restarts.
+            inkArbiter.restart(this)
         }
 
         /** True if a stylus point (view coordinates) falls on the toolbar or another UI-only area. */
@@ -1316,7 +1312,7 @@ class OnyxCanvasView
         }
 
         private fun performHardRefresh() {
-            inkArbiter.pausedDuring(this) { EpdController.invalidate(this, UpdateMode.GC) }
+            inkArbiter.pausedDuring(this) { com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(this, com.alexdremov.notate.ui.epd.EpdMode.GC) }
         }
 
         /** Creates the helper if needed and opens the raw-drawing session. Called by the arbiter, via [driver]. */
@@ -1359,7 +1355,7 @@ class OnyxCanvasView
             drawContent()
 
             // Use DU for fast visual update after undo/redo instead of full GC refresh
-            EpdController.invalidate(this, UpdateMode.DU)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(this, com.alexdremov.notate.ui.epd.EpdMode.DU)
         }
 
         // --- Ruler / protractor ---
@@ -1405,8 +1401,7 @@ class OnyxCanvasView
             if (isGuideInteracting) return
             isGuideInteracting = true
             inkArbiter.block(this, BlockReason.GUIDE_DRAG, true)
-            com.onyx.android.sdk.api.device.EpdDeviceManager
-                .enterAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("guide-drag")
             canvasRenderer.setInteracting(true)
         }
 
@@ -1414,11 +1409,10 @@ class OnyxCanvasView
             if (!isGuideInteracting) return
             isGuideInteracting = false
             canvasRenderer.setInteracting(false)
-            com.onyx.android.sdk.api.device.EpdDeviceManager
-                .exitAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("guide-drag")
             drawContent()
             // A clean refresh once it stops, then hand the screen back to the pen.
-            EpdController.invalidate(this, UpdateMode.GU)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(this, com.alexdremov.notate.ui.epd.EpdMode.GU)
             inkArbiter.block(this, BlockReason.GUIDE_DRAG, false)
         }
 
@@ -1749,7 +1743,7 @@ class OnyxCanvasView
             if (screen.left + dx < pad) dx = pad - screen.left
             if (dx != 0f || dy != 0f) scrollByOffset(dx, dy)
             drawContent()
-            EpdController.invalidate(this, UpdateMode.DU)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(this, com.alexdremov.notate.ui.epd.EpdMode.DU)
         }
 
         /** Finger input on the zoom window: buttons, and dragging to move the target. */

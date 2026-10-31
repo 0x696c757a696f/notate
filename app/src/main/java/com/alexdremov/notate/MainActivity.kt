@@ -46,7 +46,6 @@ import com.alexdremov.notate.ui.theme.Spacing
 import com.alexdremov.notate.ui.theme.NotateTheme
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.vm.HomeViewModel
-import com.onyx.android.sdk.api.device.EpdDeviceManager
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -60,7 +59,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Use fast animation mode for the menu UI
-        EpdDeviceManager.enterAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("home")
 
         // Handle incoming intent (e.g. from File Manager)
         handleIntent(intent)
@@ -116,13 +115,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        EpdDeviceManager.enterAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("home")
         viewModel.refresh()
     }
 
     override fun onPause() {
         super.onPause()
-        EpdDeviceManager.exitAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("home")
     }
 }
 

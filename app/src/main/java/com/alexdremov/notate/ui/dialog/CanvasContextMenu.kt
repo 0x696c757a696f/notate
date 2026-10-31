@@ -8,7 +8,6 @@ import android.view.ViewGroup
 import android.widget.PopupWindow
 import androidx.core.content.ContextCompat
 import com.alexdremov.notate.R
-import com.alexdremov.notate.util.EpdFastModeController
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 
@@ -82,9 +81,9 @@ class CanvasContextMenu(
         popupWindow.showAtLocation(parent, Gravity.NO_GRAVITY, screenX, screenY)
 
         // Force EPD Refresh
-        EpdFastModeController.exitFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("context-menu")
         parent.post {
-            EpdController.invalidate(view, UpdateMode.GC)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(view, com.alexdremov.notate.ui.epd.EpdMode.GC)
         }
     }
 

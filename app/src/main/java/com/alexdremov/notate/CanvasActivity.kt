@@ -398,16 +398,14 @@ class CanvasActivity : AppCompatActivity() {
             if (inkArbiter.isBlockedBy(toolbarTouch)) {
                 // Only lifts the toolbar's own block: a popup this tap opened keeps ink off.
                 inkArbiter.block(toolbarTouch, false)
-                com.onyx.android.sdk.api.device.EpdDeviceManager
-                    .exitAnimationUpdate(true)
+                com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("toolbar-touch")
             }
         }
 
         binding.toolbarContainer.onDown = {
             if (!inkArbiter.isBlockedBy(toolbarTouch)) {
                 inkArbiter.block(toolbarTouch, true)
-                com.onyx.android.sdk.api.device.EpdDeviceManager
-                    .enterAnimationUpdate(true)
+                com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("toolbar-touch")
             }
         }
 
@@ -731,9 +729,9 @@ class CanvasActivity : AppCompatActivity() {
 
         // If the driver already inked a stylus tap on the toolbar, repaint it clean.
         view.onExcludedStrokeDiscarded = {
-            EpdController.invalidate(binding.toolbarContainer, UpdateMode.GC)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(binding.toolbarContainer, com.alexdremov.notate.ui.epd.EpdMode.GC)
             if (sidebarCoordinator.isOpen) {
-                EpdController.invalidate(binding.settingsSidebarContainer, UpdateMode.GC)
+                com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(binding.settingsSidebarContainer, com.alexdremov.notate.ui.epd.EpdMode.GC)
             }
         }
 
@@ -1106,11 +1104,9 @@ class CanvasActivity : AppCompatActivity() {
         binding.splitLayout.onDividerDragStateChanged = { dragging ->
             inkArbiter.block(com.alexdremov.notate.input.BlockReason.SPLIT_DIVIDER, dragging)
             if (dragging) {
-                com.onyx.android.sdk.api.device.EpdDeviceManager
-                    .enterAnimationUpdate(true)
+                com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("divider")
             } else {
-                com.onyx.android.sdk.api.device.EpdDeviceManager
-                    .exitAnimationUpdate(true)
+                com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("divider")
                 updateExclusionRects()
             }
         }
@@ -1724,8 +1720,7 @@ class CanvasActivity : AppCompatActivity() {
                     },
                     onRemove = { toolToRemove -> viewModel.removePen(toolToRemove.id) },
                     onDismiss = {
-                        com.alexdremov.notate.util.EpdFastModeController
-                            .exitFastMode()
+                        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("editor")
                         activePenPopup = null
                         viewModel.setPenPopupOpen(false)
                         updateDrawingEnabledState()
@@ -1736,8 +1731,7 @@ class CanvasActivity : AppCompatActivity() {
             viewModel.setPenPopupOpen(true)
             updateDrawingEnabledState()
 
-            com.alexdremov.notate.util.EpdFastModeController
-                .enterFastMode()
+            com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("editor")
             activePenPopup?.show(binding.root, targetRect)
         }
     }
