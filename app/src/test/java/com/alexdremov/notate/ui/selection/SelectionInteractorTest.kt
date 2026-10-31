@@ -7,7 +7,7 @@ import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.ui.OnyxCanvasView
 import com.alexdremov.notate.ui.controller.CanvasController
 import com.alexdremov.notate.ui.controller.SelectionManager
-import com.alexdremov.notate.util.EpdFastModeController
+import com.alexdremov.notate.ui.epd.OnyxEpdPort
 import io.mockk.MockKAnnotations
 import io.mockk.coVerify
 import io.mockk.every
@@ -62,10 +62,10 @@ class SelectionInteractorTest {
         every { PreferencesManager.isAxisLockingEnabled(any()) } returns false
         every { PreferencesManager.isAngleSnappingEnabled(any()) } returns false
 
-        // Mock EpdFastModeController
-        mockkObject(EpdFastModeController)
-        every { EpdFastModeController.enterFastMode() } returns Unit
-        every { EpdFastModeController.exitFastMode() } returns Unit
+        // Mock OnyxEpdPort
+        mockkObject(OnyxEpdPort)
+        every { OnyxEpdPort.enterFast() } returns Unit
+        every { OnyxEpdPort.exitFast() } returns Unit
 
         // Default Identity Matrices
         viewMatrix.reset()
@@ -75,7 +75,7 @@ class SelectionInteractorTest {
     @After
     fun tearDown() {
         unmockkObject(PreferencesManager)
-        unmockkObject(EpdFastModeController)
+        unmockkObject(OnyxEpdPort)
     }
 
     @Test
