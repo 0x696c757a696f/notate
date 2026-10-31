@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material.icons.filled.ViewQuilt
@@ -31,6 +32,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +57,7 @@ import com.alexdremov.notate.ui.theme.InkMuted
 import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
 import com.alexdremov.notate.data.FingerMode
+import com.alexdremov.notate.data.ScreenOrientationMode
 import com.alexdremov.notate.data.PreferencesManager
 import com.alexdremov.notate.input.Handedness
 import com.alexdremov.notate.ui.settings.InputSettingsPanel
@@ -103,6 +106,7 @@ fun SettingsDialog(
                             SettingsScreen.MAIN -> "Settings"
                             SettingsScreen.INPUT -> "Writing & gestures"
                             SettingsScreen.INTERFACE -> "Toolbar"
+                            SettingsScreen.ORIENTATION -> "Screen orientation"
                             SettingsScreen.STARTUP -> "Startup"
                             SettingsScreen.PDF -> "Export"
                             SettingsScreen.OCR -> "Text recognition & search"
@@ -133,6 +137,12 @@ fun SettingsDialog(
                             subtitle = "Auto collapse",
                             icon = Icons.Default.ViewQuilt,
                             onClick = { currentScreen = SettingsScreen.INTERFACE },
+                        )
+                        SettingsMenuItem(
+                            title = "Screen orientation",
+                            subtitle = "Auto-rotate, portrait or landscape",
+                            icon = Icons.Default.ScreenRotation,
+                            onClick = { currentScreen = SettingsScreen.ORIENTATION },
                         )
                         SettingsMenuItem(
                             title = "Startup",
@@ -227,6 +237,36 @@ fun SettingsDialog(
                                 PreferencesManager.setStylusButtonAction(context, it)
                             },
                         )
+                    }
+
+                    SettingsScreen.ORIENTATION -> {
+                        var mode by remember { mutableStateOf(PreferencesManager.getScreenOrientation(context)) }
+                        listOf(
+                            ScreenOrientationMode.AUTO to "Auto (follow sensor)",
+                            ScreenOrientationMode.PORTRAIT to "Portrait",
+                            ScreenOrientationMode.LANDSCAPE to "Landscape",
+                        ).forEach { (m, label) ->
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            mode = m
+                                            PreferencesManager.setScreenOrientation(context, m)
+                                            (context as? android.app.Activity)?.requestedOrientation =
+                                                when (m) {
+                                                    ScreenOrientationMode.AUTO -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                                                    ScreenOrientationMode.PORTRAIT -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                                                    ScreenOrientationMode.LANDSCAPE -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                                }
+                                        }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = mode == m, onClick = null)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(text = label, style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
                     }
 
                     SettingsScreen.INTERFACE -> {
@@ -351,6 +391,7 @@ enum class SettingsScreen {
     MAIN,
     INPUT,
     INTERFACE,
+    ORIENTATION,
     STARTUP,
     PDF,
     OCR,

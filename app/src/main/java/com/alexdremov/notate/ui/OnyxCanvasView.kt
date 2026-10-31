@@ -330,6 +330,8 @@ class OnyxCanvasView
                 zoomWindow.layout(w, h)
                 applyExclusionRects()
             }
+            // Rotation / split resize: the pen driver still holds the old capture area.
+            if (w != oldw || h != oldh) post { refreshPenLimitRect() }
         }
 
         private fun setupGestureDetectors() {
@@ -1094,6 +1096,21 @@ class OnyxCanvasView
                 } else {
                     it.setLimitRect(limit, exclusionRects)
                 }
+            }
+        }
+
+        /** Re-sends the capture area to the pen driver after the view changed size (rotation, split divider). */
+        private fun refreshPenLimitRect() {
+            val helper = touchHelper ?: return
+            if (width == 0 || height == 0) return
+            val limit = Rect()
+            getLocalVisibleRect(limit)
+            if (isRawDrawingActive) {
+                helper.setRawDrawingEnabled(false)
+                helper.setLimitRect(limit, exclusionRects)
+                helper.setRawDrawingEnabled(true)
+            } else {
+                helper.setLimitRect(limit, exclusionRects)
             }
         }
 

@@ -1561,6 +1561,13 @@ class WebDocActivity : AppCompatActivity() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Popups are anchored in old coordinates; the overlay's layout listener re-limits the pen and re-checks layout drift.
+        activePenPopup?.dismiss()
+        activePenPopup = null
+    }
+
     override fun onResume() {
         super.onResume()
         renderTabs()
