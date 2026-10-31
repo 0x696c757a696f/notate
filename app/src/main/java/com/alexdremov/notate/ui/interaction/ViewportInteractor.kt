@@ -6,7 +6,6 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.ViewConfiguration
 import com.alexdremov.notate.config.CanvasConfig
-import com.alexdremov.notate.util.EpdFastModeController
 import kotlin.math.hypot
 
 /**
@@ -226,7 +225,7 @@ class ViewportInteractor(
         if (isFastModeActive) return
         isFastModeActive = true
         onInteractionStart()
-        EpdFastModeController.enterFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("viewport")
     }
 
     private fun endInteraction() {
@@ -234,7 +233,7 @@ class ViewportInteractor(
         isFastModeActive = false
         // Leave the fast waveform (which refreshes the screen) before the pen is handed back,
         // so that refresh doesn't land on the first stroke after a pan.
-        EpdFastModeController.exitFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("viewport")
         onInteractionEnd()
     }
 

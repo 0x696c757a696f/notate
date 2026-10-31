@@ -31,7 +31,6 @@ import com.alexdremov.notate.ui.dpToPx
 import com.alexdremov.notate.ui.mmToPx
 import com.alexdremov.notate.ui.pxToMm
 import com.alexdremov.notate.util.ColorUtils
-import com.onyx.android.sdk.api.device.EpdDeviceManager
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 import com.skydoves.colorpickerview.listeners.ColorEnvelopeListener
@@ -83,10 +82,9 @@ class PenSettingsPopup(
 
     private fun refreshHighQuality(view: View) {
         // Exit Fast Mode if active
-        com.alexdremov.notate.util.EpdFastModeController
-            .exitFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("pen-settings")
         view.post {
-            EpdController.invalidate(view, UpdateMode.GC)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(view, com.alexdremov.notate.ui.epd.EpdMode.GC)
         }
     }
 
@@ -133,13 +131,11 @@ class PenSettingsPopup(
         binding.sliderWidth.addOnSliderTouchListener(
             object : com.google.android.material.slider.Slider.OnSliderTouchListener {
                 override fun onStartTrackingTouch(slider: com.google.android.material.slider.Slider) {
-                    com.alexdremov.notate.util.EpdFastModeController
-                        .enterFastMode()
+                    com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("pen-settings")
                 }
 
                 override fun onStopTrackingTouch(slider: com.google.android.material.slider.Slider) {
-                    com.alexdremov.notate.util.EpdFastModeController
-                        .exitFastMode()
+                    com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("pen-settings")
                 }
             },
         )
@@ -215,11 +211,9 @@ class PenSettingsPopup(
                     newState: Int,
                 ) {
                     if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
-                        com.alexdremov.notate.util.EpdFastModeController
-                            .enterFastMode()
+                        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("pen-settings")
                     } else if (newState == RecyclerView.SCROLL_STATE_IDLE) {
-                        com.alexdremov.notate.util.EpdFastModeController
-                            .exitFastMode()
+                        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("pen-settings")
                     }
                 }
             },

@@ -46,8 +46,7 @@ class SidebarCoordinator(
         _isOpen = true
         backCallback.isEnabled = true
 
-        com.alexdremov.notate.util.EpdFastModeController
-            .enterFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("sidebar")
 
         scrim.visibility = View.VISIBLE
         container.visibility = View.VISIBLE
@@ -66,8 +65,7 @@ class SidebarCoordinator(
         _isOpen = false
         backCallback.isEnabled = false
 
-        com.alexdremov.notate.util.EpdFastModeController
-            .enterFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("sidebar")
 
         val width = container.width.toFloat()
         container
@@ -76,8 +74,7 @@ class SidebarCoordinator(
             .setDuration(300)
             .withEndAction {
                 scrim.visibility = View.GONE
-                com.alexdremov.notate.util.EpdFastModeController
-                    .exitFastMode()
+                com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("sidebar")
                 onStateChanged?.invoke()
             }.start()
     }

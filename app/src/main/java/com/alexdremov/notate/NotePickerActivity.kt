@@ -18,7 +18,6 @@ import androidx.lifecycle.lifecycleScope
 import com.alexdremov.notate.ui.theme.NotateTheme
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.vm.HomeViewModel
-import com.onyx.android.sdk.api.device.EpdDeviceManager
 import kotlinx.coroutines.launch
 
 class NotePickerActivity : ComponentActivity() {
@@ -26,7 +25,7 @@ class NotePickerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        EpdDeviceManager.enterAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("picker")
 
         val lockedProjectId = intent.getStringExtra("LOCKED_PROJECT_ID")
         val disabledItemUuid = intent.getStringExtra("DISABLED_ITEM_UUID")
@@ -105,12 +104,12 @@ class NotePickerActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        EpdDeviceManager.enterAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("picker")
         viewModel.refresh()
     }
 
     override fun onPause() {
         super.onPause()
-        EpdDeviceManager.exitAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("picker")
     }
 }

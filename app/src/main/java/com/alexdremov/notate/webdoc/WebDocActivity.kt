@@ -50,7 +50,6 @@ import com.alexdremov.notate.ui.dialog.PenSettingsPopup
 import com.alexdremov.notate.input.InputClassifier
 import com.alexdremov.notate.input.PalmRejector
 import com.alexdremov.notate.ui.toolbar.MainToolbar
-import com.alexdremov.notate.util.EpdFastModeController
 import com.alexdremov.notate.vm.DrawingViewModel
 import com.alexdremov.notate.util.Logger
 import com.alexdremov.notate.util.OnyxSystemHelper
@@ -1191,7 +1190,7 @@ class WebDocActivity : AppCompatActivity() {
                 onUpdate = { updated -> toolbarVm.updateTool(updated) },
                 onRemove = { removed -> toolbarVm.removePen(removed.id) },
                 onDismiss = {
-                    EpdFastModeController.exitFastMode()
+                    com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("web-editor")
                     activePenPopup = null
                     toolbarVm.setPenPopupOpen(false)
                     rawInput?.resume()
@@ -1200,7 +1199,7 @@ class WebDocActivity : AppCompatActivity() {
             )
         activePenPopup = popup
         toolbarVm.setPenPopupOpen(true)
-        EpdFastModeController.enterFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("web-editor")
         popup.show(window.decorView, anchor)
     }
 
@@ -1558,11 +1557,9 @@ class WebDocActivity : AppCompatActivity() {
         partnerPane?.setInkAllowed(!dragging)
         if (dragging) {
             rawInput?.pause()
-            com.onyx.android.sdk.api.device.EpdDeviceManager
-                .enterAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("divider")
         } else {
-            com.onyx.android.sdk.api.device.EpdDeviceManager
-                .exitAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("divider")
             if (!fingerPaused && !focusPaused && !exporting) rawInput?.resume()
         }
     }

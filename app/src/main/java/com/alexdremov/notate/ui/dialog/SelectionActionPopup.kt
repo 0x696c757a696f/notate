@@ -7,7 +7,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.alexdremov.notate.databinding.DialogSelectionActionsBinding
-import com.alexdremov.notate.util.EpdFastModeController
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 
@@ -65,9 +64,9 @@ class SelectionActionPopup(
         updatePosition(selectionBounds, matrix)
 
         // Force refresh for E-Ink
-        EpdFastModeController.exitFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("selection-popup")
         binding.root.post {
-            EpdController.invalidate(binding.root, UpdateMode.GC)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(binding.root, com.alexdremov.notate.ui.epd.EpdMode.GC)
         }
     }
 

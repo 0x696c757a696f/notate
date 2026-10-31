@@ -5,7 +5,6 @@ import android.graphics.RectF
 import android.view.MotionEvent
 import com.alexdremov.notate.ui.OnyxCanvasView
 import com.alexdremov.notate.ui.controller.CanvasController
-import com.alexdremov.notate.util.EpdFastModeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -128,7 +127,7 @@ class SelectionInteractor(
                 initialObjectRotation = Math.toDegrees(rotRad).toFloat()
             }
 
-            EpdFastModeController.enterFastMode()
+            com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("selection")
             scope.launch { controller.startMoveSelection() }
             view.dismissActionPopup()
             return true
@@ -153,7 +152,7 @@ class SelectionInteractor(
         dragOriginY = y
         dragDistanceAccumulator = 100f
 
-        EpdFastModeController.enterFastMode()
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("selection")
         scope.launch { controller.startMoveSelection() }
         view.dismissActionPopup()
     }
@@ -198,7 +197,7 @@ class SelectionInteractor(
         activeHandle = HandleType.NONE
 
         if (wasInteracting) {
-            EpdFastModeController.exitFastMode()
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("selection")
 
             if (wasBodyTap) {
                 // Guard against multiple commits

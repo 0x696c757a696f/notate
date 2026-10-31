@@ -1,7 +1,6 @@
 package com.alexdremov.notate.webdoc
 
 import android.view.View
-import com.alexdremov.notate.util.EpdFastModeController
 import com.alexdremov.notate.util.Logger
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
@@ -31,7 +30,7 @@ class WebDocEpd(
         view.removeCallbacks(exitRunnable)
         if (fast) return
         fast = true
-        safe { EpdFastModeController.enterFastMode() }
+        safe { com.alexdremov.notate.ui.epd.Epd.scheduler.acquireFast("web-interaction") }
     }
 
     fun onInteractionEnd() {
@@ -53,7 +52,7 @@ class WebDocEpd(
 
     fun fullRefresh() {
         exitFast()
-        safe { EpdController.invalidate(view.rootView, UpdateMode.GC) }
+        safe { com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(view.rootView, com.alexdremov.notate.ui.epd.EpdMode.GC) }
     }
 
     fun release() {
@@ -64,7 +63,7 @@ class WebDocEpd(
     private fun exitFast() {
         if (!fast) return
         fast = false
-        safe { EpdFastModeController.exitFastMode() }
+        safe { com.alexdremov.notate.ui.epd.Epd.scheduler.releaseFast("web-interaction") }
         view.rootView.invalidate()
     }
 
