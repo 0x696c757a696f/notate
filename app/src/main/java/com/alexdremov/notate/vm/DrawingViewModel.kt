@@ -134,6 +134,8 @@ class DrawingViewModel
             path: String,
             metadata: com.alexdremov.notate.data.CanvasData,
             commit: Boolean,
+            /** Pass failures to the caller (the save coordinator shows them on the tab) instead of only logging them. */
+            rethrow: Boolean = false,
         ) {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 sessionMutex.withLock {
@@ -165,7 +167,8 @@ class DrawingViewModel
                             Logger.i("DrawingViewModel", "Full Save complete: ${result.savedPath}")
                         }
                     } catch (e: Exception) {
-                        Logger.e("DrawingViewModel", "Failed to save canvas", e, showToUser = true)
+                        Logger.e("DrawingViewModel", "Failed to save canvas", e, showToUser = !rethrow)
+                        if (rethrow) throw e
                     }
                 }
             }

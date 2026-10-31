@@ -153,7 +153,6 @@ class CanvasActivity : AppCompatActivity() {
         val canvas = OnyxCanvasView(this@CanvasActivity)
         val cursor = com.alexdremov.notate.ui.CursorView(this@CanvasActivity)
         var session: com.alexdremov.notate.data.CanvasSession? = null
-        var saveJob: Job? = null
         val saveMutex = kotlinx.coroutines.sync.Mutex()
 
         init {
@@ -1405,12 +1404,9 @@ class CanvasActivity : AppCompatActivity() {
         secondary = pane
         wireCanvas(pane.canvas)
         pane.canvas.onContentChanged = {
-            pane.saveJob?.cancel()
-            pane.saveJob =
-                lifecycleScope.launch {
-                    delay(500)
-                    if (isActive) saveSecondary(pane, commit = false)
-                }
+            SaveCoordinator.instance.markDirty(
+                LambdaSaveable(DocRef(DocKind.NOTE, pane.path, pane.path.substringAfterLast('/'))) { saveSecondary(pane, commit = false) },
+            )
         }
         lifecycleScope.launch {
             val session =
@@ -1482,7 +1478,7 @@ class CanvasActivity : AppCompatActivity() {
         val pane = secondary ?: return
         if (secondaryActive) setActivePane(useSecondary = false)
         secondary = null
-        pane.saveJob?.cancel()
+        SaveCoordinator.instance.unregister(pane.path)
         pane.canvas.setPaneActive(false)
         val session = pane.session
         ProcessLifecycleOwner.get().lifecycleScope.launch {
@@ -1512,7 +1508,7 @@ class CanvasActivity : AppCompatActivity() {
     private fun scheduleAutoSave() {
         val path = currentCanvasPath ?: return
         SaveCoordinator.instance.markDirty(
-            LambdaSaveable(DocRef(DocKind.NOTE, path, path.substringAfterLast('/'))) { saveCanvasSuspend(commit = false) },
+            LambdaSaveable(DocRef(DocKind.NOTE, path, path.substringAfterLast('/'))) { saveCanvasSuspend(commit = false, rethrow = true) },
         )
     }
 
@@ -1559,6 +1555,8 @@ class CanvasActivity : AppCompatActivity() {
             // Sequential Save -> Sync to prevent race condition
             ProcessLifecycleOwner.get().lifecycleScope.launch(Dispatchers.IO) {
                 try {
+                    // 0. Let pending debounced autosaves finish first, so they cannot race the full save.
+                    SaveCoordinator.instance.flushAll()
                     // 1. Full Save (Blocking in this coroutine)
                     saveCanvasSuspend(commit = true)
                     secondary?.let { saveSecondary(it, commit = true) }
@@ -1601,7 +1599,10 @@ class CanvasActivity : AppCompatActivity() {
     /**
      * Performs the actual save.  Can be awaited for synchronous save (e.g., on back press).
      */
-    private suspend fun saveCanvasSuspend(commit: Boolean = true) {
+    private suspend fun saveCanvasSuspend(
+        commit: Boolean = true,
+        rethrow: Boolean = false,
+    ) {
         val path = currentCanvasPath ?: return
 
         try {
@@ -1623,9 +1624,10 @@ class CanvasActivity : AppCompatActivity() {
                 return
             }
 
-            viewModel.saveCanvasSession(path, updatedMetadata, commit)
+            viewModel.saveCanvasSession(path, updatedMetadata, commit, rethrow)
         } catch (e: Exception) {
             Logger.e("CanvasActivity", "saveCanvasSuspend exception", e)
+            if (rethrow) throw e
         }
     }
 
