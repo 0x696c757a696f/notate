@@ -1248,41 +1248,20 @@ class CanvasActivity : AppCompatActivity() {
         }
         pendingSplitOrientation = orientation
         val current = currentCanvasPath ?: return
-        val candidates = workspace.tabs.filter { it.path != current }
-        val labels = candidates.map { it.title } + "Browse notes\u2026" + "Browse books\u2026"
-        androidx.appcompat.app.AlertDialog
-            .Builder(this)
-            .setTitle(if (orientation == SplitOrientation.SIDE_BY_SIDE) "Open beside" else "Open below")
-            .setItems(labels.toTypedArray()) { _, which ->
-                if (which < candidates.size) {
-                    startSplit(candidates[which], orientation)
-                } else if (which == candidates.size + 1) {
-                    showBookPicker(orientation)
-                } else {
-                    val intent =
-                        Intent(this, NotePickerActivity::class.java).apply {
-                            activeSession()?.metadata?.uuid?.let { putExtra("DISABLED_ITEM_UUID", it) }
-                        }
-                    splitPickerLauncher.launch(intent)
-                }
-            }.show()
-    }
-
-    private fun showBookPicker(orientation: SplitOrientation) {
-        val books =
-            com.alexdremov.notate.webdoc.WebDocActivity
-                .library(this)
-                .list()
-        if (books.isEmpty()) {
-            android.widget.Toast.makeText(this, "No books yet: import one from Home", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        androidx.appcompat.app.AlertDialog
-            .Builder(this)
-            .setTitle("Books")
-            .setItems(books.map { it.title }.toTypedArray()) { _, which ->
-                startSplit(DocTab(DocKind.WEB, books[which].id, books[which].title), orientation)
-            }.show()
+        com.alexdremov.notate.ui.split.SplitPartnerPicker.show(
+            this,
+            workspace,
+            current,
+            orientation,
+            onBrowseNotes = {
+                val intent =
+                    Intent(this, NotePickerActivity::class.java).apply {
+                        activeSession()?.metadata?.uuid?.let { putExtra("DISABLED_ITEM_UUID", it) }
+                    }
+                splitPickerLauncher.launch(intent)
+            },
+            onPicked = { startSplit(it, orientation) },
+        )
     }
 
     private fun startSplit(

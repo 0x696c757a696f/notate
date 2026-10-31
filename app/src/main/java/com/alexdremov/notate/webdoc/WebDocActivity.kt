@@ -57,9 +57,14 @@ import com.alexdremov.notate.util.UriUtils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import com.alexdremov.notate.NotePickerActivity
+import com.alexdremov.notate.ui.split.SplitDrag
+import com.alexdremov.notate.ui.split.SplitPaneLayout
+import com.alexdremov.notate.ui.split.SplitPartnerPicker
 import com.alexdremov.notate.ui.tabs.DocKind
 import com.alexdremov.notate.ui.tabs.DocTab
 import com.alexdremov.notate.ui.tabs.TabBarView
+import com.alexdremov.notate.ui.tabs.SplitOrientation
 import com.alexdremov.notate.ui.tabs.TabNavigator
 import com.alexdremov.notate.ui.tabs.WorkspaceStore
 import kotlinx.coroutines.delay
@@ -166,6 +171,21 @@ class WebDocActivity : AppCompatActivity() {
     private var activePenPopup: PenSettingsPopup? = null
     private var prevButton: TextView? = null
     private var tabBar: TabBarView? = null
+
+    // Split view with a second book (book|note splits are hosted by the note editor).
+    private lateinit var splitLayout: SplitPaneLayout
+    private var partnerPane: BookPane? = null
+    private var partnerId: String? = null
+    private var partnerActive = false
+    private var mainWriteMode = true
+    private var pendingSplitOrientation = SplitOrientation.SIDE_BY_SIDE
+    private val splitNotePicker =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val path = result.data?.getStringExtra("NOTE_PATH")
+            if (result.resultCode == RESULT_OK && path != null) {
+                startSplit(DocTab(DocKind.NOTE, path, WorkspaceStore.titleFor(path)), pendingSplitOrientation)
+            }
+        }
     private var isSwitchingTabs = false
     private var nextButton: TextView? = null
 
@@ -183,6 +203,16 @@ class WebDocActivity : AppCompatActivity() {
                     WorkspaceStore.update(this) { it.close(docId) }
                     toast("Document not found or deleted")
                     finish()
+                    return
+                }
+                // A book that is split with a note is shown by the note editor, whatever the
+                // entry point (library tap, tab, deep link), so the split is always restored.
+                val ws = WorkspaceStore.load(this)
+                val host = TabNavigator.hostFor(ws, DocTab(DocKind.WEB, docId, m.title))
+                if (host.kind == DocKind.NOTE) {
+                    startActivity(TabNavigator.intentFor(this, host, ws))
+                    finish()
+                    overridePendingTransition(0, 0)
                     return
                 }
                 open(m)
@@ -267,6 +297,7 @@ class WebDocActivity : AppCompatActivity() {
         buildUi(m)
         applyPolicy(m.policy)
         checkWebViewVersion()
+        restoreBookSplit(m.id)
 
         val start = annotations.lastPage?.takeIf { href -> m.kind == WebDocKind.HTML || m.pages.any { it.href == href } } ?: m.pages.first().href
         loadPage(start)
@@ -297,10 +328,13 @@ class WebDocActivity : AppCompatActivity() {
         // Tabs shared with the note editor; Home replaces the old Back button.
         val tabs =
             TabBarView(this).apply {
-                splitButtonsVisible = false
+                splitButtonsVisible = true
                 onHome = { finish() }
-                onTabClick = { tab -> switchToTab(tab) }
+                onTabClick = { tab -> onTabSelected(tab) }
                 onTabClose = { tab -> closeTab(tab) }
+                onSplit = { orientation -> onSplitButton(orientation) }
+                onSwapPanes = { swapPanes() }
+                onExitSplit = { exitSplit() }
             }
         tabBar = tabs
         root.addView(tabs, 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, resources.getDimensionPixelSize(R.dimen.tab_bar_height)))
@@ -387,7 +421,14 @@ class WebDocActivity : AppCompatActivity() {
             )
         content.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         content.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        splitLayout = SplitPaneLayout(this)
+        splitLayout.setPanes(content, null)
+        splitLayout.fingerTapActivates = !com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this)
+        splitLayout.onPaneTouched = { index -> setActivePane(partner = index != primarySlot()) }
+        splitLayout.onDividerDragStateChanged = { dragging -> onDividerDrag(dragging) }
+        splitLayout.onDragReleased = { outcome -> onDividerReleased(outcome) }
+        splitLayout.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> partnerPane?.setExclusionRects(emptyList()) }
+        root.addView(splitLayout, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
         epd = WebDocEpd(webView)
@@ -428,7 +469,7 @@ class WebDocActivity : AppCompatActivity() {
     private fun nativeInkPreferred() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_NATIVE_INK, true)
 
     private fun openNativeInk() {
-        if (rawInput != null || !::overlay.isInitialized || !nativeInkPreferred() || isFinishing) return
+        if (rawInput != null || !::overlay.isInitialized || !nativeInkPreferred() || isFinishing || partnerActive) return
         rawInput = WebInkRawInput.createOrNull(overlay)
         overlay.nativeInput = rawInput != null
         rawInput?.let { raw ->
@@ -1022,8 +1063,11 @@ class WebDocActivity : AppCompatActivity() {
     }
 
     private fun setWriteMode(write: Boolean) {
-        overlay.writeEnabled = write
-        rawInput?.setEnabled(write)
+        mainWriteMode = write
+        if (!partnerActive) {
+            overlay.writeEnabled = write
+            rawInput?.setEnabled(write)
+        }
         modeButton.text = if (write) "✎ Pen: write" else "☝ Pen: interact"
         styleButton(modeButton, write)
     }
@@ -1035,10 +1079,14 @@ class WebDocActivity : AppCompatActivity() {
             toolbarVm.activeTool.collect { tool ->
                 overlay.tool = tool
                 rawInput?.updateTool()
+                partnerPane?.setTool(tool)
             }
         }
         lifecycleScope.launch {
-            toolbarVm.currentEraser.collect { overlay.sideEraser = it }
+            toolbarVm.currentEraser.collect {
+                overlay.sideEraser = it
+                partnerPane?.setEraser(it)
+            }
         }
     }
 
@@ -1056,7 +1104,7 @@ class WebDocActivity : AppCompatActivity() {
             toast(unsupported)
             return
         }
-        if (!overlay.writeEnabled) setWriteMode(true)
+        if (!partnerActive && !overlay.writeEnabled) setWriteMode(true)
 
         // Shape and line buttons open their picker on the first tap, like on note pages.
         val opensOnFirstTap = item is ToolbarItem.Pen && item.penTool.isShapeTool
@@ -1079,6 +1127,7 @@ class WebDocActivity : AppCompatActivity() {
     ) {
         activePenPopup?.dismiss()
         rawInput?.pause()
+        if (partnerActive) partnerPane?.setInkAllowed(false)
         val popup =
             PenSettingsPopup(
                 this,
@@ -1090,6 +1139,7 @@ class WebDocActivity : AppCompatActivity() {
                     activePenPopup = null
                     toolbarVm.setPenPopupOpen(false)
                     rawInput?.resume()
+                    partnerPane?.setInkAllowed(true)
                 },
             )
         activePenPopup = popup
@@ -1100,9 +1150,9 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun handleAction(action: ActionType) {
         when (action) {
-            ActionType.UNDO -> if (currentInk()?.undo() == true) inkChanged()
-            ActionType.REDO -> if (currentInk()?.redo() == true) inkChanged()
-            ActionType.GUIDES -> showGuidesPicker()
+            ActionType.UNDO -> if (partnerActive) partnerPane?.undo() else if (currentInk()?.undo() == true) inkChanged()
+            ActionType.REDO -> if (partnerActive) partnerPane?.redo() else if (currentInk()?.redo() == true) inkChanged()
+            ActionType.GUIDES -> if (partnerActive) toast("The ruler is only available in the main book") else showGuidesPicker()
             ActionType.INSERT_IMAGE -> toast("Inserting is only available on note pages")
             ActionType.ZOOM_WINDOW -> toast("The zoom window is only available on note pages")
         }
@@ -1203,13 +1253,29 @@ class WebDocActivity : AppCompatActivity() {
             webView.onPause()
         }
         closeNativeInk()
+        partnerPane?.onHostPause()
     }
 
     // ---------------------------------------------------------------- tabs
 
     private fun renderTabs() {
         val id = meta?.id ?: return
-        tabBar?.render(WorkspaceStore.load(this).tabs, id, setOf(id), null)
+        val ws = WorkspaceStore.load(this)
+        val partner = if (partnerPane != null) partnerId else null
+        tabBar?.render(
+            ws.tabs,
+            if (partnerActive && partner != null) partner else id,
+            setOfNotNull(id, partner),
+            if (partner != null) ws.splitFor(id) else null,
+        )
+    }
+
+    private fun onTabSelected(tab: DocTab) {
+        when (tab.path) {
+            meta?.id -> setActivePane(partner = false)
+            partnerId -> setActivePane(partner = true)
+            else -> switchToTab(tab)
+        }
     }
 
     /** Opens another tab (note or book); this reader saves in onPause. */
@@ -1224,13 +1290,206 @@ class WebDocActivity : AppCompatActivity() {
     }
 
     private fun closeTab(tab: DocTab) {
-        val workspace = WorkspaceStore.update(this) { it.close(tab.path) }
-        if (tab.path != meta?.id) {
+        val id = meta?.id
+        if (tab.path == partnerId && partnerPane != null) {
+            exitSplit()
+            WorkspaceStore.update(this) { it.close(tab.path) }
             renderTabs()
             return
         }
-        val next = workspace.activePath?.let { workspace.tab(it) }
+        val workspace = WorkspaceStore.update(this) { it.close(tab.path) }
+        if (tab.path != id) {
+            renderTabs()
+            return
+        }
+        // Closing the main book: the split partner (if any) takes over, else the active neighbour.
+        val next = partnerId?.let { workspace.tab(it) } ?: workspace.activePath?.let { workspace.tab(it) }
         if (next != null) switchToTab(next) else finish()
+    }
+
+    // ---------------------------------------------------------------- split view (book | book)
+
+    private fun primarySlot(): Int {
+        val id = meta?.id ?: return 0
+        val split = WorkspaceStore.load(this).splitFor(id) ?: return 0
+        return if (split.first == id) 0 else 1
+    }
+
+    private fun layoutPanes() {
+        val id = meta?.id ?: return
+        val pane = partnerPane
+        val split = WorkspaceStore.load(this).splitFor(id)
+        if (pane == null || split == null) {
+            splitLayout.setPanes(content, null)
+        } else {
+            if (primarySlot() == 0) splitLayout.setPanes(content, pane) else splitLayout.setPanes(pane, content)
+            splitLayout.orientation = split.orientation
+            splitLayout.ratio = split.ratio
+            splitLayout.activeIndex = if (partnerActive) 1 - primarySlot() else primarySlot()
+        }
+        splitLayout.post { partnerPane?.setExclusionRects(emptyList()) }
+        renderTabs()
+    }
+
+    private fun restoreBookSplit(id: String) {
+        val ws = WorkspaceStore.load(this)
+        val partner = ws.splitFor(id)?.partnerOf(id)?.let { ws.tab(it) } ?: return
+        if (partner.kind != DocKind.WEB) return
+        splitLayout.post {
+            if (showBookPartner(partner)) layoutPanes()
+        }
+    }
+
+    /** Creates the second book pane; false (after cleaning up the workspace) if the book is gone. */
+    private fun showBookPartner(tab: DocTab): Boolean {
+        val id = meta?.id ?: return false
+        val partnerMeta = library.loadMeta(tab.path)
+        if (partnerMeta == null) {
+            toast("Book not found or deleted")
+            WorkspaceStore.update(this) { it.unsplit(id).close(tab.path) }
+            renderTabs()
+            return false
+        }
+        val pane = BookPane(this, partnerMeta, library)
+        pane.setTool(toolbarVm.activeTool.value)
+        pane.setEraser(toolbarVm.currentEraser.value)
+        pane.onStrokeStarted = {
+            activePenPopup?.dismiss()
+            activePenPopup = null
+        }
+        partnerPane = pane
+        partnerId = tab.path
+        return true
+    }
+
+    private fun releasePartner() {
+        val pane = partnerPane
+        partnerPane = null
+        partnerId = null
+        splitLayout.setPanes(content, null)
+        pane?.release()
+    }
+
+    /** Moves the pen driver, toolbar and undo to the other book. Only one pane owns the pen. */
+    private fun setActivePane(partner: Boolean) {
+        val pane = partnerPane
+        val wantPartner = partner && pane != null
+        if (wantPartner == partnerActive) return
+        partnerActive = wantPartner
+        if (wantPartner) {
+            // Release the main driver first: two raw-drawing sessions fight over the digitizer.
+            closeNativeInk()
+            overlay.writeEnabled = false
+            pane?.setPaneActive(true)
+        } else {
+            pane?.setPaneActive(false)
+            overlay.writeEnabled = mainWriteMode
+            openNativeInk()
+            rawInput?.setEnabled(mainWriteMode)
+        }
+        splitLayout.activeIndex = if (partnerActive) 1 - primarySlot() else primarySlot()
+        val active = if (partnerActive) partnerId else meta?.id
+        if (active != null) WorkspaceStore.update(this) { it.activate(active) }
+        renderTabs()
+    }
+
+    private fun onSplitButton(orientation: SplitOrientation) {
+        val id = meta?.id ?: return
+        val ws = WorkspaceStore.load(this)
+        val split = ws.splitFor(id)
+        if (split != null && partnerPane != null) {
+            if (split.orientation != orientation) {
+                WorkspaceStore.update(this) { it.updateSplit(id) { s -> s.copy(orientation = orientation) } }
+                layoutPanes()
+            }
+            return
+        }
+        pendingSplitOrientation = orientation
+        SplitPartnerPicker.show(
+            this,
+            ws,
+            id,
+            orientation,
+            onBrowseNotes = { splitNotePicker.launch(Intent(this, NotePickerActivity::class.java)) },
+            onPicked = { startSplit(it, orientation) },
+        )
+    }
+
+    private fun startSplit(
+        other: DocTab,
+        orientation: SplitOrientation,
+    ) {
+        val id = meta?.id ?: return
+        if (other.path == id) {
+            toast("This book is already open")
+            return
+        }
+        if (partnerPane != null) {
+            setActivePane(partner = false)
+            releasePartner()
+        }
+        val title = if (other.kind == DocKind.NOTE) WorkspaceStore.titleFor(other.path) else other.title
+        val tab = other.copy(title = title)
+        WorkspaceStore.update(this) { it.open(tab).split(id, tab.path, orientation) }
+        if (tab.kind == DocKind.NOTE) {
+            // A split with a note is hosted by the note editor (book beside the note).
+            if (isSwitchingTabs) return
+            isSwitchingTabs = true
+            saveNow()
+            startActivity(TabNavigator.intentFor(this, tab))
+            finish()
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+            return
+        }
+        if (!showBookPartner(tab)) return
+        layoutPanes()
+        // Like Notability: the document just opened beside gets the pen.
+        setActivePane(partner = true)
+    }
+
+    private fun swapPanes() {
+        val id = meta?.id ?: return
+        WorkspaceStore.update(this) { it.updateSplit(id) { s -> s.copy(first = s.second, second = s.first, ratio = 1f - s.ratio) } }
+        layoutPanes()
+    }
+
+    private fun exitSplit() {
+        val id = meta?.id ?: return
+        setActivePane(partner = false)
+        releasePartner()
+        WorkspaceStore.update(this) { it.unsplit(id) }
+        layoutPanes()
+    }
+
+    private fun onDividerDrag(dragging: Boolean) {
+        partnerPane?.setInkAllowed(!dragging)
+        if (dragging) {
+            rawInput?.pause()
+            com.onyx.android.sdk.api.device.EpdDeviceManager
+                .enterAnimationUpdate(true)
+        } else {
+            com.onyx.android.sdk.api.device.EpdDeviceManager
+                .exitAnimationUpdate(true)
+            if (!fingerPaused && !focusPaused && !exporting) rawInput?.resume()
+        }
+    }
+
+    private fun onDividerReleased(outcome: SplitDrag.Outcome) {
+        val id = meta?.id ?: return
+        when (outcome) {
+            is SplitDrag.Outcome.Resize ->
+                WorkspaceStore.update(this) { it.updateSplit(id) { s -> s.copy(ratio = outcome.ratio) } }
+            is SplitDrag.Outcome.Collapse -> {
+                if (outcome.keepIndex == primarySlot()) {
+                    exitSplit()
+                } else {
+                    // The main book collapsed: the partner stays, alone.
+                    val ws = WorkspaceStore.update(this) { it.unsplit(id) }
+                    partnerId?.let { p -> ws.tab(p)?.let { switchToTab(it) } }
+                }
+            }
+        }
     }
 
     override fun onResume() {
@@ -1240,9 +1499,12 @@ class WebDocActivity : AppCompatActivity() {
             webView.onResume()
             overlay.post { openNativeInk() }
         }
+        partnerPane?.onHostResume()
     }
 
     override fun onDestroy() {
+        partnerPane?.release()
+        partnerPane = null
         closeNativeInk()
         if (::epd.isInitialized) epd.release()
         if (::webView.isInitialized) {
