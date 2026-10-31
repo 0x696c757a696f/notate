@@ -184,7 +184,6 @@ class WebDocActivity : AppCompatActivity() {
     private var partnerPane: BookPane? = null
     private var partnerId: String? = null
     private var partnerActive = false
-    private var mainWriteMode = true
     private var pendingSplitOrientation = SplitOrientation.SIDE_BY_SIDE
     private val splitNotePicker =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -366,7 +365,7 @@ class WebDocActivity : AppCompatActivity() {
         }
         toolbar.addView(separator())
 
-        modeButton = button("") { setWriteMode(!overlay.writeEnabled) }
+        modeButton = button("") { toggleFocusedPenMode() }
         toolbar.addView(modeButton)
         toolbar.addView(button("Refresh screen") { epd.fullRefresh() })
         moreButton = button("⋯") { showMoreMenu(it) }.also { toolbar.addView(it) }
@@ -469,7 +468,7 @@ class WebDocActivity : AppCompatActivity() {
         }
 
         configureWebView(m)
-        setWriteMode(true)
+        setWriteMode(ann.penMode)
         observeToolbar()
         overlay.post { openNativeInk() }
     }
@@ -1085,12 +1084,28 @@ class WebDocActivity : AppCompatActivity() {
         if (m.kind == WebDocKind.EPUB && index >= 0) titleView.text = "${m.title} · ${m.pages[index].title}"
     }
 
-    private fun setWriteMode(write: Boolean) {
-        mainWriteMode = write
+    /** The main book's mode. Applies at once only while the main book has focus. */
+    private fun setWriteMode(mode: PenMode) {
+        ann.penMode = mode
+        val write = mode == PenMode.WRITE
         if (!partnerActive) {
             overlay.writeEnabled = write
             rawInput?.setEnabled(write)
         }
+        refreshModeButton()
+        saveNow()
+    }
+
+    /** The top button always acts on the book that has focus. */
+    private fun toggleFocusedPenMode() {
+        val pane = partnerPane
+        if (partnerActive && pane != null) pane.togglePenMode() else setWriteMode(ann.penMode.toggled())
+    }
+
+    /** The button shows the state of the focused pane. */
+    private fun refreshModeButton() {
+        val mode = (if (partnerActive) partnerPane?.penMode else null) ?: store?.penMode ?: PenMode.WRITE
+        val write = mode == PenMode.WRITE
         modeButton.text = if (write) "✎ Pen: write" else "☝ Pen: interact"
         styleButton(modeButton, write)
     }
@@ -1127,7 +1142,12 @@ class WebDocActivity : AppCompatActivity() {
             toast(unsupported)
             return
         }
-        if (!partnerActive && !overlay.writeEnabled) setWriteMode(true)
+        val focusedPane = partnerPane
+        if (partnerActive && focusedPane != null) {
+            if (focusedPane.penMode != PenMode.WRITE) focusedPane.setPenMode(PenMode.WRITE)
+        } else if (ann.penMode != PenMode.WRITE) {
+            setWriteMode(PenMode.WRITE)
+        }
 
         // Shape and line buttons open their picker on the first tap, like on note pages.
         val opensOnFirstTap = item is ToolbarItem.Pen && item.penTool.isShapeTool
@@ -1414,6 +1434,7 @@ class WebDocActivity : AppCompatActivity() {
             activePenPopup?.dismiss()
             activePenPopup = null
         }
+        pane.onPenModeChanged = { refreshModeButton() }
         partnerPane = pane
         partnerId = tab.path
         return true
@@ -1440,11 +1461,12 @@ class WebDocActivity : AppCompatActivity() {
             pane?.setPaneActive(true)
         } else {
             pane?.setPaneActive(false)
-            overlay.writeEnabled = mainWriteMode
+            overlay.writeEnabled = ann.penMode == PenMode.WRITE
             openNativeInk()
-            rawInput?.setEnabled(mainWriteMode)
+            rawInput?.setEnabled(overlay.writeEnabled)
         }
         splitLayout.activeIndex = if (partnerActive) 1 - primarySlot() else primarySlot()
+        refreshModeButton()
         val active = if (partnerActive) partnerId else meta?.id
         if (active != null) WorkspaceStore.update(this) { it.activate(active) }
         renderTabs()

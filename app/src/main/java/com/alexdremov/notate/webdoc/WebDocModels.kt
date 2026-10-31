@@ -81,4 +81,6 @@ data class WebDocAnnotations(
      * width later differs move their text away from the handwriting; this lets the reader say so.
      */
     val layoutWidth: Map<String, Float> = emptyMap(),
+    /** [PenMode] name the document was left in. */
+    val penMode: String = PenMode.WRITE.name,
 )

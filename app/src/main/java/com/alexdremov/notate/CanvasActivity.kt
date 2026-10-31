@@ -1663,6 +1663,8 @@ class CanvasActivity : AppCompatActivity() {
         Logger.d("NotateDebug", "handleToolClick ID=$toolId")
 
         val item = viewModel.toolbarItems.value.find { it.id == toolId }
+        // Picking a pen with the book pane in Interact mode means "write again".
+        if (item is ToolbarItem.Pen && item.penTool.type != ToolType.TEXT && bookActive) book?.setPenMode(com.alexdremov.notate.webdoc.PenMode.WRITE)
         if (item is ToolbarItem.Select && notOnBook("Selection")) return
         if (item is ToolbarItem.Pen && item.penTool.type == ToolType.TEXT && notOnBook("Text boxes")) return
         val isSelectionSafeTool =
