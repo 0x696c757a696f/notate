@@ -1521,8 +1521,8 @@ class CanvasActivity : AppCompatActivity() {
     private suspend fun awaitSaved(id: String) {
         val coordinator = SaveCoordinator.instance
         if (!coordinator.isPending(id)) return
-        Toast.makeText(this, "Saving\u2026", Toast.LENGTH_SHORT).show()
-        if (!coordinator.flushWithin(id)) Toast.makeText(this, "Could not save yet; it keeps trying", Toast.LENGTH_LONG).show()
+        android.widget.Toast.makeText(this, "Saving\u2026", android.widget.Toast.LENGTH_SHORT).show()
+        if (!coordinator.flushWithin(id)) android.widget.Toast.makeText(this, "Could not save yet; it keeps trying", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun loadCanvas() {
