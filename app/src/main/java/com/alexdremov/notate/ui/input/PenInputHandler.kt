@@ -56,13 +56,13 @@ class PenInputHandler(
      * Set while a popup, menu or sidebar covers the canvas. Tool updates made from that popup
      * must not switch the driver's ink back on, and any stroke the driver still reports is dropped.
      */
-    @Volatile
-    var inkBlocked = false
-        set(value) {
-            if (field == value) return
-            field = value
-            if (value) updateTouchHelperTool()
-        }
+    var inkBlockedProvider: () -> Boolean = { false }
+
+    /** True while the arbiter says the pen must not ink here (see [com.alexdremov.notate.input.InkArbiter]). */
+    val inkBlocked: Boolean get() = inkBlockedProvider()
+
+    /** Runs a panel refresh with the pen driver aside; the canvas routes this through the arbiter. */
+    var pauseDriver: (() -> Unit) -> Unit = { it() }
 
     /** A stroke was discarded without a normal end: whoever tracks the pen should forget it. */
     var onPenCut: (() -> Unit)? = null
@@ -172,23 +172,16 @@ class PenInputHandler(
                             bounds.bottom.toInt(),
                         )
 
-                    // Toggle Raw Drawing to allow software layer update to be visible
-                    val drawingBefore = touchHelper?.isRawDrawingInputEnabled() ?: false
-                    if (drawingBefore) {
-                        touchHelper?.setRawDrawingEnabled(false)
-                    }
-
-                    EpdController.invalidate(
-                        view,
-                        dirtyRect.left,
-                        dirtyRect.top,
-                        dirtyRect.right,
-                        dirtyRect.bottom,
-                        UpdateMode.DU,
-                    )
-
-                    if (drawingBefore) {
-                        touchHelper?.setRawDrawingEnabled(true)
+                    // The driver steps aside so the software layer update is visible
+                    pauseDriver {
+                        EpdController.invalidate(
+                            view,
+                            dirtyRect.left,
+                            dirtyRect.top,
+                            dirtyRect.right,
+                            dirtyRect.bottom,
+                            UpdateMode.DU,
+                        )
                     }
                 }
             }
@@ -201,9 +194,6 @@ class PenInputHandler(
     private fun performRefresh(ignoreStrokeState: Boolean = false) {
         if (!ignoreStrokeState && isStrokeInProgress) return
         if (!currentStrokeScreenBounds.isEmpty) {
-            val drawingBefore = touchHelper?.isRawDrawingInputEnabled() ?: false
-            touchHelper?.setRawDrawingEnabled(false)
-
             // Expand bounds slightly for anti-aliasing safety
             val refreshPadding = (currentTool.width * inkScale) + 10f
             currentStrokeScreenBounds.inset(-refreshPadding, -refreshPadding)
@@ -216,24 +206,17 @@ class PenInputHandler(
                     currentStrokeScreenBounds.bottom.toInt(),
                 )
 
-            val l = dirtyRect.left
-            val t = dirtyRect.top
-            val r = dirtyRect.right
-            val b = dirtyRect.bottom
-
-            // Perform region-specific High Quality refresh
-            EpdController.invalidate(
-                view,
-                l,
-                t,
-                r,
-                b,
-                UpdateMode.GC,
-            )
-
-            touchHelper?.setRawDrawingEnabled(drawingBefore)
-            // Restore the correct rendering state (as toggling input might reset it)
-            updateTouchHelperTool()
+            // Region-specific high quality refresh, with the driver aside (it restores the pen's look itself)
+            pauseDriver {
+                EpdController.invalidate(
+                    view,
+                    dirtyRect.left,
+                    dirtyRect.top,
+                    dirtyRect.right,
+                    dirtyRect.bottom,
+                    UpdateMode.GC,
+                )
+            }
 
             // Reset bounds after refresh
             currentStrokeScreenBounds.setEmpty()

@@ -150,6 +150,9 @@ class WebDocActivity : AppCompatActivity() {
     private var fingerDown = false
     private var gestureOnPage = false
     private val palmRejector by lazy { InputClassifier.newRejector(this) }
+
+    /** Every pane of this window reports to this one arbiter, the only thing that switches the pen driver. */
+    private val inkArbiter = com.alexdremov.notate.input.InkArbiter()
     private var focusPaused = false
     private val fingerResume = Runnable { setFingerPaused(false) }
     private var pageLoaded: CompletableDeferred<String>? = null
@@ -472,7 +475,7 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun openNativeInk() {
         if (rawInput != null || !::overlay.isInitialized || !nativeInkPreferred() || isFinishing || partnerActive) return
-        rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmRejector.reset() } }
+        rawInput = WebInkRawInput.createOrNull(overlay, inkArbiter)?.also { it.onPenCut = { palmRejector.reset() } }
         overlay.nativeInput = rawInput != null
         rawInput?.let { raw ->
             raw.setEnabled(overlay.writeEnabled)
@@ -1414,7 +1417,7 @@ class WebDocActivity : AppCompatActivity() {
             renderTabs()
             return false
         }
-        val pane = BookPane(this, partnerMeta, library, palmRejector)
+        val pane = BookPane(this, partnerMeta, library, palmRejector, inkArbiter)
         pane.setTool(toolbarVm.activeTool.value)
         pane.setEraser(toolbarVm.currentEraser.value)
         pane.onStrokeStarted = {
