@@ -1,4 +1,4 @@
-package com.alexdremov.notate.ui.input
+package com.alexdremov.notate.input
 
 import com.alexdremov.notate.util.Logger
 

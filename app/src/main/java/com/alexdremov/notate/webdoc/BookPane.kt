@@ -21,7 +21,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import com.alexdremov.notate.model.PenTool
-import com.alexdremov.notate.ui.input.PalmGuard
+import com.alexdremov.notate.input.InputClassifier
+import com.alexdremov.notate.input.PalmRejector
 import com.alexdremov.notate.util.Logger
 import kotlin.math.roundToInt
 
@@ -37,6 +38,8 @@ class BookPane(
     context: Context,
     val meta: WebDocMeta,
     private val library: WebDocLibrary,
+    /** Shared by every pane of the window, so a hovering pen protects all of them. */
+    private val palmRejector: PalmRejector = InputClassifier.newRejector(context),
 ) : LinearLayout(context) {
     companion object {
         private const val TAG = "BookPane"
@@ -72,14 +75,6 @@ class BookPane(
     private var isActive = false
     private var inkAllowed = true
     private var fingerPaused = false
-    private var rejectingPalm = false
-    private var downX = 0f
-    private var downY = 0f
-    private val palmGuard =
-        PalmGuard(
-            PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi,
-            pxPerCm = resources.displayMetrics.xdpi / 2.54f,
-        ).also { it.handedness = com.alexdremov.notate.data.PreferencesManager.getHandedness(context) }
     private var exclusionRects: List<Rect> = emptyList()
     private val fingerResume = Runnable { setFingerPaused(false) }
     private val saveRunnable = Runnable { saveNow() }
@@ -142,9 +137,9 @@ class BookPane(
         overlay.onShapeSnapped = { rawInput?.showOverlayNow() }
         overlay.onPenHover = {
             if (it.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
-                palmGuard.onHoverExit(SystemClock.uptimeMillis())
+                palmRejector.onHoverExit(SystemClock.uptimeMillis())
             } else {
-                palmGuard.onHover(SystemClock.uptimeMillis(), it.rawX, it.rawY)
+                palmRejector.onHover(SystemClock.uptimeMillis(), it.rawX, it.rawY)
                 if (fingerPaused) {
                     removeCallbacks(fingerResume)
                     epd.settle()
@@ -241,7 +236,7 @@ class BookPane(
         if (rawInput != null) return
         overlay.post {
             if (!isActive || rawInput != null || !isAttachedToWindow) return@post
-            rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmGuard.reset() } }
+            rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmRejector.reset() } }
             overlay.nativeInput = rawInput != null
             rawInput?.let { raw ->
                 raw.exclusionRects = exclusionRects
@@ -303,26 +298,13 @@ class BookPane(
     private fun fingerOff() = com.alexdremov.notate.data.PreferencesManager.isFingerOff(context)
 
     private fun rejectPalm(ev: MotionEvent): Boolean {
-        val action = ev.actionMasked
-        if (action == MotionEvent.ACTION_DOWN) {
-            rejectingPalm = false
-            downX = ev.rawX
-            downY = ev.rawY
-            palmGuard.observeFingerDown(ev.getTouchMajor(0))
+        val decision = palmRejector.onTouch(InputClassifier.sample(ev), forceReject = fingerOff() || overlay.isPenActive)
+        if (decision == PalmRejector.Decision.ACCEPT) return false
+        if (decision == PalmRejector.Decision.CANCEL_ONGOING) {
+            val cancel = InputClassifier.cancelCopy(ev)
+            super.dispatchTouchEvent(cancel)
+            cancel.recycle()
         }
-        if (!rejectingPalm) {
-            val sizes = FloatArray(ev.pointerCount) { ev.getTouchMajor(it) }
-            if (fingerOff() || overlay.isPenActive || palmGuard.shouldReject(SystemClock.uptimeMillis(), downX, downY) || palmGuard.isPalmSized(sizes)) {
-                rejectingPalm = true
-                if (action != MotionEvent.ACTION_DOWN) {
-                    val cancel = MotionEvent.obtain(ev).apply { setAction(MotionEvent.ACTION_CANCEL) }
-                    super.dispatchTouchEvent(cancel)
-                    cancel.recycle()
-                }
-            }
-        }
-        if (!rejectingPalm) return false
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) rejectingPalm = false
         return true
     }
 

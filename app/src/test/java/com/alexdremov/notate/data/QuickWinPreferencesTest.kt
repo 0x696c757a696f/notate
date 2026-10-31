@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.TwoFingerTapAction
-import com.alexdremov.notate.ui.input.Handedness
+import com.alexdremov.notate.input.Handedness
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

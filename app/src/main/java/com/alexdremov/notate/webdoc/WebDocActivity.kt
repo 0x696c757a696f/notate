@@ -47,7 +47,8 @@ import com.alexdremov.notate.model.ActionType
 import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.model.ToolbarItem
 import com.alexdremov.notate.ui.dialog.PenSettingsPopup
-import com.alexdremov.notate.ui.input.PalmGuard
+import com.alexdremov.notate.input.InputClassifier
+import com.alexdremov.notate.input.PalmRejector
 import com.alexdremov.notate.ui.toolbar.MainToolbar
 import com.alexdremov.notate.util.EpdFastModeController
 import com.alexdremov.notate.vm.DrawingViewModel
@@ -147,16 +148,8 @@ class WebDocActivity : AppCompatActivity() {
     private var rawInput: WebInkRawInput? = null
     private var fingerPaused = false
     private var fingerDown = false
-    private var rejectingPalm = false
-    private var downX = 0f
-    private var downY = 0f
     private var gestureOnPage = false
-    private val palmGuard by lazy {
-        PalmGuard(
-            PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi,
-            pxPerCm = resources.displayMetrics.xdpi / 2.54f,
-        ).also { it.handedness = com.alexdremov.notate.data.PreferencesManager.getHandedness(this) }
-    }
+    private val palmRejector by lazy { InputClassifier.newRejector(this) }
     private var focusPaused = false
     private val fingerResume = Runnable { setFingerPaused(false) }
     private var pageLoaded: CompletableDeferred<String>? = null
@@ -449,9 +442,9 @@ class WebDocActivity : AppCompatActivity() {
         overlay.onShapeSnapped = { rawInput?.showOverlayNow() }
         overlay.onPenHover = {
             if (it.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
-                palmGuard.onHoverExit(SystemClock.uptimeMillis())
+                palmRejector.onHoverExit(SystemClock.uptimeMillis())
             } else {
-                palmGuard.onHover(SystemClock.uptimeMillis(), it.rawX, it.rawY)
+                palmRejector.onHover(SystemClock.uptimeMillis(), it.rawX, it.rawY)
             }
             rawInput?.onHover(it)
             if (it.actionMasked != MotionEvent.ACTION_HOVER_EXIT) resumeForPen()
@@ -479,7 +472,7 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun openNativeInk() {
         if (rawInput != null || !::overlay.isInitialized || !nativeInkPreferred() || isFinishing || partnerActive) return
-        rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmGuard.reset() } }
+        rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmRejector.reset() } }
         overlay.nativeInput = rawInput != null
         rawInput?.let { raw ->
             raw.setEnabled(overlay.writeEnabled)
@@ -566,32 +559,26 @@ class WebDocActivity : AppCompatActivity() {
     private fun fingerOff() = com.alexdremov.notate.data.PreferencesManager.isFingerOff(this)
 
     private fun rejectPalm(ev: MotionEvent): Boolean {
-        val action = ev.actionMasked
-        if (action == MotionEvent.ACTION_DOWN) {
-            rejectingPalm = false
-            downX = ev.rawX
-            downY = ev.rawY
-            palmGuard.observeFingerDown(ev.getTouchMajor(0))
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
             val r = android.graphics.Rect()
             content.getGlobalVisibleRect(r)
             gestureOnPage = r.contains(ev.rawX.toInt(), ev.rawY.toInt())
         }
-        if (!rejectingPalm && gestureOnPage) {
-            val sizes = FloatArray(ev.pointerCount) { ev.getTouchMajor(it) }
-            if (fingerOff() || overlay.isPenActive || palmGuard.shouldReject(SystemClock.uptimeMillis(), downX, downY) || palmGuard.isPalmSized(sizes)) {
-                rejectingPalm = true
-                if (action != MotionEvent.ACTION_DOWN) {
-                    val cancel = MotionEvent.obtain(ev).apply { setAction(MotionEvent.ACTION_CANCEL) }
-                    super.dispatchTouchEvent(cancel)
-                    cancel.recycle()
-                    fingerDown = false
-                    onGestureEnd()
-                    resumeForPen()
-                }
-            }
+        val decision =
+            palmRejector.onTouch(
+                InputClassifier.sample(ev),
+                forceReject = fingerOff() || overlay.isPenActive,
+                canReject = gestureOnPage,
+            )
+        if (decision == PalmRejector.Decision.ACCEPT) return false
+        if (decision == PalmRejector.Decision.CANCEL_ONGOING) {
+            val cancel = InputClassifier.cancelCopy(ev)
+            super.dispatchTouchEvent(cancel)
+            cancel.recycle()
+            fingerDown = false
+            onGestureEnd()
+            resumeForPen()
         }
-        if (!rejectingPalm) return false
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) rejectingPalm = false
         return true
     }
 
@@ -1427,7 +1414,7 @@ class WebDocActivity : AppCompatActivity() {
             renderTabs()
             return false
         }
-        val pane = BookPane(this, partnerMeta, library)
+        val pane = BookPane(this, partnerMeta, library, palmRejector)
         pane.setTool(toolbarVm.activeTool.value)
         pane.setEraser(toolbarVm.currentEraser.value)
         pane.onStrokeStarted = {
