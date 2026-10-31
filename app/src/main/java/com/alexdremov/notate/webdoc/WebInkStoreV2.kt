@@ -82,17 +82,23 @@ internal class WebInkStoreV2(
     fun load(openForSession: Boolean = false): WebDocAnnotations {
         val stateFile = File(dir, STATE)
         val v1 = File(dir, V1)
+        val journalFile = File(dir, "ink.journal")
         if (!stateFile.isFile) {
-            if (!v1.isFile) return WebDocAnnotations()
-            val old = readV1(v1, backupIfCorrupt = openForSession) ?: return WebDocAnnotations()
-            if (openForSession) {
-                write(old, null, 0)
-                retireV1()
+            // Nothing checkpointed yet (e.g. killed before the first save): the journal may still hold ink.
+            if (!v1.isFile && journalFile.length() == 0L) return WebDocAnnotations()
+            if (v1.isFile) {
+                val old = readV1(v1, backupIfCorrupt = openForSession) ?: return WebDocAnnotations()
+                if (openForSession) {
+                    write(old, null, 0)
+                    retireV1()
+                }
+                return old
             }
-            return old
         }
         val state =
-            try {
+            if (!stateFile.isFile) {
+                WebDocState()
+            } else try {
                 json.decodeFromString(WebDocState.serializer(), stateFile.readText())
             } catch (e: Exception) {
                 Logger.w(TAG, "Corrupt state.json in ${dir.name}", e)
