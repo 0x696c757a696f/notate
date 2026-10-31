@@ -2,9 +2,8 @@ package com.alexdremov.notate.ui.tabs
 
 import kotlinx.serialization.Serializable
 
-/** What a tab opens: a handwritten note (including imported PDFs) or an EPUB/HTML document. */
-@Serializable
-enum class DocKind { NOTE, WEB }
+/** What a tab opens; the enum lives in `doc` so sessions can use it without depending on the UI. */
+typealias DocKind = com.alexdremov.notate.doc.DocKind
 
 @Serializable
 data class DocTab(
