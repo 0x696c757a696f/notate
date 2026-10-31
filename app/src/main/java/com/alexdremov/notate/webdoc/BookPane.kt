@@ -183,11 +183,7 @@ class BookPane(
     }
 
     /** Write / Interact of this pane's book (saved with the book). */
-    var penMode: PenMode
-        get() = store.penMode
-        private set(value) {
-            store.penMode = value
-        }
+    val penMode: PenMode get() = store.penMode
 
     /** Called after the mode changed, so the host can refresh its own button. */
     var onPenModeChanged: ((PenMode) -> Unit)? = null
@@ -195,7 +191,7 @@ class BookPane(
     fun setPenMode(mode: PenMode) {
         if (released) return
         val changed = penMode != mode
-        penMode = mode
+        store.penMode = mode
         applyPenMode()
         if (changed) {
             removeCallbacks(saveRunnable)
