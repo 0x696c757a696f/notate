@@ -1259,7 +1259,7 @@ class WebDocActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------- layout drift
 
-    private fun layoutWidthCss(): Float = if (::webView.isInitialized) webView.contentWidth.toFloat() else 0f
+    private fun layoutWidthCss(): Float = if (::webView.isInitialized) webView.width / resources.displayMetrics.density else 0f
 
     private fun scheduleDriftCheck() {
         if (!::overlay.isInitialized) return
@@ -1285,7 +1285,7 @@ class WebDocActivity : AppCompatActivity() {
             st.stats(),
             rawInput?.diagnostics() ?: "Native ink: off (software ink)",
             currentScale(),
-            webView.contentWidth,
+            (webView.width / resources.displayMetrics.density).toInt(),
             href?.let { st.layoutWidthOf(it) },
         )
     }

@@ -435,7 +435,7 @@ class BookPane(
 
     // ---------------------------------------------------------------- layout drift & diagnostics
 
-    private fun layoutWidthCss(): Float = webView.contentWidth.toFloat()
+    private fun layoutWidthCss(): Float = webView.width / resources.displayMetrics.density
 
     private fun scheduleDriftCheck() {
         removeCallbacks(driftCheck)
@@ -449,7 +449,7 @@ class BookPane(
 
     private fun showInkDiagnostics() {
         val href = currentHref
-        val width = webView.contentWidth
+        val width = (webView.width / resources.displayMetrics.density).toInt()
         val scale = currentScale()
         Thread {
             val disk = href?.let { store.diskStrokeCount(it) }

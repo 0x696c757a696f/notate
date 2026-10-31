@@ -37,7 +37,7 @@ object WebInkDiagnostics {
             appendLine("Last save: $whenText (${stats.saveCount} saves, ${stats.holders} open view(s))")
             if (stats.lastError != null) appendLine("⚠ Last save error: ${stats.lastError}")
             appendLine(driver)
-            appendLine("Zoom: ${"%.2f".format(Locale.US, scale)}  Content width: $contentWidth css px")
+            appendLine("Zoom: ${"%.2f".format(Locale.US, scale)}  Viewport width: $contentWidth dp")
             appendLine("Width when first written: ${recordedLayoutWidth?.let { "%.0f".format(Locale.US, it) } ?: "-"}")
         }.trimEnd()
 }
