@@ -43,12 +43,10 @@ class BookPane(
         private const val SAVE_DELAY_MS = 1000L
     }
 
-    private var annotations = library.loadAnnotations(meta.id)
-    private val inkPages = HashMap<String, WebInkPage>()
-    private val scrollY = HashMap(annotations.scrollY)
+    private val store = WebAnnotationStore.acquire(library, meta.id)
+    private var released = false
     private var currentHref: String? = null
     private var pendingScrollRestore: String? = null
-    private var dirty = false
 
     private val webView = WebView(context).apply { setBackgroundColor(Color.WHITE) }
     private val overlay =
@@ -61,6 +59,8 @@ class BookPane(
             },
         )
     private val content = FrameLayout(context)
+    private val driftBanner = WebLayoutDriftBanner(context)
+    private val driftCheck = Runnable { checkLayoutDrift() }
     private val epd = WebDocEpd(webView)
     private val titleView: TextView
     private val prevButton: TextView
@@ -98,6 +98,11 @@ class BookPane(
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
+        // No menu in the pane header: long-press the title for the ink diagnostics.
+        titleView.setOnLongClickListener {
+            showInkDiagnostics()
+            true
+        }
         header.addView(titleView, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         prevButton = headerButton("◀") { stepPage(-1) }
         nextButton = headerButton("▶") { stepPage(1) }
@@ -111,6 +116,7 @@ class BookPane(
 
         content.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         content.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        driftBanner.attachTo(content)
         addView(content, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         overlay.onStrokeStart = { native ->
@@ -135,7 +141,10 @@ class BookPane(
             }
             rawInput?.onHover(it)
         }
-        overlay.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> rawInput?.updateLimitRect() }
+        overlay.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            rawInput?.updateLimitRect()
+            scheduleDriftCheck()
+        }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
             if (!overlay.isPenActive) epd.onContentMoved()
@@ -145,7 +154,7 @@ class BookPane(
         overlay.writeEnabled = false
         configureWebView()
         val start =
-            annotations.lastPage?.takeIf { href -> meta.kind == WebDocKind.HTML || meta.pages.any { it.href == href } }
+            store.lastPage?.takeIf { href -> meta.kind == WebDocKind.HTML || meta.pages.any { it.href == href } }
                 ?: meta.pages.first().href
         loadPage(start)
     }
@@ -173,6 +182,7 @@ class BookPane(
     fun setInkAllowed(allowed: Boolean) {
         if (inkAllowed == allowed) return
         inkAllowed = allowed
+        overlay.inkSuspended = !allowed
         if (allowed) rawInput?.resume() else rawInput?.pause()
     }
 
@@ -193,7 +203,7 @@ class BookPane(
             rawInput?.let { raw ->
                 raw.exclusionRects = exclusionRects
                 if (!inkAllowed) raw.pause()
-                if (fingerPaused) raw.pause()
+                if (fingerPaused) raw.setFingerPaused(true)
             }
         }
     }
@@ -207,7 +217,7 @@ class BookPane(
     private fun setFingerPaused(paused: Boolean) {
         if (paused == fingerPaused) return
         fingerPaused = paused
-        if (paused) rawInput?.pause() else rawInput?.resume()
+        rawInput?.setFingerPaused(paused)
     }
 
     fun undo() {
@@ -221,7 +231,7 @@ class BookPane(
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         val finger = ev.getToolType(ev.actionIndex) == MotionEvent.TOOL_TYPE_FINGER
         if (finger && rejectPalm(ev)) return true
-        val nativePen = !finger && rawInput != null && overlay.writeEnabled && !overlay.needsSoftwareInput
+        val nativePen = !finger && overlay.penUsesDriver
         if (!nativePen) {
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -311,11 +321,12 @@ class BookPane(
                     val href = WebDocResources.hrefForUrl(meta.id, url)
                     if (href != null && href == pendingScrollRestore) {
                         pendingScrollRestore = null
-                        val y = scrollY[href] ?: 0f
+                        val y = store.scrollOf(href)
                         if (y > 0f) view.postDelayed({ view.scrollTo(0, (y * currentScale()).roundToInt()) }, 300)
                     }
                     updateNavButtons()
                     epd.onContentMoved()
+                    scheduleDriftCheck()
                 }
 
                 override fun onScaleChanged(
@@ -332,7 +343,7 @@ class BookPane(
                     detail: RenderProcessGoneDetail,
                 ): Boolean {
                     Logger.e(TAG, "WebView renderer gone (crash=${detail.didCrash()})", showToUser = true)
-                    saveNow()
+                    saveBlocking()
                     (view.parent as? ViewGroup)?.removeView(view)
                     view.destroy()
                     return true
@@ -355,15 +366,17 @@ class BookPane(
     private fun switchInkPage(href: String) {
         rememberScroll()
         currentHref = href
-        overlay.page = inkPages.getOrPut(href) { WebInkPage(annotations.strokes[href].orEmpty()) }
+        overlay.page = store.page(href)
+        driftBanner.update(href, false)
+        scheduleDriftCheck()
         updateNavButtons()
     }
 
-    private fun currentInk(): WebInkPage? = currentHref?.let { inkPages[it] }
+    private fun currentInk(): WebInkPage? = currentHref?.let { store.page(it) }
 
     private fun rememberScroll() {
         val href = currentHref ?: return
-        scrollY[href] = webView.scrollY / currentScale()
+        store.setScroll(href, webView.scrollY / currentScale())
     }
 
     private fun stepPage(delta: Int) {
@@ -397,30 +410,74 @@ class BookPane(
 
     private fun inkChanged() {
         overlay.notifyPageChanged()
-        dirty = true
+        currentHref?.let { store.markInkChanged(it, layoutWidthCss()) }
         removeCallbacks(saveRunnable)
         postDelayed(saveRunnable, SAVE_DELAY_MS)
     }
 
-    /** Writes notes, last page and scroll positions; main thread. */
+    /** Queues a background save of notes, last page and scroll positions. */
     fun saveNow() {
         removeCallbacks(saveRunnable)
+        if (released) return
         rememberScroll()
-        val strokes = HashMap(annotations.strokes)
-        for ((href, page) in inkPages) {
-            if (page.strokes.isEmpty()) strokes.remove(href) else strokes[href] = page.strokes.toList()
-        }
-        annotations = WebDocAnnotations(strokes = strokes, lastPage = currentHref, scrollY = HashMap(scrollY))
-        try {
-            library.saveAnnotations(meta.id, annotations)
-            dirty = false
-        } catch (e: Exception) {
-            Logger.e(TAG, "Failed to save book notes", e, showToUser = true)
-        }
+        store.lastPage = currentHref
+        store.save()
+    }
+
+    /** Same, but returns once the disk is current (lifecycle moments only). */
+    private fun saveBlocking() {
+        removeCallbacks(saveRunnable)
+        if (released) return
+        rememberScroll()
+        store.lastPage = currentHref
+        store.flushBlocking()
+    }
+
+    // ---------------------------------------------------------------- layout drift & diagnostics
+
+    private fun layoutWidthCss(): Float = webView.contentWidth.toFloat()
+
+    private fun scheduleDriftCheck() {
+        removeCallbacks(driftCheck)
+        postDelayed(driftCheck, 600)
+    }
+
+    private fun checkLayoutDrift() {
+        val href = currentHref ?: return
+        driftBanner.update(href, WebAnnotationStore.isLayoutDrift(store.layoutWidthOf(href), layoutWidthCss()))
+    }
+
+    private fun showInkDiagnostics() {
+        val href = currentHref
+        val width = webView.contentWidth
+        val scale = currentScale()
+        Thread {
+            val disk = href?.let { store.diskStrokeCount(it) }
+            post {
+                if (released) return@post
+                val text =
+                    WebInkDiagnostics.format(
+                        href,
+                        href?.let { store.memoryStrokeCount(it) } ?: 0,
+                        disk,
+                        store.stats(),
+                        rawInput?.diagnostics() ?: "Native ink: off (software ink)",
+                        scale,
+                        width,
+                        href?.let { store.layoutWidthOf(it) },
+                    )
+                AlertDialog
+                    .Builder(context)
+                    .setTitle("Ink diagnostics")
+                    .setMessage(text)
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }.start()
     }
 
     fun onHostPause() {
-        saveNow()
+        saveBlocking()
         webView.onPause()
         closeNativeInk()
     }
@@ -432,7 +489,11 @@ class BookPane(
 
     /** Saves and frees the WebView; the pane cannot be used afterwards. */
     fun release() {
-        saveNow()
+        if (released) return
+        removeCallbacks(driftCheck)
+        saveBlocking()
+        released = true
+        WebAnnotationStore.release(store)
         closeNativeInk()
         epd.release()
         (webView.parent as? ViewGroup)?.removeView(webView)
