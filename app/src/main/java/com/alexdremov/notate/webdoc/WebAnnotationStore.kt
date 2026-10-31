@@ -173,6 +173,38 @@ class WebAnnotationStore internal constructor(
         val dirty: MutableSet<String>,
     )
 
+    @Volatile private var layoutLock: WebDocLayout? = base.layout
+
+    /** The document's locked layout, if it has one yet. */
+    val layoutOrNull: WebDocLayout? get() = layoutLock
+
+    /**
+     * The CSS width the page is laid out at. First call fixes it (and saves it): the width recorded
+     * with existing ink if any, else the pane's width capped at [WebLayoutLock.MAX_WIDTH_CSS].
+     */
+    fun lockedWidthCss(paneWidthCss: Float): Float =
+        synchronized(lock) {
+            layoutLock?.let { return it.widthCss }
+            val width = WebLayoutLock.initialWidth(layout.values, paneWidthCss)
+            if (width <= 0f) return paneWidthCss
+            layoutLock = WebDocLayout(widthCss = width)
+            changeSeq++
+            if (_saveState.value !is SaveState.Saving) _saveState.value = SaveState.Dirty
+            width
+        }
+
+    /** "Reflow to fit": lay the document out at [paneWidthCss] from now on. Ink written before stays where it was and may be misaligned. */
+    fun reflowTo(paneWidthCss: Float) =
+        synchronized(lock) {
+            val next = WebLayoutLock.reflowWidth(paneWidthCss)
+            layoutLock = WebDocLayout(widthCss = next, gen = (layoutLock?.gen ?: 0) + 1)
+            changeSeq++
+            if (_saveState.value !is SaveState.Saving) _saveState.value = SaveState.Dirty
+        }
+
+    /** True if any page has ink (used to warn before reflowing). */
+    fun hasInk(): Boolean = synchronized(lock) { pages.values.any { it.strokes.isNotEmpty() } || strokesByPage.values.any { it.isNotEmpty() } }
+
     /** Latest snapshot not yet written, with the change counter it covers. */
     private var pending: Pending? = null
     private var changeSeq = 0L
@@ -255,6 +287,7 @@ class WebAnnotationStore internal constructor(
             scrollY = HashMap(scroll),
             layoutWidth = HashMap(layout),
             penMode = penMode.name,
+            layout = layoutLock,
         )
     }
 

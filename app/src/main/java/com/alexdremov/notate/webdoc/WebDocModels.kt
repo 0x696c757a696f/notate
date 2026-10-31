@@ -68,6 +68,18 @@ class WebInkStroke(
 @Serializable
 enum class WebInkTool { PEN, HIGHLIGHTER }
 
+/**
+ * The page width a document is laid out at, fixed so ink stays on the words it was written on in every
+ * pane size and orientation (the pane scales the page instead of reflowing it). [gen] counts
+ * "Reflow to fit" choices.
+ */
+@Serializable
+data class WebDocLayout(
+    val widthCss: Float,
+    val textZoom: Int = 100,
+    val gen: Int = 1,
+)
+
 @Serializable
 data class WebDocAnnotations(
     val version: Int = 1,
@@ -83,4 +95,6 @@ data class WebDocAnnotations(
     val layoutWidth: Map<String, Float> = emptyMap(),
     /** [PenMode] name the document was left in. */
     val penMode: String = PenMode.WRITE.name,
+    /** Locked layout width; null until the document is first shown. */
+    val layout: WebDocLayout? = null,
 )

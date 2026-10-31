@@ -17,6 +17,7 @@ internal data class WebDocState(
     val penMode: String = PenMode.WRITE.name,
     /** Journal entries with a sequence number up to this are already inside the ink files. */
     val appliedSeq: Long = 0,
+    val layout: WebDocLayout? = null,
     /** Page href -> ink file key, for the pages that have ink. */
     val pages: Map<String, String> = emptyMap(),
 )
@@ -124,6 +125,7 @@ internal class WebInkStoreV2(
                 scrollY = state.scrollY,
                 layoutWidth = state.layoutWidth,
                 penMode = state.penMode,
+                layout = state.layout,
             )
         if (openForSession && (replayed > 0 || state.appliedSeq != 0L || File(dir, "ink.journal").length() > 0)) {
             write(result, null, 0)
@@ -187,6 +189,7 @@ internal class WebInkStoreV2(
                 scrollY = snapshot.scrollY,
                 layoutWidth = snapshot.layoutWidth,
                 penMode = snapshot.penMode,
+                layout = snapshot.layout,
                 appliedSeq = seq,
                 pages = snapshot.strokes.filterValues { it.isNotEmpty() }.keys.associateWith { keyFor(it) },
             )
