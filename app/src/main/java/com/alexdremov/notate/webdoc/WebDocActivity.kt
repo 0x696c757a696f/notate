@@ -134,13 +134,13 @@ class WebDocActivity : AppCompatActivity() {
 
     private lateinit var library: WebDocLibrary
     private var meta: WebDocMeta? = null
-    private var annotations = WebDocAnnotations()
-    private val inkPages = HashMap<String, WebInkPage>()
-    private val scrollY = HashMap<String, Float>()
+    private var store: WebAnnotationStore? = null
+    private val ann: WebAnnotationStore get() = store!!
+    private val driftBanner by lazy { WebLayoutDriftBanner(this) }
+    private val driftCheck = Runnable { checkLayoutDrift() }
     private var currentHref: String? = null
     private var pendingScrollRestore: String? = null
     private var saveJob: Job? = null
-    private var dirty = false
 
     private lateinit var webView: WebView
     private lateinit var content: FrameLayout
@@ -299,14 +299,13 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun open(m: WebDocMeta) {
         meta = m
-        annotations = library.loadAnnotations(m.id)
-        scrollY.putAll(annotations.scrollY)
+        store = WebAnnotationStore.acquire(library, m.id)
         buildUi(m)
         applyPolicy(m.policy)
         checkWebViewVersion()
         restoreBookSplit(m.id)
 
-        val start = annotations.lastPage?.takeIf { href -> m.kind == WebDocKind.HTML || m.pages.any { it.href == href } } ?: m.pages.first().href
+        val start = ann.lastPage?.takeIf { href -> m.kind == WebDocKind.HTML || m.pages.any { it.href == href } } ?: m.pages.first().href
         loadPage(start)
     }
 
@@ -428,6 +427,7 @@ class WebDocActivity : AppCompatActivity() {
             )
         content.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         content.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        driftBanner.attachTo(content)
         splitLayout = SplitPaneLayout(this)
         splitLayout.setPanes(content, null)
         splitLayout.fingerTapActivates = !com.alexdremov.notate.data.PreferencesManager.isFingerOff(this)
@@ -463,7 +463,10 @@ class WebDocActivity : AppCompatActivity() {
             if (!overlay.isPenActive) epd.onContentMoved()
         }
 
-        overlay.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> rawInput?.updateLimitRect() }
+        overlay.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            rawInput?.updateLimitRect()
+            scheduleDriftCheck()
+        }
 
         configureWebView(m)
         setWriteMode(true)
@@ -481,8 +484,9 @@ class WebDocActivity : AppCompatActivity() {
         overlay.nativeInput = rawInput != null
         rawInput?.let { raw ->
             raw.setEnabled(overlay.writeEnabled)
-            if (fingerPaused) raw.pause()
-            if (focusPaused || exporting) raw.pause()
+            if (fingerPaused) raw.setFingerPaused(true)
+            if (focusPaused) raw.pause()
+            if (exporting) raw.pause()
         }
     }
 
@@ -506,7 +510,7 @@ class WebDocActivity : AppCompatActivity() {
     private fun setFingerPaused(paused: Boolean) {
         if (paused == fingerPaused) return
         fingerPaused = paused
-        if (paused) rawInput?.pause() else rawInput?.resume()
+        rawInput?.setFingerPaused(paused)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -515,6 +519,8 @@ class WebDocActivity : AppCompatActivity() {
         val pause = !hasFocus
         if (pause == focusPaused) return
         focusPaused = pause
+        // Without the native driver nothing else knows a dialog took over: the pen must not ink under it.
+        if (rawInput == null && ::overlay.isInitialized) overlay.inkSuspended = pause
         if (pause) rawInput?.pause() else rawInput?.resume()
     }
 
@@ -525,7 +531,7 @@ class WebDocActivity : AppCompatActivity() {
             if (finger && rejectPalm(ev)) return true
             if (exporting) return true
             // Pen strokes drawn by the driver must not toggle the screen's refresh mode.
-            val nativePen = !finger && rawInput != null && overlay.writeEnabled && !overlay.needsSoftwareInput
+            val nativePen = !finger && overlay.penUsesDriver
             if (!nativePen) when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     epd.onInteractionStart()
@@ -648,7 +654,7 @@ class WebDocActivity : AppCompatActivity() {
                     val href = WebDocResources.hrefForUrl(m.id, url)
                     if (href != null && href == pendingScrollRestore) {
                         pendingScrollRestore = null
-                        val y = scrollY[href] ?: 0f
+                        val y = ann.scrollOf(href)
                         if (y > 0f) {
                             // Give scripts/fonts a moment to finish layout before restoring the position.
                             view.postDelayed({ view.scrollTo(0, (y * currentScale()).roundToInt()) }, 300)
@@ -656,6 +662,7 @@ class WebDocActivity : AppCompatActivity() {
                     }
                     updateNavButtons()
                     epd.onContentMoved()
+                    scheduleDriftCheck()
                     if (href != null) pageLoaded?.complete(href)
                 }
 
@@ -674,7 +681,7 @@ class WebDocActivity : AppCompatActivity() {
                 ): Boolean {
                     // A heavy or hostile document must not take the whole app down.
                     Logger.e(TAG, "WebView renderer gone (crash=${detail.didCrash()})")
-                    saveNow()
+                    saveBlocking()
                     toast("Document renderer exited; notes were saved")
                     (view.parent as? ViewGroup)?.removeView(view)
                     view.destroy()
@@ -914,7 +921,7 @@ class WebDocActivity : AppCompatActivity() {
                 if (startHref != currentHref) {
                     loadPage(startHref)
                 } else {
-                    webView.scrollTo(0, ((scrollY[startHref] ?: 0f) * currentScale()).roundToInt())
+                    webView.scrollTo(0, (ann.scrollOf(startHref) * currentScale()).roundToInt())
                 }
             }
             exporting = false
@@ -973,7 +980,9 @@ class WebDocActivity : AppCompatActivity() {
                 appendLine("JavaScript: ${if (m.policy.javaScriptEnabled) "on" else "off"}  Network: ${if (m.policy.networkAllowed) "allowed" else "blocked"}")
             }
         if (!m.policy.javaScriptEnabled) {
-            showText("Compatibility check", base + "\nEnable JavaScript to detect more features.")
+            lifecycleScope.launch {
+                showText("Compatibility check", base + "\nEnable JavaScript to detect more features.\n\n" + inkDiagnosticsText())
+            }
             return
         }
         webView.evaluateJavascript(FEATURE_PROBE_JS) { raw ->
@@ -997,7 +1006,7 @@ class WebDocActivity : AppCompatActivity() {
                 } catch (e: Exception) {
                     base + "\nFeature detection failed: ${e.message}"
                 }
-            showText("Compatibility check", text)
+            lifecycleScope.launch { showText("Compatibility check", text + "\n\n" + inkDiagnosticsText()) }
         }
     }
 
@@ -1031,16 +1040,18 @@ class WebDocActivity : AppCompatActivity() {
     private fun switchInkPage(href: String) {
         rememberScroll()
         currentHref = href
-        overlay.page = inkPages.getOrPut(href) { WebInkPage(annotations.strokes[href].orEmpty()) }
+        overlay.page = ann.page(href)
+        driftBanner.update(href, false)
+        scheduleDriftCheck()
         updateNavButtons()
     }
 
-    private fun currentInk(): WebInkPage? = currentHref?.let { inkPages[it] }
+    private fun currentInk(): WebInkPage? = currentHref?.let { store?.page(it) }
 
     private fun rememberScroll() {
         val href = currentHref ?: return
         if (!::webView.isInitialized) return
-        scrollY[href] = webView.scrollY / currentScale()
+        store?.setScroll(href, webView.scrollY / currentScale())
     }
 
     private fun stepPage(delta: Int) {
@@ -1227,7 +1238,7 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun inkChanged() {
         overlay.notifyPageChanged()
-        dirty = true
+        currentHref?.let { store?.markInkChanged(it, layoutWidthCss()) }
         saveJob?.cancel()
         saveJob =
             lifecycleScope.launch {
@@ -1238,30 +1249,64 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun snapshotAnnotations(): WebDocAnnotations {
         rememberScroll()
-        val strokes = HashMap(annotations.strokes)
-        for ((href, page) in inkPages) {
-            if (page.strokes.isEmpty()) strokes.remove(href) else strokes[href] = page.strokes.toList()
-        }
-        return WebDocAnnotations(strokes = strokes, lastPage = currentHref, scrollY = HashMap(scrollY))
+        ann.lastPage = currentHref
+        return ann.snapshot()
     }
 
+    /** Queues a background save (the JSON is written off the main thread). */
     private fun saveNow() {
-        val m = meta ?: return
-        annotations = snapshotAnnotations()
-        try {
-            library.saveAnnotations(m.id, annotations)
-            dirty = false
-        } catch (e: Exception) {
-            Logger.e(TAG, "Failed to save annotations", e)
-            toast("Failed to save notes: ${e.message}")
-        }
+        if (store == null) return
+        rememberScroll()
+        ann.lastPage = currentHref
+        ann.save()
+    }
+
+    /** Lifecycle moments: returns once the disk is current. */
+    private fun saveBlocking() {
+        if (store == null) return
+        rememberScroll()
+        ann.lastPage = currentHref
+        ann.flushBlocking()
+    }
+
+    // ---------------------------------------------------------------- layout drift
+
+    private fun layoutWidthCss(): Float = if (::webView.isInitialized) webView.width / resources.displayMetrics.density else 0f
+
+    private fun scheduleDriftCheck() {
+        if (!::overlay.isInitialized) return
+        overlay.removeCallbacks(driftCheck)
+        overlay.postDelayed(driftCheck, 600)
+    }
+
+    private fun checkLayoutDrift() {
+        val href = currentHref ?: return
+        val recorded = store?.layoutWidthOf(href)
+        driftBanner.update(href, WebAnnotationStore.isLayoutDrift(recorded, layoutWidthCss()))
+    }
+
+    /** Text for the Ink diagnostics section; reads the file off the main thread. */
+    private suspend fun inkDiagnosticsText(): String {
+        val st = store ?: return "Ink diagnostics\n(no document)"
+        val href = currentHref
+        val disk = withContext(Dispatchers.IO) { href?.let { st.diskStrokeCount(it) } }
+        return WebInkDiagnostics.format(
+            href,
+            href?.let { st.memoryStrokeCount(it) } ?: 0,
+            disk,
+            st.stats(),
+            rawInput?.diagnostics() ?: "Native ink: off (software ink)",
+            currentScale(),
+            (webView.width / resources.displayMetrics.density).toInt(),
+            href?.let { st.layoutWidthOf(it) },
+        )
     }
 
     override fun onPause() {
         super.onPause()
         if (meta != null && ::webView.isInitialized) {
             saveJob?.cancel()
-            saveNow()
+            saveBlocking()
             webView.onPause()
         }
         closeNativeInk()
@@ -1516,6 +1561,8 @@ class WebDocActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         partnerPane?.release()
+        store?.let { WebAnnotationStore.release(it) }
+        store = null
         partnerPane = null
         closeNativeInk()
         if (::epd.isInitialized) epd.release()

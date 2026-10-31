@@ -76,4 +76,9 @@ data class WebDocAnnotations(
     val lastPage: String? = null,
     /** Last vertical scroll per page in CSS px, to reopen where the reader left off. */
     val scrollY: Map<String, Float> = emptyMap(),
+    /**
+     * Content width (CSS px) of each page when its first ink was saved. Reflowable pages whose
+     * width later differs move their text away from the handwriting; this lets the reader say so.
+     */
+    val layoutWidth: Map<String, Float> = emptyMap(),
 )

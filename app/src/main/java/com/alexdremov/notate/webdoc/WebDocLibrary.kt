@@ -73,6 +73,20 @@ class WebDocLibrary(
         }
     }
 
+    /** Reads annotations.json as is (no backup, no side effects); null if missing or unreadable. For diagnostics. */
+    fun peekAnnotations(id: String): WebDocAnnotations? {
+        val f = File(docDir(id), "annotations.json")
+        if (!f.isFile) return WebDocAnnotations()
+        return try {
+            json.decodeFromString(WebDocAnnotations.serializer(), f.readText())
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Identifies this library (its folder) for process-wide sharing of per-document state. */
+    val path: String get() = baseDir.absolutePath
+
     fun saveAnnotations(
         id: String,
         annotations: WebDocAnnotations,

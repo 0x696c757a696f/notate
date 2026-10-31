@@ -97,12 +97,31 @@ class WebInkOverlayView(
     var nativeInput = false
 
     /**
+     * True while the Onyx driver is really inking (raw drawing enabled). When it is not (finger/palm
+     * on the screen, a tool needing a software preview), pen MotionEvents must draw and record the
+     * stroke themselves, otherwise the stroke would be lost.
+     */
+    var driverLive = false
+
+    /**
+     * True while a popup, dialog, divider drag or export owns the screen: pen events are swallowed
+     * so the pen taps the popup instead of inking (or clicking the page) underneath it.
+     */
+    var inkSuspended = false
+
+    /** True when pen strokes come from the native driver, so MotionEvents from the pen are only swallowed. */
+    val penUsesDriver: Boolean get() = writeEnabled && nativeInput && driverLive && !needsSoftwareInput
+
+    /**
      * Tools whose stroke is not the pen path need a live software preview, which the panel cannot show
      * while the driver draws: drag shapes, and any stroke that may follow a ruler/protractor.
      */
     val needsSoftwareInput: Boolean get() = writeEnabled && (tool.isDragShapeTool || guides.hasVisibleGuide)
 
-    private val usesMotionInput get() = !nativeInput || needsSoftwareInput
+    private val usesMotionInput get() = !nativeInput || !driverLive || needsSoftwareInput
+
+    /** Decided at pen-down and kept for the whole stroke, so a driver switch mid-stroke cannot split it. */
+    private var strokeFromMotion = false
 
     /** True if the last committed stroke differs from the pen path the driver drew (a shape or guided line). */
     var lastCommitReshaped = false
@@ -165,13 +184,17 @@ class WebInkOverlayView(
             onGuidesMoved?.invoke(ended)
             return true
         }
+        if (isPen && inkSuspended && !penDown) return true
         if (!penDown && (!writeEnabled || !isPen || page == null)) return false
 
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> penDown = true
+            MotionEvent.ACTION_DOWN -> {
+                penDown = true
+                strokeFromMotion = usesMotionInput
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> penDown = false
         }
-        if (!usesMotionInput) return true
+        if (!strokeFromMotion) return true
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

@@ -14,6 +14,7 @@ import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.device.Device
+import com.onyx.android.sdk.pen.EpdPenManager
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
@@ -49,6 +50,9 @@ class WebInkRawInput(
         /** Toggling raw drawing mid-stroke makes the driver restart the stroke; ignore that restart. */
         private const val RESTART_IGNORE_MS = 400L
 
+        /** Longest wait for the overlay's frame before refreshing the panel anyway. */
+        private const val DRAW_WAIT_MAX_MS = 150L
+
         private const val OP_BEGIN = 0f
         private const val OP_BEGIN_ERASER = 1f
         private const val OP_MOVE = 2f
@@ -69,11 +73,23 @@ class WebInkRawInput(
 
     private var helper: TouchHelper? = null
     private var pauseCount = 0
+
+    /** A finger/palm is on the screen: the driver steps aside, the pen then inks through MotionEvents. */
+    private var fingerPaused = false
     private var enabled = true
 
     /** The driver was cut off mid-stroke and may never report the pen lifting. */
     var onPenCut: (() -> Unit)? = null
     private var active = false
+    private var stateApplied = false
+
+    /** Strokes the driver started while it was supposed to be off; shown in the Ink diagnostics. */
+    @Volatile var droppedBegins = 0
+        private set
+
+    @Volatile private var acceptedBegins = 0
+
+    @Volatile private var flushToken = 0
     private var strokeActive = false
     private var ignoringRestart = false
     private var ignoreBeginUntil = 0L
@@ -171,11 +187,19 @@ class WebInkRawInput(
         applyState()
     }
 
-    /** Nested pause, e.g. while a finger scrolls or a dialog is open. */
+    /** The page itself must update (finger scroll, palm): the pen keeps writing, through MotionEvents. */
+    fun setFingerPaused(paused: Boolean) {
+        if (fingerPaused == paused) return
+        fingerPaused = paused
+        if (paused) cancelFlush()
+        applyState()
+    }
+
+    /** Nested pause for popups, dialogs, divider drags and export: the pen must not ink at all meanwhile. */
     fun pause() {
         pauseCount++
         if (pauseCount == 1) {
-            overlay.removeCallbacks(flushRunnable)
+            cancelFlush()
             applyState()
         }
     }
@@ -229,7 +253,9 @@ class WebInkRawInput(
     }
 
     fun close() {
-        overlay.removeCallbacks(flushRunnable)
+        cancelFlush()
+        overlay.driverLive = false
+        overlay.inkSuspended = false
         overlay.removeCallbacks(drainRunnable)
         runCatching {
             helper?.setRawDrawingEnabled(false)
@@ -238,16 +264,34 @@ class WebInkRawInput(
         helper = null
     }
 
-    private fun wantsActive() = enabled && pauseCount == 0 && !overlay.needsSoftwareInput
+    private fun wantsActive() = enabled && pauseCount == 0 && !fingerPaused && !overlay.needsSoftwareInput
 
     private fun applyState() {
         val h = helper ?: return
         val want = wantsActive()
+        overlay.inkSuspended = pauseCount > 0
         try {
+            val changed = want != active || !stateApplied
             h.setRawDrawingEnabled(want)
             active = want
+            overlay.driverLive = want
+            if (changed) {
+                stateApplied = true
+                // Another pane (the note beside the book) may have left the pen paused or out of scribble mode.
+                runCatching {
+                    if (want) {
+                        EpdController.enterScribbleMode(overlay)
+                        EpdController.setScreenHandWritingPenState(overlay, EpdPenManager.PEN_DRAWING)
+                    } else {
+                        EpdController.setScreenHandWritingPenState(overlay, EpdPenManager.PEN_PAUSE)
+                    }
+                }
+            }
             if (want) updateTool() else if (hasDirty) overlay.invalidate()
+            if (want && changed && hasDirty && !strokeActive && !hovering) scheduleFlush(IDLE_FLUSH_MS)
         } catch (t: Throwable) {
+            active = false
+            overlay.driverLive = false
             Logger.w(TAG, "Failed to switch raw drawing", t)
         }
         if (!want && strokeActive) {
@@ -256,6 +300,10 @@ class WebInkRawInput(
             overlay.endStroke(commit = true)
             onPenCut?.invoke()
         }
+        // The driver's temporary ink is only on the panel; when the driver steps aside (tool change,
+        // popup, palm) that ink must be replaced by the overlay's own rendering right away, or the
+        // next screen refresh would wipe the words from the screen until the page is redrawn.
+        if (!want && hasDirty && !strokeActive) flush()
     }
 
     private fun visibleRect(): Rect = Rect().also { overlay.getLocalVisibleRect(it) }
@@ -328,10 +376,12 @@ class WebInkRawInput(
                 OP_BEGIN, OP_BEGIN_ERASER -> {
                     // Paused for a popup or dialog: a late stroke from the driver must not land under it.
                     if (!active || SystemClock.uptimeMillis() < ignoreBeginUntil) {
+                        if (!active) droppedBegins++
                         ignoringRestart = true
                         continue
                     }
-                    overlay.removeCallbacks(flushRunnable)
+                    acceptedBegins++
+                    cancelFlush()
                     pendingReshape = false
                     strokeActive = true
                     if (!hasDirty) dirty.set(x, y, x, y) else dirty.union(x, y)
@@ -369,26 +419,81 @@ class WebInkRawInput(
         overlay.postDelayed(flushRunnable, delayMs)
     }
 
-    /** Replaces the driver's temporary ink with the overlay's rendering of the same strokes. */
+    private fun cancelFlush() {
+        flushToken++
+        overlay.removeCallbacks(flushRunnable)
+    }
+
+    /**
+     * Replaces the driver's temporary ink with the overlay's rendering of the same strokes.
+     * The overlay is a plain View (its draw is asynchronous), so the driver is only switched off, the
+     * panel refreshed and the driver switched on again after the overlay has really drawn.
+     */
     private fun flush() {
-        val h = helper ?: return
+        if (helper == null) return
         pendingReshape = false
         if (!hasDirty) return
         hasDirty = false
         val pad = overlay.widthCss(overlay.tool) * overlay.viewportScale() + 48f
         val r = Rect((dirty.left - pad).toInt(), (dirty.top - pad).toInt(), (dirty.right + pad).toInt(), (dirty.bottom + pad).toInt())
-        try {
-            val wasActive = active
-            if (wasActive) h.setRawDrawingEnabled(false)
-            overlay.invalidate()
-            // GU: high quality without the black flash of GC, so the page doesn't blink after writing.
-            EpdController.invalidate(overlay, r.left, r.top, r.right, r.bottom, UpdateMode.GU)
-            if (wasActive) {
-                h.setRawDrawingEnabled(true)
-                updateTool()
+        val token = ++flushToken
+        afterNextDraw {
+            // A pause, close or newer flush may have happened while waiting for the frame.
+            if (token != flushToken) {
+                if (hasDirty) dirty.union(RectF(r)) else dirty.set(RectF(r))
+                hasDirty = true
+                return@afterNextDraw
             }
-        } catch (t: Throwable) {
-            Logger.w(TAG, "Flush failed", t)
+            val h = helper ?: return@afterNextDraw
+            try {
+                val wasActive = active
+                if (wasActive) h.setRawDrawingEnabled(false)
+                // GU: high quality without the black flash of GC, so the page doesn't blink after writing.
+                EpdController.invalidate(overlay, r.left, r.top, r.right, r.bottom, UpdateMode.GU)
+                if (wasActive) {
+                    h.setRawDrawingEnabled(true)
+                    updateTool()
+                }
+            } catch (t: Throwable) {
+                Logger.w(TAG, "Flush failed", t)
+            }
         }
     }
+
+    /** Runs [action] on the main thread once the overlay has been drawn (or after a short timeout). */
+    private fun afterNextDraw(action: () -> Unit) {
+        if (!overlay.isAttachedToWindow || !overlay.viewTreeObserver.isAlive) {
+            action()
+            return
+        }
+        var done = false
+        fun run() {
+            if (!done) {
+                done = true
+                action()
+            }
+        }
+        val listener =
+            object : android.view.ViewTreeObserver.OnDrawListener {
+                override fun onDraw() {
+                    // The listener cannot remove itself from inside the draw pass; do it on the next loop iteration.
+                    overlay.post {
+                        runCatching { overlay.viewTreeObserver.removeOnDrawListener(this) }
+                        run()
+                    }
+                }
+            }
+        overlay.viewTreeObserver.addOnDrawListener(listener)
+        overlay.invalidate()
+        overlay.postDelayed({
+            runCatching { overlay.viewTreeObserver.removeOnDrawListener(listener) }
+            run()
+        }, DRAW_WAIT_MAX_MS)
+    }
+
+    /** One line per fact, for the Ink diagnostics dialog. */
+    fun diagnostics(): String =
+        "Driver active: $active (write mode ${if (enabled) "on" else "off"})\n" +
+            "Paused by: ${if (pauseCount > 0) "popup/dialog/export x$pauseCount" else "-"}${if (fingerPaused) ", finger/palm" else ""}\n" +
+            "Strokes from driver: $acceptedBegins, dropped (driver off): $droppedBegins"
 }
