@@ -16,6 +16,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.alexdremov.notate.R
+import com.alexdremov.notate.doc.SaveState
 import com.alexdremov.notate.ui.dpToPx
 
 /**
@@ -47,6 +48,9 @@ class TabBarView
         private val stackedButton = iconButton(R.drawable.ic_split_stacked, "Split top and bottom") { onSplit?.invoke(SplitOrientation.STACKED) }
         private val swapButton = iconButton(R.drawable.ic_swap_panes, "Swap panes") { onSwapPanes?.invoke() }
         private val exitButton = iconButton(R.drawable.ic_split_exit, "Close split view") { onExitSplit?.invoke() }
+
+        private val saveMarks = HashMap<String, TextView>()
+        private var lastSaveStates: Map<String, SaveState> = emptyMap()
 
         private val bottomLine = Paint().apply { color = Color.BLACK }
 
@@ -83,6 +87,7 @@ class TabBarView
             split: SplitState?,
         ) {
             tabRow.removeAllViews()
+            saveMarks.clear()
             var activeView: View? = null
             tabs.forEach { tab ->
                 val view = tabView(tab, isActive = tab.path == activePath, isShown = tab.path in shownPaths)
@@ -95,7 +100,33 @@ class TabBarView
             stackedButton.visibility = if (splitButtonsVisible) View.VISIBLE else View.GONE
             swapButton.visibility = if (split != null) View.VISIBLE else View.GONE
             exitButton.visibility = if (split != null) View.VISIBLE else View.GONE
+            setSaveStates(lastSaveStates)
             activeView?.let { v -> scroll.post { scroll.requestChildRectangleOnScreen(tabRow, android.graphics.Rect(v.left, 0, v.right, v.height), false) } }
+        }
+
+        /**
+         * Marks tabs whose document has unsaved edits (a dot) or whose last save failed ("!").
+         * Updates the marks in place, so a save does not rebuild the strip.
+         */
+        fun setSaveStates(states: Map<String, SaveState>) {
+            lastSaveStates = states
+            saveMarks.forEach { (path, view) ->
+                val text =
+                    when (states[path]) {
+                        null, SaveState.Clean -> ""
+                        is SaveState.Error -> "!"
+                        else -> "\u25CF"
+                    }
+                if (view.text.toString() != text) {
+                    view.text = text
+                    view.contentDescription =
+                        when (text) {
+                            "!" -> "Not saved"
+                            "" -> null
+                            else -> "Unsaved changes"
+                        }
+                }
+            }
         }
 
         private fun tabView(
@@ -126,6 +157,15 @@ class TabBarView
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                     setTextColor(if (isShown) Color.BLACK else Color.rgb(0x55, 0x55, 0x55))
                     typeface = if (isActive) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                },
+            )
+            row.addView(
+                TextView(context).apply {
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    setTextColor(Color.BLACK)
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(dpToPx(4), 0, 0, 0)
+                    saveMarks[tab.path] = this
                 },
             )
             row.addView(

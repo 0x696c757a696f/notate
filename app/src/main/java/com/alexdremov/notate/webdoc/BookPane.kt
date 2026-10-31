@@ -20,6 +20,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
+import com.alexdremov.notate.doc.SaveCoordinator
 import com.alexdremov.notate.model.PenTool
 import com.alexdremov.notate.input.InputClassifier
 import com.alexdremov.notate.input.PalmRejector
@@ -45,7 +46,6 @@ class BookPane(
 ) : LinearLayout(context) {
     companion object {
         private const val TAG = "BookPane"
-        private const val SAVE_DELAY_MS = 1000L
     }
 
     private val store = WebAnnotationStore.acquire(library, meta.id)
@@ -93,7 +93,6 @@ class BookPane(
                 setFingerPaused(false)
             }
         }
-    private val saveRunnable = Runnable { saveNow() }
 
     /** Called when the pen starts a stroke here (e.g. to close the pen settings popup). */
     var onStrokeStarted: (() -> Unit)? = null
@@ -209,8 +208,7 @@ class BookPane(
         store.penMode = mode
         applyPenMode()
         if (changed) {
-            removeCallbacks(saveRunnable)
-            postDelayed(saveRunnable, SAVE_DELAY_MS)
+            requestSave()
             onPenModeChanged?.invoke(mode)
         }
     }
@@ -463,13 +461,22 @@ class BookPane(
     private fun inkChanged() {
         overlay.notifyPageChanged()
         currentHref?.let { store.markInkChanged(it, layoutWidthCss()) }
-        removeCallbacks(saveRunnable)
-        postDelayed(saveRunnable, SAVE_DELAY_MS)
+        requestSave()
+    }
+
+    /** Asks the save coordinator for a debounced save; last page and scroll are copied in right before it runs. */
+    private fun requestSave() {
+        if (released) return
+        SaveCoordinator.instance.markDirty(store) {
+            if (!released) {
+                rememberScroll()
+                store.lastPage = currentHref
+            }
+        }
     }
 
     /** Queues a background save of notes, last page and scroll positions. */
     fun saveNow() {
-        removeCallbacks(saveRunnable)
         if (released) return
         rememberScroll()
         store.lastPage = currentHref
@@ -478,7 +485,6 @@ class BookPane(
 
     /** Same, but returns once the disk is current (lifecycle moments only). */
     private fun saveBlocking() {
-        removeCallbacks(saveRunnable)
         if (released) return
         rememberScroll()
         store.lastPage = currentHref

@@ -80,6 +80,12 @@ class NotateApplication : Application() {
         cleanupSessions()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Memory pressure can end the process without another callback: get everything onto disk now.
+        if (level >= TRIM_MEMORY_UI_HIDDEN) com.alexdremov.notate.doc.SaveCoordinator.instance.flushAllAsync()
+    }
+
     private fun cleanupSessions() {
         try {
             val sessionsDir = java.io.File(cacheDir, "sessions")

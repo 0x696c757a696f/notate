@@ -29,6 +29,9 @@ import androidx.core.view.doOnLayout
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.alexdremov.notate.doc.DocRef
+import com.alexdremov.notate.doc.LambdaSaveable
+import com.alexdremov.notate.doc.SaveCoordinator
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.alexdremov.notate.data.LinkType
@@ -1125,6 +1128,9 @@ class CanvasActivity : AppCompatActivity() {
         binding.tabBar.onHome = { closeAndFinish() }
         binding.tabBar.onTabClick = { tab -> onTabSelected(tab) }
         binding.tabBar.onTabClose = { tab -> closeTab(tab) }
+        lifecycleScope.launch {
+            SaveCoordinator.instance.states.collect { binding.tabBar.setSaveStates(it) }
+        }
         binding.tabBar.onSplit = { orientation -> onSplitButton(orientation) }
         binding.tabBar.onSwapPanes = {
             currentCanvasPath?.let { p ->
@@ -1227,6 +1233,13 @@ class CanvasActivity : AppCompatActivity() {
     }
 
     private fun closeTab(tab: DocTab) {
+        lifecycleScope.launch {
+            awaitSaved(tab.path)
+            closeTabNow(tab)
+        }
+    }
+
+    private fun closeTabNow(tab: DocTab) {
         when (tab.path) {
             partnerPath() -> {
                 exitSplit()
@@ -1497,14 +1510,18 @@ class CanvasActivity : AppCompatActivity() {
     }
 
     private fun scheduleAutoSave() {
-        autoSaveJob?.cancel()
-        autoSaveJob =
-            lifecycleScope.launch {
-                delay(500)
-                if (isActive) {
-                    saveCanvas(commit = false)
-                }
-            }
+        val path = currentCanvasPath ?: return
+        SaveCoordinator.instance.markDirty(
+            LambdaSaveable(DocRef(DocKind.NOTE, path, path.substringAfterLast('/'))) { saveCanvasSuspend(commit = false) },
+        )
+    }
+
+    /** Before a tab goes away: let its save finish (up to a few seconds) so nothing is lost. */
+    private suspend fun awaitSaved(id: String) {
+        val coordinator = SaveCoordinator.instance
+        if (!coordinator.isPending(id)) return
+        android.widget.Toast.makeText(this, "Saving\u2026", android.widget.Toast.LENGTH_SHORT).show()
+        if (!coordinator.flushWithin(id)) android.widget.Toast.makeText(this, "Could not save yet; it keeps trying", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun loadCanvas() {
@@ -1562,6 +1579,7 @@ class CanvasActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         autoSaveJob?.cancel()
+        currentCanvasPath?.let { SaveCoordinator.instance.unregister(it) }
         closeFloatingSession()
         closeSecondary()
         // Session cleanup is handled by ViewModel or explicit close in onBackPressed

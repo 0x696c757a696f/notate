@@ -56,13 +56,13 @@ import com.alexdremov.notate.util.OnyxSystemHelper
 import com.alexdremov.notate.util.UriUtils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import com.alexdremov.notate.NotePickerActivity
 import com.alexdremov.notate.ui.split.SplitDrag
 import com.alexdremov.notate.ui.split.SplitPaneLayout
 import com.alexdremov.notate.ui.split.SplitPartnerPicker
 import com.alexdremov.notate.ui.tabs.DocKind
 import com.alexdremov.notate.ui.tabs.DocTab
+import com.alexdremov.notate.doc.SaveCoordinator
 import com.alexdremov.notate.ui.tabs.TabBarView
 import com.alexdremov.notate.ui.tabs.SplitOrientation
 import com.alexdremov.notate.ui.tabs.TabNavigator
@@ -140,7 +140,6 @@ class WebDocActivity : AppCompatActivity() {
     private val driftCheck = Runnable { checkLayoutDrift() }
     private var currentHref: String? = null
     private var pendingScrollRestore: String? = null
-    private var saveJob: Job? = null
 
     private lateinit var webView: WebView
     private lateinit var content: FrameLayout
@@ -351,6 +350,7 @@ class WebDocActivity : AppCompatActivity() {
                 onHome = { finish() }
                 onTabClick = { tab -> onTabSelected(tab) }
                 onTabClose = { tab -> closeTab(tab) }
+                lifecycleScope.launch { SaveCoordinator.instance.states.collect { setSaveStates(it) } }
                 onSplit = { orientation -> onSplitButton(orientation) }
                 onSwapPanes = { swapPanes() }
                 onExitSplit = { exitSplit() }
@@ -1271,12 +1271,12 @@ class WebDocActivity : AppCompatActivity() {
     private fun inkChanged() {
         overlay.notifyPageChanged()
         currentHref?.let { store?.markInkChanged(it, layoutWidthCss()) }
-        saveJob?.cancel()
-        saveJob =
-            lifecycleScope.launch {
-                delay(1000)
-                saveNow()
+        store?.let { st ->
+            SaveCoordinator.instance.markDirty(st) {
+                rememberScroll()
+                st.lastPage = currentHref
             }
+        }
     }
 
     private fun snapshotAnnotations(): WebDocAnnotations {
@@ -1337,7 +1337,6 @@ class WebDocActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         if (meta != null && ::webView.isInitialized) {
-            saveJob?.cancel()
             saveBlocking()
             webView.onPause()
         }
@@ -1379,6 +1378,20 @@ class WebDocActivity : AppCompatActivity() {
     }
 
     private fun closeTab(tab: DocTab) {
+        lifecycleScope.launch {
+            val coordinator = SaveCoordinator.instance
+            val docId = tab.path
+            if (coordinator.isPending(docId)) {
+                Toast.makeText(this@WebDocActivity, "Saving\u2026", Toast.LENGTH_SHORT).show()
+                if (!coordinator.flushWithin(docId)) {
+                    Toast.makeText(this@WebDocActivity, "Could not save yet; it keeps trying", Toast.LENGTH_LONG).show()
+                }
+            }
+            closeTabNow(tab)
+        }
+    }
+
+    private fun closeTabNow(tab: DocTab) {
         val id = meta?.id
         if (tab.path == partnerId && partnerPane != null) {
             exitSplit()
