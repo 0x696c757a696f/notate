@@ -191,6 +191,7 @@ class WebDocActivity : AppCompatActivity() {
     private var activePenPopup: PenSettingsPopup? = null
     private var prevButton: TextView? = null
     private var tabBar: TabBarView? = null
+    private var layoutBridge: WebLayoutBridge? = null
 
     // Split view with a second book (book|note splits are hosted by the note editor).
     private lateinit var splitLayout: SplitPaneLayout
@@ -431,13 +432,20 @@ class WebDocActivity : AppCompatActivity() {
             WebInkOverlayView(
                 this,
                 object : WebInkOverlayView.Viewport {
-                    override val scrollXPx get() = webView.scrollX
-                    override val scrollYPx get() = webView.scrollY
+                    override val scrollXPx get() = layoutBridge?.scrollXPx(scale) ?: webView.scrollX
+                    override val scrollYPx get() = layoutBridge?.scrollYPx(scale) ?: webView.scrollY
 
                     @Suppress("DEPRECATION")
                     override val scale get() = webView.scale.takeIf { it > 0f } ?: resources.displayMetrics.density
                 },
             )
+        layoutBridge =
+            store?.let { st ->
+                WebLayoutBridge(webView, st) {
+                    overlay.invalidate()
+                    lastScrollAt = SystemClock.uptimeMillis()
+                }
+            }
         content.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         content.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         driftBanner.attachTo(content)
@@ -652,6 +660,8 @@ class WebDocActivity : AppCompatActivity() {
                     favicon: android.graphics.Bitmap?,
                 ) {
                     val m = meta ?: return
+                    layoutBridge?.reset()
+                    layoutBridge?.inject(view)
                     val href = WebDocResources.hrefForUrl(m.id, url) ?: return
                     if (href != currentHref) switchInkPage(href)
                 }
@@ -661,6 +671,7 @@ class WebDocActivity : AppCompatActivity() {
                     url: String,
                 ) {
                     val m = meta ?: return
+                    layoutBridge?.inject(view)
                     if (m.policy.reduceMotion && m.policy.javaScriptEnabled) view.evaluateJavascript(REDUCE_MOTION_JS, null)
                     val href = WebDocResources.hrefForUrl(m.id, url)
                     if (href != null && href == pendingScrollRestore) {
@@ -668,7 +679,7 @@ class WebDocActivity : AppCompatActivity() {
                         val y = ann.scrollOf(href)
                         if (y > 0f) {
                             // Give scripts/fonts a moment to finish layout before restoring the position.
-                            view.postDelayed({ view.scrollTo(0, (y * currentScale()).roundToInt()) }, 300)
+                            view.postDelayed({ layoutBridge?.scrollToCss(y, currentScale()) ?: view.scrollTo(0, (y * currentScale()).roundToInt()) }, 300)
                         }
                     }
                     updateNavButtons()
@@ -753,6 +764,7 @@ class WebDocActivity : AppCompatActivity() {
         popup.menu.add(0, 4, 5, "Clear notes on this page")
         popup.menu.add(0, 5, 6, "Compatibility check")
         popup.menu.add(0, 6, 7, "Clear data saved by the page")
+        popup.menu.add(0, 9, 8, "Reflow to fit")
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> updatePolicy { it.copy(javaScriptEnabled = !it.javaScriptEnabled) }
@@ -770,6 +782,7 @@ class WebDocActivity : AppCompatActivity() {
                 5 -> showCompatibility()
                 7 -> toggleNativeInk()
                 8 -> showExportDialog()
+                9 -> confirmReflow()
                 6 ->
                     AlertDialog
                         .Builder(this)
@@ -783,6 +796,26 @@ class WebDocActivity : AppCompatActivity() {
             true
         }
         popup.show()
+    }
+
+    /** Re-lays the document out at this pane's width. Ink written at the old width may no longer sit on its words. */
+    private fun confirmReflow() {
+        val st = store ?: return
+        val apply = {
+            st.reflowTo(webView.width / resources.displayMetrics.density)
+            inkChanged()
+            webView.reload()
+        }
+        if (!st.hasInk()) {
+            apply()
+            return
+        }
+        AlertDialog
+            .Builder(this)
+            .setMessage("Reflow this document to fit the screen? Handwriting on pages you already wrote on may end up in the wrong place.")
+            .setPositiveButton("Reflow") { _, _ -> apply() }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun toggleNativeInk() {
@@ -1062,7 +1095,7 @@ class WebDocActivity : AppCompatActivity() {
     private fun rememberScroll() {
         val href = currentHref ?: return
         if (!::webView.isInitialized) return
-        store?.setScroll(href, webView.scrollY / currentScale())
+        store?.setScroll(href, layoutBridge?.scrollYCss(currentScale()) ?: (webView.scrollY / currentScale()))
     }
 
     private fun stepPage(delta: Int) {
@@ -1303,7 +1336,8 @@ class WebDocActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------- layout drift
 
-    private fun layoutWidthCss(): Float = if (::webView.isInitialized) webView.width / resources.displayMetrics.density else 0f
+    /** The locked layout width (the pane only scales the page), so ink positions mean the same in every pane size. */
+    private fun layoutWidthCss(): Float = if (::webView.isInitialized) layoutBridge?.lockedWidthCss() ?: (webView.width / resources.displayMetrics.density) else 0f
 
     private fun scheduleDriftCheck() {
         if (!::overlay.isInitialized) return

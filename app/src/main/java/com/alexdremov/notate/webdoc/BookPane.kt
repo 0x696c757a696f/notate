@@ -54,15 +54,20 @@ class BookPane(
     private var pendingScrollRestore: String? = null
 
     private val webView = WebView(context).apply { setBackgroundColor(Color.WHITE) }
-    private val overlay =
+    private val overlay: WebInkOverlayView =
         WebInkOverlayView(
             context,
             object : WebInkOverlayView.Viewport {
-                override val scrollXPx get() = webView.scrollX
-                override val scrollYPx get() = webView.scrollY
-                override val scale get() = currentScale()
+                override val scrollXPx: Int get() = layoutBridge.scrollXPx(scale)
+                override val scrollYPx: Int get() = layoutBridge.scrollYPx(scale)
+                override val scale: Float get() = currentScale()
             },
         )
+    private val layoutBridge: WebLayoutBridge =
+        WebLayoutBridge(webView, store) {
+            overlay.invalidate()
+            lastScrollAt = SystemClock.uptimeMillis()
+        }
     private val content = FrameLayout(context)
     private val driftBanner = WebLayoutDriftBanner(context)
     private val driftCheck = Runnable { checkLayoutDrift() }
@@ -357,6 +362,8 @@ class BookPane(
                     url: String,
                     favicon: android.graphics.Bitmap?,
                 ) {
+                    layoutBridge.reset()
+                    layoutBridge.inject(view)
                     val href = WebDocResources.hrefForUrl(meta.id, url) ?: return
                     if (href != currentHref) switchInkPage(href)
                 }
@@ -365,6 +372,7 @@ class BookPane(
                     view: WebView,
                     url: String,
                 ) {
+                    layoutBridge.inject(view)
                     if (meta.policy.reduceMotion && meta.policy.javaScriptEnabled) {
                         view.evaluateJavascript(WebDocActivity.REDUCE_MOTION_JS, null)
                     }
@@ -372,7 +380,7 @@ class BookPane(
                     if (href != null && href == pendingScrollRestore) {
                         pendingScrollRestore = null
                         val y = store.scrollOf(href)
-                        if (y > 0f) view.postDelayed({ view.scrollTo(0, (y * currentScale()).roundToInt()) }, 300)
+                        if (y > 0f) view.postDelayed({ layoutBridge.scrollToCss(y, currentScale()) }, 300)
                     }
                     updateNavButtons()
                     epd.onContentMoved()
@@ -426,7 +434,7 @@ class BookPane(
 
     private fun rememberScroll() {
         val href = currentHref ?: return
-        store.setScroll(href, webView.scrollY / currentScale())
+        store.setScroll(href, layoutBridge.scrollYCss(currentScale()))
     }
 
     private fun stepPage(delta: Int) {
@@ -493,7 +501,7 @@ class BookPane(
 
     // ---------------------------------------------------------------- layout drift & diagnostics
 
-    private fun layoutWidthCss(): Float = webView.width / resources.displayMetrics.density
+    private fun layoutWidthCss(): Float = layoutBridge.lockedWidthCss()
 
     private fun scheduleDriftCheck() {
         removeCallbacks(driftCheck)
