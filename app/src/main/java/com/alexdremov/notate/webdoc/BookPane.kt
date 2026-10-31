@@ -54,16 +54,16 @@ class BookPane(
     private var pendingScrollRestore: String? = null
 
     private val webView = WebView(context).apply { setBackgroundColor(Color.WHITE) }
-    private val overlay =
+    private val overlay: WebInkOverlayView =
         WebInkOverlayView(
             context,
             object : WebInkOverlayView.Viewport {
-                override val scrollXPx get() = layoutBridge.scrollXPx(scale)
-                override val scrollYPx get() = layoutBridge.scrollYPx(scale)
-                override val scale get() = currentScale()
+                override val scrollXPx: Int get() = layoutBridge.scrollXPx(scale)
+                override val scrollYPx: Int get() = layoutBridge.scrollYPx(scale)
+                override val scale: Float get() = currentScale()
             },
         )
-    private val layoutBridge =
+    private val layoutBridge: WebLayoutBridge =
         WebLayoutBridge(webView, store) {
             overlay.invalidate()
             lastScrollAt = SystemClock.uptimeMillis()
