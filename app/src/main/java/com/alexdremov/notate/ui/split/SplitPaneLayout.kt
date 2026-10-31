@@ -19,9 +19,10 @@ import kotlin.math.abs
  * Built for e-ink and the Onyx pen driver:
  * - Dragging the divider only moves a preview line; panes are resized once, on release, so the
  *   canvas surfaces are not recreated on every move.
- * - Only one pane is "active" (it owns the pen's raw-drawing layer). A stylus touch on the other
- *   pane makes it active and is swallowed as a focus tap, so it never inks by accident; a quick
- *   finger tap does too, unless palm rejection is on.
+ * - Only one pane is "active" (it owns the pen's raw-drawing layer). The pen hovering over the other
+ *   pane for a moment ([HoverFocusDebouncer]) makes it active, so the first stroke already lands in
+ *   the right pane; a stylus touch there (no hover seen) also moves focus and is passed on, and a quick
+ *   finger tap moves focus too, unless the finger is off.
  * - The divider sits outside both panes, so it is outside every pane's raw-drawing limit rect.
  */
 class SplitPaneLayout
@@ -65,6 +66,10 @@ class SplitPaneLayout
             }
 
         var onPaneTouched: ((index: Int) -> Unit)? = null
+
+        private val hoverFocus = HoverFocusDebouncer()
+        private val hoverRecheck = Runnable { recheckHover() }
+        private var lastHoverPane = -1
         var onDividerDragStateChanged: ((dragging: Boolean) -> Unit)? = null
         var onDragReleased: ((SplitDrag.Outcome) -> Unit)? = null
 
@@ -76,7 +81,6 @@ class SplitPaneLayout
 
         private var dragging = false
         private var dragRatio = 0f
-        private var swallowing = false
 
         private val dividerPaint = Paint().apply { color = Color.rgb(0xDD, 0xDD, 0xDD) }
         private val linePaint = Paint().apply { color = Color.BLACK }
@@ -236,12 +240,10 @@ class SplitPaneLayout
                     }
                     if (index != activeIndex) {
                         if (stylus) {
-                            // Focus tap: swallow it so it never writes or selects.
+                            // The pen landed on the other pane without hovering first: focus follows it and the
+                            // stroke goes on to that pane (a web page inks it in software until its driver is up).
                             onPaneTouched?.invoke(index)
-                            swallowing = true
-                            return true
-                        }
-                        if (fingerTapActivates) {
+                        } else if (fingerTapActivates) {
                             fingerDownIndex = index
                             fingerDownTime = ev.eventTime
                             fingerDownX = ev.x
@@ -266,7 +268,44 @@ class SplitPaneLayout
                     }
                 }
             }
-            return dragging || swallowing
+            return dragging
+        }
+
+        override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+            if (isSplit && !dragging) {
+                val pen = ev.getToolType(0).let { it == MotionEvent.TOOL_TYPE_STYLUS || it == MotionEvent.TOOL_TYPE_ERASER }
+                if (pen) {
+                    when (ev.actionMasked) {
+                        MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> onPenHover(paneAt(ev.x, ev.y), ev.eventTime)
+                        MotionEvent.ACTION_HOVER_EXIT -> {
+                            hoverFocus.reset()
+                            removeCallbacks(hoverRecheck)
+                        }
+                    }
+                }
+            }
+            return super.dispatchGenericMotionEvent(ev)
+        }
+
+        private fun onPenHover(
+            pane: Int,
+            now: Long,
+        ) {
+            lastHoverPane = pane
+            val target = hoverFocus.onHover(pane, activeIndex, now)
+            removeCallbacks(hoverRecheck)
+            if (target != null) {
+                onPaneTouched?.invoke(target)
+                return
+            }
+            // A hovering pen that holds still sends no more events: check again when the delay is up.
+            val wait = hoverFocus.remaining(now)
+            if (wait >= 0) postDelayed(hoverRecheck, wait + 1)
+        }
+
+        private fun recheckHover() {
+            if (lastHoverPane < 0) return
+            onPenHover(lastHoverPane, android.os.SystemClock.uptimeMillis())
         }
 
         private fun startDrag() {
@@ -278,12 +317,6 @@ class SplitPaneLayout
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (swallowing) {
-                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    swallowing = false
-                }
-                return true
-            }
             if (!dragging) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_MOVE -> {
