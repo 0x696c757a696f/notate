@@ -1,0 +1,24 @@
+name: swizzle-repro
+on:
+  push:
+    branches: [ "claude/project-thread-lzh1dm" ]
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-java@v6
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+    - uses: gradle/actions/setup-gradle@v6
+      with:
+        cache-provider: basic
+    - name: Loop swizzle seeds
+      env:
+        SWIZZLE_SEEDS: "150"
+      run: ./gradlew :app:testDebugUnitTest --tests '*RegionStoreSwizzleTest*' --rerun-tasks -i 2>&1 | grep -E "SWIZZLE-FAIL|swizzle failures|seed=|FAILED|PASSED|BUILD" | head -400

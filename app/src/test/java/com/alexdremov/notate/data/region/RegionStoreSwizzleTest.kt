@@ -189,7 +189,7 @@ class RegionStoreSwizzleTest {
     @Test
     fun `swizzle of all ops preserves semantic state across seeds`() {
         val failures = ArrayList<String>()
-        for (seed in 1L..6L) {
+        for (seed in 1L..(System.getenv("SWIZZLE_SEEDS")?.toLong() ?: 6L)) {
             try {
                 swizzleOnce(seed)
             } catch (e: Throwable) {
