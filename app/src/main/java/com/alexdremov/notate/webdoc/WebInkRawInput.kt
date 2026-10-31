@@ -5,6 +5,10 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
 import android.view.MotionEvent
+import com.alexdremov.notate.input.BlockReason
+import com.alexdremov.notate.input.DriverPort
+import com.alexdremov.notate.input.InkArbiter
+import com.alexdremov.notate.input.InkSurface
 import com.alexdremov.notate.model.StrokeType
 import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.util.ColorUtils
@@ -14,7 +18,6 @@ import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.device.Device
-import com.onyx.android.sdk.pen.EpdPenManager
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
@@ -34,7 +37,8 @@ import com.onyx.android.sdk.pen.data.TouchPointList
  */
 class WebInkRawInput(
     private val overlay: WebInkOverlayView,
-) {
+    private val arbiter: InkArbiter,
+) : InkSurface {
     companion object {
         private const val TAG = "WebInkRawInput"
 
@@ -62,9 +66,12 @@ class WebInkRawInput(
         private const val OP_STRIDE = 4
 
         /** Creates the native channel, or null on devices without the Onyx pen service. */
-        fun createOrNull(overlay: WebInkOverlayView): WebInkRawInput? =
+        fun createOrNull(
+            overlay: WebInkOverlayView,
+            arbiter: InkArbiter,
+        ): WebInkRawInput? =
             try {
-                WebInkRawInput(overlay).also { it.open() }
+                WebInkRawInput(overlay, arbiter).also { it.open() }
             } catch (t: Throwable) {
                 Logger.w(TAG, "Onyx raw drawing unavailable, using software ink", t)
                 null
@@ -73,15 +80,16 @@ class WebInkRawInput(
 
     private var helper: TouchHelper? = null
     private var pauseCount = 0
-
-    /** A finger/palm is on the screen: the driver steps aside, the pen then inks through MotionEvents. */
-    private var fingerPaused = false
     private var enabled = true
+    private var closed = false
 
     /** The driver was cut off mid-stroke and may never report the pen lifting. */
     var onPenCut: (() -> Unit)? = null
-    private var active = false
-    private var stateApplied = false
+
+    override val closesWhenNotOwner = false
+    override val driver: DriverPort = WebDriverPort(overlay, { helper }) { on -> onDriverSwitched(on) }
+
+    private val active get() = arbiter.isDriverActive(this)
 
     /** Strokes the driver started while it was supposed to be off; shown in the Ink diagnostics. */
     @Volatile var droppedBegins = 0
@@ -146,15 +154,18 @@ class WebInkRawInput(
         helper = h
         h.setLimitRect(visibleRect(), ArrayList<Rect>())
         h.openRawDrawing()
-        applyState()
+        arbiter.attach(this, alreadyOpen = true)
+        arbiter.setOwner(this)
+        updateTool()
     }
 
     /** Re-applies the pen look (style/width/colour) for the current tool and zoom, and whether the driver draws at all. */
     fun updateTool() {
-        if (active != wantsActive()) {
-            applyState()
-            return
-        }
+        arbiter.block(this, BlockReason.SOFTWARE_TOOL, overlay.needsSoftwareInput)
+        applyTool()
+    }
+
+    private fun applyTool() {
         val h = helper ?: return
         if (!active) return
         val t = overlay.tool
@@ -184,15 +195,13 @@ class WebInkRawInput(
     /** Write mode on/off (off = the pen operates the page). */
     fun setEnabled(value: Boolean) {
         enabled = value
-        applyState()
+        arbiter.block(this, BlockReason.INTERACT_MODE, !value)
     }
 
     /** The page itself must update (finger scroll, palm): the pen keeps writing, through MotionEvents. */
     fun setFingerPaused(paused: Boolean) {
-        if (fingerPaused == paused) return
-        fingerPaused = paused
         if (paused) cancelFlush()
-        applyState()
+        arbiter.block(this, BlockReason.FINGER_GESTURE, paused)
     }
 
     /** Nested pause for popups, dialogs, divider drags and export: the pen must not ink at all meanwhile. */
@@ -200,14 +209,14 @@ class WebInkRawInput(
         pauseCount++
         if (pauseCount == 1) {
             cancelFlush()
-            applyState()
+            arbiter.block(this, BlockReason.POPUP, true)
         }
     }
 
     fun resume() {
         if (pauseCount == 0) return
         pauseCount--
-        if (pauseCount == 0) applyState()
+        if (pauseCount == 0) arbiter.block(this, BlockReason.POPUP, false)
     }
 
     /** Areas over the page (overlay coordinates) where the pen must not ink, e.g. a floating toolbar. */
@@ -217,12 +226,7 @@ class WebInkRawInput(
             field = value
             updateLimitRect()
             // The driver only takes a new exclude set when raw drawing restarts.
-            if (active) {
-                runCatching {
-                    helper?.setRawDrawingEnabled(false)
-                    helper?.setRawDrawingEnabled(true)
-                }
-            }
+            arbiter.restart(this)
         }
 
     /** Call after layout changes so the driver only captures over the page area. */
@@ -253,48 +257,33 @@ class WebInkRawInput(
     }
 
     fun close() {
+        closed = true
         cancelFlush()
         overlay.driverLive = false
         overlay.inkSuspended = false
         overlay.removeCallbacks(drainRunnable)
-        runCatching {
-            helper?.setRawDrawingEnabled(false)
-            helper?.closeRawDrawing()
-        }
+        arbiter.detach(this)
         helper = null
     }
 
-    private fun wantsActive() = enabled && pauseCount == 0 && !fingerPaused && !overlay.needsSoftwareInput
+    override fun onInkSuspended(suspended: Boolean) {
+        if (!closed) overlay.inkSuspended = suspended
+    }
 
-    private fun applyState() {
-        val h = helper ?: return
-        val want = wantsActive()
-        overlay.inkSuspended = pauseCount > 0
-        try {
-            val changed = want != active || !stateApplied
-            h.setRawDrawingEnabled(want)
-            active = want
-            overlay.driverLive = want
-            if (changed) {
-                stateApplied = true
-                // Another pane (the note beside the book) may have left the pen paused or out of scribble mode.
-                runCatching {
-                    if (want) {
-                        EpdController.enterScribbleMode(overlay)
-                        EpdController.setScreenHandWritingPenState(overlay, EpdPenManager.PEN_DRAWING)
-                    } else {
-                        EpdController.setScreenHandWritingPenState(overlay, EpdPenManager.PEN_PAUSE)
-                    }
-                }
-            }
-            if (want) updateTool() else if (hasDirty) overlay.invalidate()
-            if (want && changed && hasDirty && !strokeActive && !hovering) scheduleFlush(IDLE_FLUSH_MS)
-        } catch (t: Throwable) {
-            active = false
-            overlay.driverLive = false
-            Logger.w(TAG, "Failed to switch raw drawing", t)
+    /** The driver switched on or off (through the arbiter). */
+    private fun onDriverSwitched(on: Boolean) {
+        overlay.driverLive = on
+        if (on) {
+            applyTool()
+            if (hasDirty && !strokeActive && !hovering) scheduleFlush(IDLE_FLUSH_MS)
+        } else if (hasDirty) {
+            overlay.invalidate()
         }
-        if (!want && strokeActive) {
+    }
+
+    override fun onDriverDeactivated() {
+        if (closed) return
+        if (strokeActive) {
             // The driver may never report the end of a stroke it was cut off from.
             strokeActive = false
             overlay.endStroke(commit = true)
@@ -303,7 +292,7 @@ class WebInkRawInput(
         // The driver's temporary ink is only on the panel; when the driver steps aside (tool change,
         // popup, palm) that ink must be replaced by the overlay's own rendering right away, or the
         // next screen refresh would wipe the words from the screen until the page is redrawn.
-        if (!want && hasDirty && !strokeActive) flush()
+        if (hasDirty && !strokeActive) flush()
     }
 
     private fun visibleRect(): Rect = Rect().also { overlay.getLocalVisibleRect(it) }
@@ -444,15 +433,11 @@ class WebInkRawInput(
                 hasDirty = true
                 return@afterNextDraw
             }
-            val h = helper ?: return@afterNextDraw
+            if (helper == null) return@afterNextDraw
             try {
-                val wasActive = active
-                if (wasActive) h.setRawDrawingEnabled(false)
                 // GU: high quality without the black flash of GC, so the page doesn't blink after writing.
-                EpdController.invalidate(overlay, r.left, r.top, r.right, r.bottom, UpdateMode.GU)
-                if (wasActive) {
-                    h.setRawDrawingEnabled(true)
-                    updateTool()
+                arbiter.pausedDuring(this) {
+                    EpdController.invalidate(overlay, r.left, r.top, r.right, r.bottom, UpdateMode.GU)
                 }
             } catch (t: Throwable) {
                 Logger.w(TAG, "Flush failed", t)
@@ -494,6 +479,6 @@ class WebInkRawInput(
     /** One line per fact, for the Ink diagnostics dialog. */
     fun diagnostics(): String =
         "Driver active: $active (write mode ${if (enabled) "on" else "off"})\n" +
-            "Paused by: ${if (pauseCount > 0) "popup/dialog/export x$pauseCount" else "-"}${if (fingerPaused) ", finger/palm" else ""}\n" +
+            "Paused by: ${if (pauseCount > 0) "popup/dialog/export x$pauseCount" else "-"}${if (arbiter.isBlockedBy(this, BlockReason.FINGER_GESTURE)) ", finger/palm" else ""}\n" +
             "Strokes from driver: $acceptedBegins, dropped (driver off): $droppedBegins"
 }

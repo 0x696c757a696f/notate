@@ -28,7 +28,11 @@ import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.model.TwoFingerTapAction
 import com.alexdremov.notate.ui.controller.CanvasControllerImpl
 import com.alexdremov.notate.ui.controller.ViewportController
+import com.alexdremov.notate.input.BlockReason
+import com.alexdremov.notate.input.DriverPort
 import com.alexdremov.notate.input.Handedness
+import com.alexdremov.notate.input.InkArbiter
+import com.alexdremov.notate.input.InkSurface
 import com.alexdremov.notate.input.InputClassifier
 import com.alexdremov.notate.input.PalmRejector
 import com.alexdremov.notate.ui.input.PenInputHandler
@@ -39,7 +43,6 @@ import com.alexdremov.notate.ui.render.SelectionOverlayDrawer
 import com.alexdremov.notate.ui.selection.SelectionInteractor
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.api.device.epd.UpdateMode
-import com.onyx.android.sdk.pen.EpdPenManager
 import com.onyx.android.sdk.pen.TouchHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,12 +60,41 @@ class OnyxCanvasView
         attrs: AttributeSet? = null,
         defStyleAttr: Int = 0,
     ) : SurfaceView(context, attrs, defStyleAttr),
-        SurfaceHolder.Callback {
+        SurfaceHolder.Callback,
+        InkSurface {
         // --- Components ---
         private val viewScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
         private val debugRamHistory = LinkedList<Float>()
         private val MAX_RAM_HISTORY_POINTS = 60
         private var touchHelper: TouchHelper? = null
+
+        // --- Pen driver ownership (InkArbiter is the only thing that touches the driver) ---
+        private var surfaceReady = false
+        private var needsFirstRefresh = false
+
+        override val closesWhenNotOwner = true
+        override val driver: DriverPort =
+            com.alexdremov.notate.ui.input.CanvasDriverPort(
+                view = this,
+                helper = { touchHelper },
+                openSession = { openDriverSession() },
+                applyTool = { updateTouchHelperTool() },
+            )
+
+        /**
+         * Shared with the other panes of the window (the Activity binds its own right after construction).
+         * Alone, this canvas owns the pen.
+         */
+        var inkArbiter: InkArbiter = InkArbiter().also { it.attach(this) }
+            private set
+
+        fun bindInkArbiter(arbiter: InkArbiter) {
+            if (arbiter === inkArbiter) return
+            inkArbiter.detach(this)
+            inkArbiter = arbiter
+            arbiter.attach(this)
+        }
+
         private val canvasModel = InfiniteCanvasModel()
         private val canvasRenderer = CanvasRenderer(canvasModel, context.applicationContext, viewScope) { invalidateCanvas() }
         private val canvasController = CanvasControllerImpl(context.applicationContext, canvasModel, canvasRenderer)
@@ -92,15 +124,14 @@ class OnyxCanvasView
                 },
                 onScaleChanged = { updateTouchHelperTool() },
                 onInteractionStart = {
-                    touchHelper?.setRawDrawingEnabled(false)
-                    EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
+                    inkArbiter.block(this@OnyxCanvasView, BlockReason.PAN, true)
                     canvasRenderer.setInteracting(true)
                 },
                 onInteractionEnd = {
                     canvasRenderer.setInteracting(false)
                     // Clear the pan's screen updates while the pen is still paused, not under the next stroke.
                     minimapDrawer?.hideNow()
-                    resumeRawDrawing()
+                    inkArbiter.block(this@OnyxCanvasView, BlockReason.PAN, false)
                 },
                 lastStrokeEndTimeProvider = { lastStrokeEndTime },
             )
@@ -199,9 +230,6 @@ class OnyxCanvasView
         // Immutable snapshot for the raw-input thread (exclusionRects is mutated on main).
         @Volatile
         private var exclusionSnapshot: List<Rect> = emptyList()
-
-        @Volatile
-        private var isRawDrawingActive = false
 
         // Optimization: Pre-allocated RectF for sync updates
         private val selectionBoundsCache = RectF()
@@ -306,6 +334,8 @@ class OnyxCanvasView
             }
             penInputHandler.guideSnapAt = { x, y -> guideSnapAt(x, y) }
             penInputHandler.onPenCut = { palmRejector.reset() }
+            penInputHandler.inkBlockedProvider = { inkArbiter.isSuspended(this) }
+            penInputHandler.pauseDriver = { action -> inkArbiter.pausedDuring(this) { action() } }
             penInputHandler.onZoomStrokeFinished = { worldBounds ->
                 if (zoomWindow.advanceAfterStroke(worldBounds)) onZoomTargetMoved()
             }
@@ -762,7 +792,9 @@ class OnyxCanvasView
         // --- Lifecycle & Drawing ---
         override fun surfaceCreated(holder: SurfaceHolder) {
             drawContent()
-            setupTouchHelper()
+            surfaceReady = true
+            inkArbiter.reopen(this)
+            firstRefreshIfNeeded()
         }
 
         override fun surfaceChanged(
@@ -771,13 +803,21 @@ class OnyxCanvasView
             width: Int,
             height: Int,
         ) {
-            setupTouchHelper()
+            surfaceReady = true
+            inkArbiter.reopen(this)
+            firstRefreshIfNeeded()
             drawContent()
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
-            EpdController.leaveScribbleMode(this)
-            touchHelper?.closeRawDrawing()
+            surfaceReady = false
+            inkArbiter.closeSession(this)
+        }
+
+        private fun firstRefreshIfNeeded() {
+            if (!needsFirstRefresh) return
+            needsFirstRefresh = false
+            performHardRefresh()
         }
 
         private fun invalidateCanvas() {
@@ -1016,45 +1056,27 @@ class OnyxCanvasView
 
         fun getBackgroundStyle() = canvasModel.backgroundStyle
 
-        fun setDrawingEnabled(enabled: Boolean) {
-            penInputHandler.inkBlocked = !enabled
-            if (enabled) {
-                setupTouchHelper()
-            } else {
-                // Keep touchHelper active but disable hardware inking to maintain palm rejection
-                touchHelper?.setRawDrawingRenderEnabled(false)
-                touchHelper?.setRawDrawingEnabled(false)
-                isRawDrawingActive = false
-                EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
-            }
-        }
-
         /**
          * Split view: whether this pane owns the pen. An inactive pane closes its raw-drawing
          * session entirely (two open sessions fight over the digitizer); it still pans and zooms
-         * with fingers. Re-activate with [setDrawingEnabled] after setting this to true.
+         * with fingers.
          */
-        var isPaneActive = true
-            private set
+        val isPaneActive: Boolean get() = inkArbiter.isOwner(this)
 
         fun setPaneActive(active: Boolean) {
             if (isPaneActive == active) return
-            isPaneActive = active
-            if (!active) {
+            if (active) {
+                inkArbiter.setOwner(this)
+            } else {
                 palmRejector.reset()
                 dismissActionPopup()
-                touchHelper?.setRawDrawingRenderEnabled(false)
-                touchHelper?.setRawDrawingEnabled(false)
-                touchHelper?.closeRawDrawing()
-                isRawDrawingActive = false
-                EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
-                EpdController.leaveScribbleMode(this)
+                inkArbiter.setOwner(null)
             }
         }
 
         fun setReadOnly(readOnly: Boolean) {
             isReadOnly = readOnly
-            setDrawingEnabled(!readOnly)
+            inkArbiter.block(this, BlockReason.READ_ONLY, readOnly)
             if (readOnly) {
                 viewScope.launch { canvasController.clearSelection() }
             }
@@ -1087,16 +1109,11 @@ class OnyxCanvasView
             touchHelper?.let {
                 val limit = Rect()
                 getLocalVisibleRect(limit)
-                if (isRawDrawingActive) {
-                    // The driver only picks up a new limit/exclude set when raw drawing restarts;
-                    // otherwise ink keeps landing on a toolbar that moved or expanded.
-                    it.setRawDrawingEnabled(false)
-                    it.setLimitRect(limit, exclusionRects)
-                    it.setRawDrawingEnabled(true)
-                } else {
-                    it.setLimitRect(limit, exclusionRects)
-                }
+                it.setLimitRect(limit, exclusionRects)
             }
+            // The driver only picks up a new limit/exclude set when raw drawing restarts;
+            // otherwise ink keeps landing on a toolbar that moved or expanded.
+            inkArbiter.restart(this)
         }
 
         /** Re-sends the capture area to the pen driver after the view changed size (rotation, split divider). */
@@ -1298,38 +1315,19 @@ class OnyxCanvasView
             penInputHandler.setScale(viewportInteractor.getCurrentScale())
         }
 
-        /** Hands the screen back to the pen after a pan or guide drag, unless a popup still blocks ink. */
-        private fun resumeRawDrawing() {
-            if (penInputHandler.inkBlocked) return
-            if (isPaneActive) touchHelper?.setRawDrawingEnabled(true)
-            EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
-            updateTouchHelperTool()
-        }
-
         private fun performHardRefresh() {
-            val wasEnabled = isPaneActive && touchHelper?.isRawDrawingInputEnabled() == true
-            if (wasEnabled) {
-                touchHelper?.setRawDrawingEnabled(false)
-                EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
-            }
-            EpdController.invalidate(this, UpdateMode.GC)
-            if (wasEnabled) {
-                updateTouchHelperTool()
-                EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_DRAWING)
-                touchHelper?.setRawDrawingEnabled(true)
-            }
+            inkArbiter.pausedDuring(this) { EpdController.invalidate(this, UpdateMode.GC) }
         }
 
-        private fun setupTouchHelper() {
-            // In split view only the focused pane may own the pen driver.
-            if (!isPaneActive) return
-            var isFirstInit = false
+        /** Creates the helper if needed and opens the raw-drawing session. Called by the arbiter, via [driver]. */
+        private fun openDriverSession() {
+            if (!surfaceReady) return
             if (touchHelper == null) {
                 // Revert to Mode 2 (true) which handles surface interactions better for panning
                 // Use SFTouchRender (Mode 2) for better ink quality and panning support
                 touchHelper = TouchHelper.create(this, true, penInputHandler)
                 penInputHandler.setTouchHelper(touchHelper!!)
-                isFirstInit = true
+                needsFirstRefresh = true
             }
             com.alexdremov.notate.util.OnyxSystemHelper
                 .ignoreSystemSideButton(this)
@@ -1337,29 +1335,13 @@ class OnyxCanvasView
             getLocalVisibleRect(limit)
             touchHelper?.apply {
                 setLimitRect(limit, exclusionRects)
-
                 openRawDrawing()
-                // A surface change while a popup is open must not bring the ink back under it.
-                val allowed = !penInputHandler.inkBlocked
-                setRawDrawingEnabled(allowed)
-                setRawDrawingRenderEnabled(allowed)
-                isRawDrawingActive = allowed
 
                 // Mode 2 ignores enableFingerTouch(), so we don't need to call it.
                 // Instead, we use setSingleRegionMode() which is crucial for fast stroke capture in SFTouchRender.
                 setSingleRegionMode()
-
-                EpdController.enterScribbleMode(this@OnyxCanvasView)
-                EpdController.setScreenHandWritingPenState(
-                    this@OnyxCanvasView,
-                    if (allowed) EpdPenManager.PEN_DRAWING else EpdPenManager.PEN_PAUSE,
-                )
             }
-            if (isFirstInit) {
-                performHardRefresh()
-            } else {
-                updateTouchHelperTool()
-            }
+            // Whether the driver ink is on is the arbiter's call, made right after this returns.
         }
 
         private fun refreshAfterEdit(bounds: RectF? = null) {
@@ -1422,8 +1404,7 @@ class OnyxCanvasView
         private fun beginGuideInteraction() {
             if (isGuideInteracting) return
             isGuideInteracting = true
-            touchHelper?.setRawDrawingEnabled(false)
-            EpdController.setScreenHandWritingPenState(this, EpdPenManager.PEN_PAUSE)
+            inkArbiter.block(this, BlockReason.GUIDE_DRAG, true)
             com.onyx.android.sdk.api.device.EpdDeviceManager
                 .enterAnimationUpdate(true)
             canvasRenderer.setInteracting(true)
@@ -1438,7 +1419,7 @@ class OnyxCanvasView
             drawContent()
             // A clean refresh once it stops, then hand the screen back to the pen.
             EpdController.invalidate(this, UpdateMode.GU)
-            resumeRawDrawing()
+            inkArbiter.block(this, BlockReason.GUIDE_DRAG, false)
         }
 
         private fun onGuidesChanged() {

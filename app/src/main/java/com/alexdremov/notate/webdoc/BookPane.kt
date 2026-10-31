@@ -40,6 +40,8 @@ class BookPane(
     private val library: WebDocLibrary,
     /** Shared by every pane of the window, so a hovering pen protects all of them. */
     private val palmRejector: PalmRejector = InputClassifier.newRejector(context),
+    /** Shared by every pane of the window: the only thing that switches the pen driver. */
+    private val inkArbiter: com.alexdremov.notate.input.InkArbiter = com.alexdremov.notate.input.InkArbiter(),
 ) : LinearLayout(context) {
     companion object {
         private const val TAG = "BookPane"
@@ -223,8 +225,8 @@ class BookPane(
     fun setInkAllowed(allowed: Boolean) {
         if (inkAllowed == allowed) return
         inkAllowed = allowed
+        // The driver follows the window's block reasons through the arbiter; this covers software ink.
         overlay.inkSuspended = !allowed
-        if (allowed) rawInput?.resume() else rawInput?.pause()
     }
 
     /** Screen rectangles (e.g. the floating toolbar) where the pen must not ink. */
@@ -239,12 +241,11 @@ class BookPane(
         if (rawInput != null) return
         overlay.post {
             if (!isActive || rawInput != null || !isAttachedToWindow) return@post
-            rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmRejector.reset() } }
+            rawInput = WebInkRawInput.createOrNull(overlay, inkArbiter)?.also { it.onPenCut = { palmRejector.reset() } }
             overlay.nativeInput = rawInput != null
             rawInput?.let { raw ->
                 raw.exclusionRects = exclusionRects
                 raw.setEnabled(overlay.writeEnabled)
-                if (!inkAllowed) raw.pause()
                 if (fingerPaused) raw.setFingerPaused(true)
             }
         }

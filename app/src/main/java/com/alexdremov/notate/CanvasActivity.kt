@@ -76,9 +76,12 @@ class CanvasActivity : AppCompatActivity() {
     private var activePenPopup: com.alexdremov.notate.ui.dialog.PenSettingsPopup? = null
     private var isGridOpen = false
 
-    // Every state that turns the stylus into a pointer; drives viewModel.setDrawingEnabled.
-    private val inkGate =
-        com.alexdremov.notate.ui.input.InkGate { allowed -> viewModel.setDrawingEnabled(allowed) }
+    // The only thing that switches the pen driver: every state that turns the stylus into a pointer is
+    // a block reason here, and the focused pane is the owner.
+    private val inkArbiter =
+        com.alexdremov.notate.input.InkArbiter().also { arbiter ->
+            arbiter.onWindowInkAllowedChanged = { allowed -> book?.setInkAllowed(allowed) }
+        }
     private val isToolbarHorizontal = mutableStateOf(true)
     private var progressDialog: androidx.appcompat.app.AlertDialog? = null
 
@@ -390,19 +393,19 @@ class CanvasActivity : AppCompatActivity() {
             viewModel.setToolbarDragging(isDragging)
         }
 
-        val toolbarTouch = com.alexdremov.notate.ui.input.InkGate.Reason.TOOLBAR_TOUCH
+        val toolbarTouch = com.alexdremov.notate.input.BlockReason.TOOLBAR_TOUCH
         val finishToolbarInteraction = {
-            if (inkGate.isBlockedBy(toolbarTouch)) {
+            if (inkArbiter.isBlockedBy(toolbarTouch)) {
                 // Only lifts the toolbar's own block: a popup this tap opened keeps ink off.
-                inkGate.set(toolbarTouch, false)
+                inkArbiter.block(toolbarTouch, false)
                 com.onyx.android.sdk.api.device.EpdDeviceManager
                     .exitAnimationUpdate(true)
             }
         }
 
         binding.toolbarContainer.onDown = {
-            if (!inkGate.isBlockedBy(toolbarTouch)) {
-                inkGate.set(toolbarTouch, true)
+            if (!inkArbiter.isBlockedBy(toolbarTouch)) {
+                inkArbiter.block(toolbarTouch, true)
                 com.onyx.android.sdk.api.device.EpdDeviceManager
                     .enterAnimationUpdate(true)
             }
@@ -638,16 +641,10 @@ class CanvasActivity : AppCompatActivity() {
                     }
                 }
                 launch {
-                    viewModel.isDrawingEnabled.collect { enabled ->
-                        allCanvases.forEach { it.setDrawingEnabled(enabled) }
-                        book?.setInkAllowed(enabled)
-                    }
-                }
-                launch {
                     viewModel.isEditMode.collect { isEdit ->
                         Logger.d("NotateDebug", "CanvasActivity:  isEditMode=$isEdit")
                         binding.toolbarContainer.isDragEnabled = !isEdit
-                        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.TOOLBAR_EDIT_MODE, isEdit)
+                        inkArbiter.block(com.alexdremov.notate.input.BlockReason.TOOLBAR_EDIT_MODE, isEdit)
                     }
                 }
                 launch {
@@ -722,6 +719,7 @@ class CanvasActivity : AppCompatActivity() {
     /** Callbacks and settings shared by the main canvas and the split-view canvas. */
     private fun wireCanvas(view: OnyxCanvasView) {
         view.palmRejector = palmRejector
+        view.bindInkArbiter(inkArbiter)
         view.setActionPopupContainer(binding.selectionActionsContainer)
         view.onStrokeStarted = {
             activePenPopup?.dismiss()
@@ -1106,7 +1104,7 @@ class CanvasActivity : AppCompatActivity() {
             !com.alexdremov.notate.data.PreferencesManager.isFingerOff(this)
         binding.splitLayout.onPaneTouched = { index -> setActivePane(useSecondary = index != primarySlot()) }
         binding.splitLayout.onDividerDragStateChanged = { dragging ->
-            inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.SPLIT_DIVIDER, dragging)
+            inkArbiter.block(com.alexdremov.notate.input.BlockReason.SPLIT_DIVIDER, dragging)
             if (dragging) {
                 com.onyx.android.sdk.api.device.EpdDeviceManager
                     .enterAnimationUpdate(true)
@@ -1197,14 +1195,13 @@ class CanvasActivity : AppCompatActivity() {
 
         if (bookActive && bookPane != null) {
             bookPane.setPaneActive(true)
-            bookPane.setInkAllowed(inkGate.isInkAllowed)
+            bookPane.setInkAllowed(inkArbiter.isWindowInkAllowed)
             // Page navigation for books lives in the book pane.
             isFixedPageState?.value = false
             viewModel.setFixedPageMode(false)
         } else {
             val target = activeCanvas
             target.setPaneActive(true)
-            target.doOnLayout { if (it === activeCanvas) target.setDrawingEnabled(inkGate.isInkAllowed) }
             activeCanvasState.value = target
             val isFixed = target.getModel().canvasType == com.alexdremov.notate.data.CanvasType.FIXED_PAGES
             isFixedPageState?.value = isFixed
@@ -1328,6 +1325,7 @@ class CanvasActivity : AppCompatActivity() {
                 com.alexdremov.notate.webdoc.WebDocActivity
                     .library(this),
                 palmRejector,
+                inkArbiter,
             )
         pane.setTool(viewModel.activeTool.value)
         pane.setEraser(viewModel.currentEraser.value)
@@ -1626,9 +1624,9 @@ class CanvasActivity : AppCompatActivity() {
     }
 
     private fun updateDrawingEnabledState() {
-        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.SIDEBAR, sidebarCoordinator.isOpen)
-        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.PAGE_GRID, isGridOpen)
-        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.TOOL_POPUP, activePenPopup != null)
+        inkArbiter.block(com.alexdremov.notate.input.BlockReason.SIDEBAR, sidebarCoordinator.isOpen)
+        inkArbiter.block(com.alexdremov.notate.input.BlockReason.PAGE_GRID, isGridOpen)
+        inkArbiter.block(com.alexdremov.notate.input.BlockReason.TOOL_POPUP, activePenPopup != null)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -1636,7 +1634,7 @@ class CanvasActivity : AppCompatActivity() {
         // Focusable popups, menus and dialogs (pen settings, toolbar menus, new tool
         // panels...) take window focus. The Onyx digitizer ignores windows, so without
         // this the stylus would ink on the canvas underneath them.
-        inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.WINDOW_UNFOCUSED, !hasFocus)
+        inkArbiter.block(com.alexdremov.notate.input.BlockReason.WINDOW_UNFOCUSED, !hasFocus)
     }
 
     private fun setDistractionFree(enabled: Boolean) {

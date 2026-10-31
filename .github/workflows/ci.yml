@@ -27,6 +27,11 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v7
 
+    - name: Only InkArbiter may switch the pen driver
+      run: |
+        hits=$(grep -rn "setRawDrawingEnabled\|closeRawDrawing" app/src/main | grep -v "DriverPort\|input/InkArbiter" || true)
+        if [ -n "$hits" ]; then echo "$hits"; echo "Pen driver calls belong in InkArbiter / *DriverPort only"; exit 1; fi
+
     - name: Set up JDK 21
       uses: actions/setup-java@v6
       with:
