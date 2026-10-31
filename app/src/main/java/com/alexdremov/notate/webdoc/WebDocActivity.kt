@@ -459,7 +459,9 @@ class WebDocActivity : AppCompatActivity() {
         overlay.onGuidesMoved = { ended -> if (ended) epd.onInteractionEnd() else epd.onInteractionStart() }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
-            if (!overlay.isPenActive) epd.onContentMoved()
+            // A fling that outlives the finger must not put the panel back in fast mode once the pen has
+            // taken over: that refresh would land under the next strokes (the lag right after scrolling).
+            if (!overlay.isPenActive && (fingerPaused || !overlay.driverLive)) epd.onContentMoved()
         }
 
         overlay.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -502,6 +504,7 @@ class WebDocActivity : AppCompatActivity() {
     private fun resumeForPen() {
         if (!fingerPaused || fingerDown) return
         overlay.removeCallbacks(fingerResume)
+        webView.flingScroll(0, 0) // stop a fling still running under the pen
         epd.settle()
         setFingerPaused(false)
     }
