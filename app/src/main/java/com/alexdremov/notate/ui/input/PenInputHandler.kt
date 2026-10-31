@@ -58,14 +58,14 @@ class PenInputHandler(
      */
     @Volatile
     var inkBlocked = false
-
-    /** A stroke was discarded without a normal end: whoever tracks the pen should forget it. */
-    var onPenCut: (() -> Unit)? = null
         set(value) {
             if (field == value) return
             field = value
             if (value) updateTouchHelperTool()
         }
+
+    /** A stroke was discarded without a normal end: whoever tracks the pen should forget it. */
+    var onPenCut: (() -> Unit)? = null
 
     // --- Selection State ---
     private var isSelecting = false // True if drawing selection lasso/rect
