@@ -18,6 +18,9 @@ class WebDocEpd(
     companion object {
         private const val TAG = "WebDocEpd"
         const val IDLE_DELAY_MS = 700L
+
+        /** The page counts as still after this long without a scroll event. */
+        const val SCROLL_QUIET_MS = 150L
     }
 
     private var fast = false
