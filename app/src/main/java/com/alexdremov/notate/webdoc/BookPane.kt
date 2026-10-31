@@ -78,7 +78,21 @@ class BookPane(
     private var inkAllowed = true
     private var fingerPaused = false
     private var exclusionRects: List<Rect> = emptyList()
-    private val fingerResume = Runnable { setFingerPaused(false) }
+    private var lastScrollAt = 0L
+
+    // See WebDocActivity.fingerResume: resume the pen once the finger is up and the page stopped moving.
+    private val fingerResume =
+        object : Runnable {
+            override fun run() {
+                val quiet = SystemClock.uptimeMillis() - lastScrollAt
+                if (quiet < WebDocEpd.SCROLL_QUIET_MS) {
+                    postDelayed(this, WebDocEpd.SCROLL_QUIET_MS - quiet)
+                    return
+                }
+                epd.settle()
+                setFingerPaused(false)
+            }
+        }
     private val saveRunnable = Runnable { saveNow() }
 
     /** Called when the pen starts a stroke here (e.g. to close the pen settings popup). */
@@ -157,6 +171,7 @@ class BookPane(
         }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
+            lastScrollAt = SystemClock.uptimeMillis()
             // A fling that outlives the finger must not put the panel back in fast mode once the pen has
             // taken over: that refresh would land under the next strokes (the lag right after scrolling).
             if (!overlay.isPenActive && (fingerPaused || !overlay.driverLive)) epd.onContentMoved()
@@ -290,7 +305,7 @@ class BookPane(
                     epd.onInteractionEnd()
                     if (fingerPaused) {
                         removeCallbacks(fingerResume)
-                        postDelayed(fingerResume, WebDocEpd.IDLE_DELAY_MS)
+                        postDelayed(fingerResume, WebDocEpd.SCROLL_QUIET_MS)
                     }
                 }
             }

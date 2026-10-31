@@ -154,7 +154,26 @@ class WebDocActivity : AppCompatActivity() {
     /** Every pane of this window reports to this one arbiter, the only thing that switches the pen driver. */
     private val inkArbiter = com.alexdremov.notate.input.InkArbiter()
     private var focusPaused = false
-    private val fingerResume = Runnable { setFingerPaused(false) }
+    private var lastScrollAt = 0L
+
+    /**
+     * Hands the screen back to the pen as soon as the finger is up and the page has stopped moving, instead of
+     * a fixed 700 ms later: the pen writing inside that window inked through slow software rendering.
+     * The fast waveform is left first, so its refresh doesn't land under the first stroke.
+     */
+    private val fingerResume =
+        object : Runnable {
+            override fun run() {
+                if (fingerDown) return
+                val quiet = SystemClock.uptimeMillis() - lastScrollAt
+                if (quiet < WebDocEpd.SCROLL_QUIET_MS) {
+                    overlay.postDelayed(this, WebDocEpd.SCROLL_QUIET_MS - quiet)
+                    return
+                }
+                epd.settle()
+                setFingerPaused(false)
+            }
+        }
     private var pageLoaded: CompletableDeferred<String>? = null
     private var exporting = false
     private var pendingExport: (suspend (Uri) -> Unit)? = null
@@ -455,6 +474,7 @@ class WebDocActivity : AppCompatActivity() {
         overlay.onGuidesMoved = { ended -> if (ended) epd.onInteractionEnd() else epd.onInteractionStart() }
         webView.setOnScrollChangeListener { _, _, _, _, _ ->
             overlay.invalidate()
+            lastScrollAt = SystemClock.uptimeMillis()
             // A fling that outlives the finger must not put the panel back in fast mode once the pen has
             // taken over: that refresh would land under the next strokes (the lag right after scrolling).
             if (!overlay.isPenActive && (fingerPaused || !overlay.driverLive)) epd.onContentMoved()
@@ -553,7 +573,7 @@ class WebDocActivity : AppCompatActivity() {
         epd.onInteractionEnd()
         if (fingerPaused) {
             overlay.removeCallbacks(fingerResume)
-            overlay.postDelayed(fingerResume, WebDocEpd.IDLE_DELAY_MS)
+            overlay.postDelayed(fingerResume, WebDocEpd.SCROLL_QUIET_MS)
         }
     }
 
