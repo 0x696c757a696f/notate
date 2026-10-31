@@ -64,6 +64,9 @@ class PenInputHandler(
             if (value) updateTouchHelperTool()
         }
 
+    /** A stroke was discarded without a normal end: whoever tracks the pen should forget it. */
+    var onPenCut: (() -> Unit)? = null
+
     // --- Selection State ---
     private var isSelecting = false // True if drawing selection lasso/rect
 
@@ -375,6 +378,7 @@ class PenInputHandler(
         refreshHandler.removeCallbacks(refreshRunnable)
 
         if (inkBlocked) {
+            onPenCut?.invoke()
             isStrokeInProgress = true
             isIgnoringCurrentStroke = true
             lastProcessedTimestamp = touchPoint.timestamp

@@ -43,7 +43,8 @@ class SettingsSidebarController(
     private val onExportRequest: (ExportAction) -> Unit,
     private val onEditToolbar: () -> Unit,
     private val onGeneratePatterns: (com.alexdremov.notate.util.PatternGenerator.PatternType, Float) -> Unit,
-    private val onPalmRejectionChanged: (Boolean) -> Unit,
+    private val onFingerOffChanged: (Boolean) -> Unit,
+    private val onHandednessChanged: (com.alexdremov.notate.ui.input.Handedness) -> Unit,
     private val onTwoFingerTapActionChange: (com.alexdremov.notate.model.TwoFingerTapAction) -> Unit,
     private val onStylusButtonActionChange: (com.alexdremov.notate.model.StylusButtonAction) -> Unit,
 ) {
@@ -246,11 +247,18 @@ class SettingsSidebarController(
                                         )
                                     }
 
-                                val (localPalm, setLocalPalm) =
+                                val (localFingerOff, setLocalFingerOff) =
                                     androidx.compose.runtime.remember {
                                         androidx.compose.runtime.mutableStateOf(
                                             com.alexdremov.notate.data.PreferencesManager
-                                                .isPalmRejectionEnabled(context),
+                                                .isFingerOff(context),
+                                        )
+                                    }
+                                val (localHand, setLocalHand) =
+                                    androidx.compose.runtime.remember {
+                                        androidx.compose.runtime.mutableStateOf(
+                                            com.alexdremov.notate.data.PreferencesManager
+                                                .getHandedness(context),
                                         )
                                     }
 
@@ -262,7 +270,8 @@ class SettingsSidebarController(
                                             localAngle,
                                             localAxis,
                                             localShapeDelay,
-                                            localPalm,
+                                            localFingerOff,
+                                            localHand,
                                             localTapAction,
                                             localButtonAction,
                                         ),
@@ -271,11 +280,19 @@ class SettingsSidebarController(
                                         com.alexdremov.notate.data.PreferencesManager
                                             .setScribbleToEraseEnabled(context, it)
                                     },
-                                    onPalmRejectionChange = {
-                                        setLocalPalm(it)
+                                    onFingerOffChange = {
+                                        setLocalFingerOff(it)
+                                        com.alexdremov.notate.data.PreferencesManager.setFingerMode(
+                                            context,
+                                            if (it) com.alexdremov.notate.data.FingerMode.OFF else com.alexdremov.notate.data.FingerMode.SCROLL,
+                                        )
+                                        onFingerOffChanged(it)
+                                    },
+                                    onHandednessChange = {
+                                        setLocalHand(it)
                                         com.alexdremov.notate.data.PreferencesManager
-                                            .setPalmRejectionEnabled(context, it)
-                                        onPalmRejectionChanged(it)
+                                            .setHandedness(context, it)
+                                        onHandednessChanged(it)
                                     },
                                     onShapeChange = {
                                         setShape(it)

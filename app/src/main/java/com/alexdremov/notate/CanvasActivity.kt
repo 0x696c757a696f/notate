@@ -552,9 +552,12 @@ class CanvasActivity : AppCompatActivity() {
                         activeCanvas.getController().addStrokes(strokes)
                     }
                 },
-                onPalmRejectionChanged = { enabled ->
-                    allCanvases.forEach { it.setPalmRejectionEnabled(enabled) }
-                    binding.splitLayout.fingerTapActivates = !enabled
+                onFingerOffChanged = { off ->
+                    allCanvases.forEach { it.setFingerOff(off) }
+                    binding.splitLayout.fingerTapActivates = !off
+                },
+                onHandednessChanged = { hand ->
+                    allCanvases.forEach { it.setHandedness(hand) }
                 },
                 onTwoFingerTapActionChange = { action ->
                     allCanvases.forEach { it.setTwoFingerTapAction(action) }
@@ -595,6 +598,18 @@ class CanvasActivity : AppCompatActivity() {
         binding.minimapView.setup(binding.canvasView)
         wireCanvas(binding.canvasView)
         setupTabsAndSplit()
+
+        if (com.alexdremov.notate.data.PreferencesManager.consumeFingerMigrationBanner(this)) {
+            binding.errorBanner.post {
+                binding.errorBanner.show(
+                    Logger.UserEvent(
+                        message = "Palm rejection is now automatic.\nFingers scroll, the pen writes.",
+                        level = Logger.Level.INFO,
+                    ),
+                    duration = 8000L,
+                )
+            }
+        }
 
         // ViewModel observation
         lifecycleScope.launch {
@@ -770,9 +785,7 @@ class CanvasActivity : AppCompatActivity() {
         }
 
         progressCallback?.let { view.getController().setProgressCallback(it) }
-        view.setPalmRejectionEnabled(
-            com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this),
-        )
+        view.setFingerOff(com.alexdremov.notate.data.PreferencesManager.isFingerOff(this))
         view.onThreeFingerTap = {
             viewModel.toggleDistractionFree()
         }
@@ -1086,7 +1099,7 @@ class CanvasActivity : AppCompatActivity() {
         }
         binding.splitLayout.setPanes(binding.primaryPane, null)
         binding.splitLayout.fingerTapActivates =
-            !com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this)
+            !com.alexdremov.notate.data.PreferencesManager.isFingerOff(this)
         binding.splitLayout.onPaneTouched = { index -> setActivePane(useSecondary = index != primarySlot()) }
         binding.splitLayout.onDividerDragStateChanged = { dragging ->
             inkGate.set(com.alexdremov.notate.ui.input.InkGate.Reason.SPLIT_DIVIDER, dragging)

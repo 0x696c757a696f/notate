@@ -70,6 +70,9 @@ class WebInkRawInput(
     private var helper: TouchHelper? = null
     private var pauseCount = 0
     private var enabled = true
+
+    /** The driver was cut off mid-stroke and may never report the pen lifting. */
+    var onPenCut: (() -> Unit)? = null
     private var active = false
     private var strokeActive = false
     private var ignoringRestart = false
@@ -251,6 +254,7 @@ class WebInkRawInput(
             // The driver may never report the end of a stroke it was cut off from.
             strokeActive = false
             overlay.endStroke(commit = true)
+            onPenCut?.invoke()
         }
     }
 

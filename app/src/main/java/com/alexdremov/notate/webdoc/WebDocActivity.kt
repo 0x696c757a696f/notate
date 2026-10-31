@@ -148,8 +148,15 @@ class WebDocActivity : AppCompatActivity() {
     private var fingerPaused = false
     private var fingerDown = false
     private var rejectingPalm = false
+    private var downX = 0f
+    private var downY = 0f
     private var gestureOnPage = false
-    private val palmGuard by lazy { PalmGuard(PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi) }
+    private val palmGuard by lazy {
+        PalmGuard(
+            PalmGuard.PALM_MIN_SIZE_MM / 25.4f * resources.displayMetrics.xdpi,
+            pxPerCm = resources.displayMetrics.xdpi / 2.54f,
+        ).also { it.handedness = com.alexdremov.notate.data.PreferencesManager.getHandedness(this) }
+    }
     private var focusPaused = false
     private val fingerResume = Runnable { setFingerPaused(false) }
     private var pageLoaded: CompletableDeferred<String>? = null
@@ -423,7 +430,7 @@ class WebDocActivity : AppCompatActivity() {
         content.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         splitLayout = SplitPaneLayout(this)
         splitLayout.setPanes(content, null)
-        splitLayout.fingerTapActivates = !com.alexdremov.notate.data.PreferencesManager.isPalmRejectionEnabled(this)
+        splitLayout.fingerTapActivates = !com.alexdremov.notate.data.PreferencesManager.isFingerOff(this)
         splitLayout.onPaneTouched = { index -> setActivePane(partner = index != primarySlot()) }
         splitLayout.onDividerDragStateChanged = { dragging -> onDividerDrag(dragging) }
         splitLayout.onDragReleased = { outcome -> onDividerReleased(outcome) }
@@ -445,7 +452,7 @@ class WebDocActivity : AppCompatActivity() {
             if (it.actionMasked == MotionEvent.ACTION_HOVER_EXIT) {
                 palmGuard.onHoverExit(SystemClock.uptimeMillis())
             } else {
-                palmGuard.onHover(SystemClock.uptimeMillis())
+                palmGuard.onHover(SystemClock.uptimeMillis(), it.rawX, it.rawY)
             }
             rawInput?.onHover(it)
             if (it.actionMasked != MotionEvent.ACTION_HOVER_EXIT) resumeForPen()
@@ -470,7 +477,7 @@ class WebDocActivity : AppCompatActivity() {
 
     private fun openNativeInk() {
         if (rawInput != null || !::overlay.isInitialized || !nativeInkPreferred() || isFinishing || partnerActive) return
-        rawInput = WebInkRawInput.createOrNull(overlay)
+        rawInput = WebInkRawInput.createOrNull(overlay)?.also { it.onPenCut = { palmGuard.reset() } }
         overlay.nativeInput = rawInput != null
         rawInput?.let { raw ->
             raw.setEnabled(overlay.writeEnabled)
@@ -551,17 +558,22 @@ class WebDocActivity : AppCompatActivity() {
      * as a palm, is the writing hand and must not scroll the page. Fingers elsewhere (toolbar) still work.
      * A scroll already under way when the pen arrives is cancelled.
      */
+    private fun fingerOff() = com.alexdremov.notate.data.PreferencesManager.isFingerOff(this)
+
     private fun rejectPalm(ev: MotionEvent): Boolean {
         val action = ev.actionMasked
         if (action == MotionEvent.ACTION_DOWN) {
             rejectingPalm = false
+            downX = ev.rawX
+            downY = ev.rawY
+            palmGuard.observeFingerDown(ev.getTouchMajor(0))
             val r = android.graphics.Rect()
             content.getGlobalVisibleRect(r)
             gestureOnPage = r.contains(ev.rawX.toInt(), ev.rawY.toInt())
         }
         if (!rejectingPalm && gestureOnPage) {
             val sizes = FloatArray(ev.pointerCount) { ev.getTouchMajor(it) }
-            if (overlay.isPenActive || palmGuard.isPenNear(SystemClock.uptimeMillis()) || palmGuard.isPalmSized(sizes)) {
+            if (fingerOff() || overlay.isPenActive || palmGuard.shouldReject(SystemClock.uptimeMillis(), downX, downY) || palmGuard.isPalmSized(sizes)) {
                 rejectingPalm = true
                 if (action != MotionEvent.ACTION_DOWN) {
                     val cancel = MotionEvent.obtain(ev).apply { setAction(MotionEvent.ACTION_CANCEL) }

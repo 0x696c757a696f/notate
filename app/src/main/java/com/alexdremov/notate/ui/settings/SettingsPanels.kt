@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.TwoFingerTapAction
+import com.alexdremov.notate.ui.input.Handedness
 
 data class InputSettingsState(
     val scribbleEnabled: Boolean,
@@ -29,7 +30,8 @@ data class InputSettingsState(
     val angleSnapping: Boolean,
     val axisLocking: Boolean,
     val shapeDelay: Float,
-    val palmRejection: Boolean,
+    val fingerOff: Boolean,
+    val handedness: Handedness,
     val twoFingerTapAction: TwoFingerTapAction,
     val stylusButtonAction: StylusButtonAction,
 )
@@ -43,7 +45,8 @@ data class InterfaceSettingsState(
 fun InputSettingsPanel(
     state: InputSettingsState,
     onScribbleChange: (Boolean) -> Unit,
-    onPalmRejectionChange: (Boolean) -> Unit,
+    onFingerOffChange: (Boolean) -> Unit,
+    onHandednessChange: (Handedness) -> Unit,
     onShapeChange: (Boolean) -> Unit,
     onAngleChange: (Boolean) -> Unit,
     onAxisChange: (Boolean) -> Unit,
@@ -60,10 +63,25 @@ fun InputSettingsPanel(
         )
         HorizontalDivider()
 
-        SettingsToggle(
-            title = "Palm Rejection (stylus only)",
-            checked = state.palmRejection,
-            onCheckedChange = onPalmRejectionChange,
+        SettingsRadioGroup(
+            title = "Finger on page",
+            options =
+                listOf(
+                    false to "Scroll & zoom",
+                    true to "Off (stylus only)",
+                ),
+            selected = state.fingerOff,
+            onSelect = onFingerOffChange,
+        )
+        SettingsRadioGroup(
+            title = "Writing hand",
+            options =
+                listOf(
+                    Handedness.RIGHT to "Right",
+                    Handedness.LEFT to "Left",
+                ),
+            selected = state.handedness,
+            onSelect = onHandednessChange,
         )
         HorizontalDivider()
 
