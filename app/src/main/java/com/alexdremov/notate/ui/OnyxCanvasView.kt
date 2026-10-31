@@ -28,8 +28,9 @@ import com.alexdremov.notate.model.ToolType
 import com.alexdremov.notate.model.TwoFingerTapAction
 import com.alexdremov.notate.ui.controller.CanvasControllerImpl
 import com.alexdremov.notate.ui.controller.ViewportController
-import com.alexdremov.notate.ui.input.Handedness
-import com.alexdremov.notate.ui.input.PalmGuard
+import com.alexdremov.notate.input.Handedness
+import com.alexdremov.notate.input.InputClassifier
+import com.alexdremov.notate.input.PalmRejector
 import com.alexdremov.notate.ui.input.PenInputHandler
 import com.alexdremov.notate.ui.interaction.ViewportInteractor
 import com.alexdremov.notate.ui.render.CanvasRenderer
@@ -134,15 +135,8 @@ class OnyxCanvasView
 
         private var lastStrokeEndTime = 0L
 
-        private val palmGuard =
-            PalmGuard(
-                palmMinSizePx = PalmGuard.PALM_MIN_SIZE_MM / 25.4f * context.resources.displayMetrics.xdpi,
-                pxPerCm = context.resources.displayMetrics.xdpi / 2.54f,
-            ).also { it.handedness = PreferencesManager.getHandedness(context) }
-        private var gestureDownX = 0f
-        private var gestureDownY = 0f
-        private var rejectingPalmGesture = false
-        private var palmSizedGesture = false
+        /** Shared with the other panes of the window (the Activity may replace it right after construction). */
+        var palmRejector: PalmRejector = InputClassifier.newRejector(context)
 
         private var currentTool: PenTool = PenTool.defaultPens()[0]
         private var isReadOnly = false
@@ -298,7 +292,7 @@ class OnyxCanvasView
                     matrix,
                     inverseMatrix,
                     onStrokeStarted = {
-                        palmGuard.onPenDown(SystemClock.uptimeMillis())
+                        palmRejector.onPenDown(SystemClock.uptimeMillis())
                         onStrokeStarted?.invoke()
                     },
                     onStrokeFinished = {
@@ -311,7 +305,7 @@ class OnyxCanvasView
                 if (zoomWindow.isInWriting(x, y)) zoomWindow.worldToWriting() else null
             }
             penInputHandler.guideSnapAt = { x, y -> guideSnapAt(x, y) }
-            penInputHandler.onPenCut = { palmGuard.reset() }
+            penInputHandler.onPenCut = { palmRejector.reset() }
             penInputHandler.onZoomStrokeFinished = { worldBounds ->
                 if (zoomWindow.advanceAfterStroke(worldBounds)) onZoomTargetMoved()
             }
@@ -542,7 +536,7 @@ class OnyxCanvasView
             // After the zoom window and guides: a finger may hold the ruler while the pen draws along it.
             if (rejectPalm(event)) {
                 // Two/three-finger taps (undo, redo, ...) still work while the pen hovers; a palm never taps.
-                if (!isReadOnly && !palmSizedGesture) {
+                if (!isReadOnly && !palmRejector.palmSizedGesture) {
                     detectTwoFingerTap(event)
                     detectThreeFingerTap(event)
                 }
@@ -590,36 +584,18 @@ class OnyxCanvasView
         }
 
         /**
-         * Drops finger gestures made by the writing hand: any touch while the pen is near the screen,
-         * or one as large as a palm. A pan already under way when the pen arrives is stopped.
+         * Drops finger gestures made by the writing hand (see [PalmRejector]). A pan already under way
+         * when the pen arrives is stopped.
          */
         private fun rejectPalm(event: MotionEvent): Boolean {
-            val action = event.actionMasked
-            if (action == MotionEvent.ACTION_DOWN) {
-                rejectingPalmGesture = false
-                palmSizedGesture = false
+            val decision = palmRejector.onTouch(InputClassifier.sample(event), canReject = !selectionInteractor.isInteracting())
+            if (decision == PalmRejector.Decision.ACCEPT) return false
+            if (decision == PalmRejector.Decision.CANCEL_ONGOING) {
+                val cancel = InputClassifier.cancelCopy(event)
+                gestureDetector.onTouchEvent(cancel)
+                cancel.recycle()
+                viewportInteractor.cancel()
             }
-            if (action == MotionEvent.ACTION_DOWN) palmGuard.observeFingerDown(event.getTouchMajor(0))
-            if (!palmSizedGesture) {
-                palmSizedGesture = palmGuard.isPalmSized(FloatArray(event.pointerCount) { event.getTouchMajor(it) })
-            }
-            if (action == MotionEvent.ACTION_DOWN) {
-                gestureDownX = event.rawX
-                gestureDownY = event.rawY
-            }
-            if (!rejectingPalmGesture && !selectionInteractor.isInteracting()) {
-                if (palmSizedGesture || palmGuard.shouldReject(SystemClock.uptimeMillis(), gestureDownX, gestureDownY)) {
-                    rejectingPalmGesture = true
-                    if (action != MotionEvent.ACTION_DOWN) {
-                        val cancel = MotionEvent.obtain(event).apply { setAction(MotionEvent.ACTION_CANCEL) }
-                        gestureDetector.onTouchEvent(cancel)
-                        cancel.recycle()
-                        viewportInteractor.cancel()
-                    }
-                }
-            }
-            if (!rejectingPalmGesture) return false
-            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) rejectingPalmGesture = false
             return true
         }
 
@@ -701,7 +677,7 @@ class OnyxCanvasView
         }
 
         fun setHandedness(handedness: Handedness) {
-            palmGuard.handedness = handedness
+            palmRejector.handedness = handedness
         }
 
         private fun detectThreeFingerTap(event: MotionEvent) {
@@ -750,7 +726,7 @@ class OnyxCanvasView
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_HOVER_MOVE -> {
-                    palmGuard.onHover(SystemClock.uptimeMillis(), event.rawX, event.rawY)
+                    palmRejector.onHover(SystemClock.uptimeMillis(), event.rawX, event.rawY)
                     val toolType = event.getToolType(0)
                     val isEraserTail = toolType == MotionEvent.TOOL_TYPE_ERASER
                     val isStylusButton = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 &&
@@ -760,14 +736,14 @@ class OnyxCanvasView
                 }
 
                 MotionEvent.ACTION_HOVER_ENTER -> {
-                    palmGuard.onHover(SystemClock.uptimeMillis(), event.rawX, event.rawY)
+                    palmRejector.onHover(SystemClock.uptimeMillis(), event.rawX, event.rawY)
                     // The pen is about to write: redraw what is pending now rather than mid-stroke.
                     minimapDrawer?.hideNow()
                     penInputHandler.onHoverEnter()
                 }
 
                 MotionEvent.ACTION_HOVER_EXIT -> {
-                    palmGuard.onHoverExit(SystemClock.uptimeMillis())
+                    palmRejector.onHoverExit(SystemClock.uptimeMillis())
                     penInputHandler.onHoverExit()
                 }
             }
@@ -1063,7 +1039,7 @@ class OnyxCanvasView
             if (isPaneActive == active) return
             isPaneActive = active
             if (!active) {
-                palmGuard.reset()
+                palmRejector.reset()
                 dismissActionPopup()
                 touchHelper?.setRawDrawingRenderEnabled(false)
                 touchHelper?.setRawDrawingEnabled(false)
@@ -1968,6 +1944,6 @@ class OnyxCanvasView
 
         fun notifyStrokeFinished() {
             lastStrokeEndTime = System.currentTimeMillis()
-            palmGuard.onPenUp(SystemClock.uptimeMillis())
+            palmRejector.onPenUp(SystemClock.uptimeMillis())
         }
     }

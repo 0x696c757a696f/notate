@@ -11,7 +11,7 @@ import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.Tag
 import com.alexdremov.notate.model.ToolbarItem
 import com.alexdremov.notate.model.TwoFingerTapAction
-import com.alexdremov.notate.ui.input.Handedness
+import com.alexdremov.notate.input.Handedness
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString

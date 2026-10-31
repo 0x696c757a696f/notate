@@ -122,6 +122,9 @@ class CanvasActivity : AppCompatActivity() {
     private var isSwitchingTabs = false
     private var pendingSplitOrientation = SplitOrientation.SIDE_BY_SIDE
     private val activeCanvasState = mutableStateOf<OnyxCanvasView?>(null)
+
+    /** The one palm rejector of this window: every canvas and book pane in it reports to and asks this. */
+    private val palmRejector by lazy { com.alexdremov.notate.input.InputClassifier.newRejector(this) }
     private var progressCallback: ((isVisible: Boolean, message: String?, progress: Int) -> Unit)? = null
 
     /** The canvas the pen, toolbar and menus act on: the focused pane in split view. */
@@ -718,6 +721,7 @@ class CanvasActivity : AppCompatActivity() {
 
     /** Callbacks and settings shared by the main canvas and the split-view canvas. */
     private fun wireCanvas(view: OnyxCanvasView) {
+        view.palmRejector = palmRejector
         view.setActionPopupContainer(binding.selectionActionsContainer)
         view.onStrokeStarted = {
             activePenPopup?.dismiss()
@@ -1323,6 +1327,7 @@ class CanvasActivity : AppCompatActivity() {
                 meta,
                 com.alexdremov.notate.webdoc.WebDocActivity
                     .library(this),
+                palmRejector,
             )
         pane.setTool(viewModel.activeTool.value)
         pane.setEraser(viewModel.currentEraser.value)

@@ -22,7 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.alexdremov.notate.model.StylusButtonAction
 import com.alexdremov.notate.model.TwoFingerTapAction
-import com.alexdremov.notate.ui.input.Handedness
+import com.alexdremov.notate.input.Handedness
 
 data class InputSettingsState(
     val scribbleEnabled: Boolean,

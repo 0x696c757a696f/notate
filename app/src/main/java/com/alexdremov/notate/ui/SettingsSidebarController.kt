@@ -44,7 +44,7 @@ class SettingsSidebarController(
     private val onEditToolbar: () -> Unit,
     private val onGeneratePatterns: (com.alexdremov.notate.util.PatternGenerator.PatternType, Float) -> Unit,
     private val onFingerOffChanged: (Boolean) -> Unit,
-    private val onHandednessChanged: (com.alexdremov.notate.ui.input.Handedness) -> Unit,
+    private val onHandednessChanged: (com.alexdremov.notate.input.Handedness) -> Unit,
     private val onTwoFingerTapActionChange: (com.alexdremov.notate.model.TwoFingerTapAction) -> Unit,
     private val onStylusButtonActionChange: (com.alexdremov.notate.model.StylusButtonAction) -> Unit,
 ) {

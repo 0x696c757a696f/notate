@@ -56,7 +56,7 @@ import com.alexdremov.notate.BuildConfig
 import com.alexdremov.notate.R
 import com.alexdremov.notate.data.FingerMode
 import com.alexdremov.notate.data.PreferencesManager
-import com.alexdremov.notate.ui.input.Handedness
+import com.alexdremov.notate.input.Handedness
 import com.alexdremov.notate.ui.settings.InputSettingsPanel
 import com.alexdremov.notate.ui.settings.InputSettingsState
 import com.alexdremov.notate.ui.settings.InterfaceSettingsPanel
