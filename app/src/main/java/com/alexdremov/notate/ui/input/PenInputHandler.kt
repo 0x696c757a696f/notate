@@ -174,13 +174,10 @@ class PenInputHandler(
 
                     // The driver steps aside so the software layer update is visible
                     pauseDriver {
-                        EpdController.invalidate(
+                        com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(
                             view,
-                            dirtyRect.left,
-                            dirtyRect.top,
-                            dirtyRect.right,
-                            dirtyRect.bottom,
-                            UpdateMode.DU,
+                            com.alexdremov.notate.ui.epd.EpdMode.DU,
+                            intArrayOf(dirtyRect.left, dirtyRect.top, dirtyRect.right, dirtyRect.bottom),
                         )
                     }
                 }
@@ -208,13 +205,10 @@ class PenInputHandler(
 
             // Region-specific high quality refresh, with the driver aside (it restores the pen's look itself)
             pauseDriver {
-                EpdController.invalidate(
+                com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(
                     view,
-                    dirtyRect.left,
-                    dirtyRect.top,
-                    dirtyRect.right,
-                    dirtyRect.bottom,
-                    UpdateMode.GC,
+                    com.alexdremov.notate.ui.epd.EpdMode.GC,
+                    intArrayOf(dirtyRect.left, dirtyRect.top, dirtyRect.right, dirtyRect.bottom),
                 )
             }
 
@@ -441,8 +435,7 @@ class PenInputHandler(
         updateTouchHelperTool()
 
         // Always enter A2 mode for writing to ensure low latency and visibility of fast strokes
-        com.onyx.android.sdk.api.device.EpdDeviceManager
-            .enterAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.acquireAnimation("pen")
 
         if (currentTool.type == ToolType.ERASER) {
             scope.launch { controller.startBatchSession() }
@@ -504,8 +497,7 @@ class PenInputHandler(
         if (isIgnoringCurrentStroke) {
             isIgnoringCurrentStroke = false
             isStrokeInProgress = false
-            com.onyx.android.sdk.api.device.EpdDeviceManager
-                .exitAnimationUpdate(true)
+            com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("pen")
             if (isDiscardingExcludedStroke) {
                 isDiscardingExcludedStroke = false
                 val downX = excludedDownX
@@ -522,8 +514,7 @@ class PenInputHandler(
 
         dwellDetector.onStop()
         // Always exit A2 mode
-        com.onyx.android.sdk.api.device.EpdDeviceManager
-            .exitAnimationUpdate(true)
+        com.alexdremov.notate.ui.epd.Epd.scheduler.releaseAnimation("pen")
 
         cursorView?.hide()
 

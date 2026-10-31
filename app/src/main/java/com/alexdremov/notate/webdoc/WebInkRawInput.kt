@@ -54,9 +54,6 @@ class WebInkRawInput(
         /** Toggling raw drawing mid-stroke makes the driver restart the stroke; ignore that restart. */
         private const val RESTART_IGNORE_MS = 400L
 
-        /** Longest wait for the overlay's frame before refreshing the panel anyway. */
-        private const val DRAW_WAIT_MAX_MS = 150L
-
         private const val OP_BEGIN = 0f
         private const val OP_BEGIN_ERASER = 1f
         private const val OP_MOVE = 2f
@@ -426,54 +423,23 @@ class WebInkRawInput(
         val pad = overlay.widthCss(overlay.tool) * overlay.viewportScale() + 48f
         val r = Rect((dirty.left - pad).toInt(), (dirty.top - pad).toInt(), (dirty.right + pad).toInt(), (dirty.bottom + pad).toInt())
         val token = ++flushToken
-        afterNextDraw {
+        com.alexdremov.notate.ui.epd.Epd.scheduler.afterDraw(overlay) {
             // A pause, close or newer flush may have happened while waiting for the frame.
             if (token != flushToken) {
                 if (hasDirty) dirty.union(RectF(r)) else dirty.set(RectF(r))
                 hasDirty = true
-                return@afterNextDraw
+                return@afterDraw
             }
-            if (helper == null) return@afterNextDraw
+            if (helper == null) return@afterDraw
             try {
                 // GU: high quality without the black flash of GC, so the page doesn't blink after writing.
                 arbiter.pausedDuring(this) {
-                    EpdController.invalidate(overlay, r.left, r.top, r.right, r.bottom, UpdateMode.GU)
+                    com.alexdremov.notate.ui.epd.Epd.scheduler.refresh(overlay, com.alexdremov.notate.ui.epd.EpdMode.GU, intArrayOf(r.left, r.top, r.right, r.bottom))
                 }
             } catch (t: Throwable) {
                 Logger.w(TAG, "Flush failed", t)
             }
         }
-    }
-
-    /** Runs [action] on the main thread once the overlay has been drawn (or after a short timeout). */
-    private fun afterNextDraw(action: () -> Unit) {
-        if (!overlay.isAttachedToWindow || !overlay.viewTreeObserver.isAlive) {
-            action()
-            return
-        }
-        var done = false
-        fun run() {
-            if (!done) {
-                done = true
-                action()
-            }
-        }
-        val listener =
-            object : android.view.ViewTreeObserver.OnDrawListener {
-                override fun onDraw() {
-                    // The listener cannot remove itself from inside the draw pass; do it on the next loop iteration.
-                    overlay.post {
-                        runCatching { overlay.viewTreeObserver.removeOnDrawListener(this) }
-                        run()
-                    }
-                }
-            }
-        overlay.viewTreeObserver.addOnDrawListener(listener)
-        overlay.invalidate()
-        overlay.postDelayed({
-            runCatching { overlay.viewTreeObserver.removeOnDrawListener(listener) }
-            run()
-        }, DRAW_WAIT_MAX_MS)
     }
 
     /** One line per fact, for the Ink diagnostics dialog. */
