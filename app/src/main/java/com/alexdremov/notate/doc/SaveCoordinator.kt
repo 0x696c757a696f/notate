@@ -94,7 +94,8 @@ class SaveCoordinator(
         e.timer =
             scope.launch {
                 delay(delayMs)
-                runSave(e)
+                // A separate coroutine: cancelling the timer (flush, reschedule) must not abort a save in flight.
+                scope.launch { runSave(e) }
             }
     }
 
