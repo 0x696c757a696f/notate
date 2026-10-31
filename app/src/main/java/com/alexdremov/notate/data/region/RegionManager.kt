@@ -694,6 +694,32 @@ class RegionManager(
         return result
     }
 
+    /** Test seam: runs on the IO thread after the bytes are written, before dirty is cleared. */
+    @androidx.annotation.VisibleForTesting
+    internal var saveHookBeforeDirtyClear: (() -> Unit)? = null
+
+    /** Test seam: runs in saveAll's flush after the bytes are written, before dirty is cleared. */
+    @androidx.annotation.VisibleForTesting
+    internal var saveAllHookAfterWrite: (() -> Unit)? = null
+
+    /** Clears dirty only if no mutation landed since [mod]; atomic w.r.t. every mutator (they hold stateLock.write). */
+    private fun clearDirtyIfUnchanged(
+        region: RegionData,
+        mod: Long,
+    ): Boolean =
+        stateLock.write {
+            if (region.isRecycled || region.modCount != mod) {
+                false
+            } else {
+                region.isDirty = false
+                true
+            }
+        }
+
+    /** Consistent (modCount, items) pair: mutators hold the write lock. */
+    private fun snapshotLocked(region: RegionData): Pair<Long, MutableList<CanvasItem>> =
+        stateLock.read { region.modCount to region.items.toMutableList() }
+
     private fun scheduleSave(region: RegionData) {
         // Acquire the per-id save gate BEFORE launching. If another save is
         // already in flight for this region we must NOT skip silently: that
@@ -717,8 +743,9 @@ class RegionManager(
         // keeps the region dirty (safe). The reverse order cleared dirty for
         // snapshots missing the newest stroke — THE lost-stroke bug (proven:
         // memory==disk converge on bytes lacking exactly one order).
-        var snapshotMod = region.modCount
-        var snapshot = region.items.toMutableList()
+        val (initialMod, initialItems) = snapshotLocked(region)
+        var snapshotMod = initialMod
+        var snapshot = initialItems
         scope.launch(Dispatchers.IO) {
             // Read at EXECUTION start: [clear] bumps the epoch when it discards
             // content; a job that was queued across a clear must not write its
@@ -756,8 +783,8 @@ class RegionManager(
                     if (++rounds > 8 || region.isRecycled) break
                     // Instance verified not recycled: live items are valid.
                     // Re-pair mod with the NEW snapshot (mod first!).
-                    val m = region.modCount
-                    snapshot = region.items.toMutableList()
+                    val (m, snap) = snapshotLocked(region)
+                    snapshot = snap
                     snapshotMod = m
                 }
             } finally {
@@ -1413,10 +1440,8 @@ class RegionManager(
                 val wrote = storage.saveRegion(region.copy(items = snapshot))
                 bumpDiskGen(region.id)
                 if (!wrote) return
-                if (region.modCount == modBaseline) {
-                    region.isDirty = false
-                    return
-                }
+                saveHookBeforeDirtyClear?.invoke()
+                if (clearDirtyIfUnchanged(region, modBaseline)) return
                 logForensics {
                     "SAVE-STALE id=${region.id} i=${iid(region)} baseline=$modBaseline modNow=${region.modCount}"
                 }
@@ -1426,8 +1451,9 @@ class RegionManager(
                 // recycled instance: its items were destructively cleared,
                 // and saving that husk would regress disk to empty.
                 if (region.isRecycled || ++attempts >= 3) return
-                modBaseline = region.modCount
-                snapshot = region.items.toMutableList()
+                val (m, snap) = snapshotLocked(region)
+                modBaseline = m
+                snapshot = snap
             } catch (e: Exception) {
                 Logger.e("RegionManager", "Exception saving region ${region.id}", e)
                 return
@@ -2191,6 +2217,9 @@ class RegionManager(
                         // Swallow tail failures instead — items is the source
                         // of truth; derived structures are rebuilt from it.
                         region.items = region.items + item
+                        // Bump modCount/dirty immediately: no window where content changed but modCount did not.
+                        region.isDirty = true
+                        region.invalidateSize()
                         try {
                             if (region.quadtree == null) {
                                 region.rebuildQuadtree(regionSize)
@@ -2264,6 +2293,9 @@ class RegionManager(
                                 // ids no longer present; an escape would leave
                                 // ghosts).
                                 region.items = region.items.filter { it.order !in idsToRemove }
+                                // Bump modCount/dirty immediately: no window where content changed but modCount did not.
+                                region.isDirty = true
+                                region.invalidateSize()
                                 try {
                                     toRemove.forEach { item ->
                                         var removedCount = 0
@@ -2385,6 +2417,9 @@ class RegionManager(
                                 // serialized to the stash file at this point;
                                 // an escape would leave ghosts).
                                 region.items = region.items.filter { it !in toRemove }
+                                // Bump modCount/dirty immediately: no window where content changed but modCount did not.
+                                region.isDirty = true
+                                region.invalidateSize()
                                 try {
                                     toRemove.forEach { region.quadtree?.remove(it) }
                                     region.contentBounds.setEmpty()
@@ -2580,6 +2615,9 @@ class RegionManager(
                                 // never escape: the caller would re-apply the
                                 // same batch (duplicates) or observe ghosts.
                                 region.items = region.items + regionItems
+                                // Bump modCount/dirty immediately: no window where content changed but modCount did not.
+                                region.isDirty = true
+                                region.invalidateSize()
                                 try {
                                     if (region.quadtree == null) {
                                         region.rebuildQuadtree(regionSize)
@@ -2815,6 +2853,9 @@ class RegionManager(
                                 // no-op; an escape would leave ghosts).
                                 region.items =
                                     region.items.filter { it.order !in ids }
+                                // Bump modCount/dirty immediately: no window where content changed but modCount did not.
+                                region.isDirty = true
+                                region.invalidateSize()
                                 try {
                                     toRemove.forEach { region.quadtree?.remove(it) }
                                     region.contentBounds.setEmpty()
@@ -3152,6 +3193,7 @@ class RegionManager(
             var bytes: ByteArray? = null
             var isEmpty = false
             var modAtSnapshot = -1L
+            var snapshotRegion: RegionData? = null
             var captured = false
 
             stateLock.read {
@@ -3160,6 +3202,7 @@ class RegionManager(
                         ?: return@read
                 if (region.isRecycled || !region.isDirty) return@read
                 modAtSnapshot = region.modCount
+                snapshotRegion = region
                 if (region.items.isEmpty()) {
                     logForensics {
                         "!!!! SAVEALL-EMPTY-DELETE id=$id dirty=${region.isDirty} " +
@@ -3201,22 +3244,15 @@ class RegionManager(
                 }
             if (!ok) return
 
-            val current =
-                regionCache.get(id) ?: overflowRegions[id] ?: freshestInLimbo(id)
-                    ?: return
-            var stale = false
-            stateLock.write {
-                if (current.modCount == modAtSnapshot) {
-                    current.isDirty = false
-                } else {
-                    // Content changed while our snapshot was in flight: the
-                    // written bytes are stale.
-                    stale = true
-                }
-            }
-            if (!stale) return
+            // Act on the SAME instance that was serialized: a re-lookup could
+            // return an evicted/reloaded twin whose modCount is unrelated.
+            val snap = snapshotRegion ?: return
+            saveAllHookAfterWrite?.invoke()
+            if (clearDirtyIfUnchanged(snap, modAtSnapshot)) return
+            // Content changed while our snapshot was in flight: the written
+            // bytes are stale.
             if (++attempts >= FLUSH_MAX_ATTEMPTS) {
-                scheduleSave(current)
+                scheduleSave(snap)
                 return
             }
         }
