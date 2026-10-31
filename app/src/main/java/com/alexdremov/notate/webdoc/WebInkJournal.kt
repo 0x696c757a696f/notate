@@ -45,8 +45,8 @@ internal class WebInkJournal(
         seq: Long,
         line: String,
     ) {
-        val stream = out ?: FileOutputStream(file, true).also { out = it }
         file.parentFile?.mkdirs()
+        val stream = out ?: FileOutputStream(file, true).also { out = it }
         stream.write((line + "\n").toByteArray(Charsets.UTF_8))
         if (seq > lastSeq) lastSeq = seq
         val since = clock() - lastSyncAt
