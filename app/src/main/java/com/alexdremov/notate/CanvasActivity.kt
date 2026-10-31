@@ -29,7 +29,6 @@ import androidx.core.view.doOnLayout
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ProcessLifecycleOwner
-import com.alexdremov.notate.doc.DocKind
 import com.alexdremov.notate.doc.DocRef
 import com.alexdremov.notate.doc.LambdaSaveable
 import com.alexdremov.notate.doc.SaveCoordinator
