@@ -1,6 +1,17 @@
 package com.alexdremov.notate.webdoc
 
+import com.alexdremov.notate.doc.Capability
+import com.alexdremov.notate.doc.DocKind
+import com.alexdremov.notate.doc.DocRef
+import com.alexdremov.notate.doc.DocumentSession
+import com.alexdremov.notate.doc.SaveState
+import com.alexdremov.notate.doc.UndoController
 import com.alexdremov.notate.util.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -16,17 +27,22 @@ import kotlin.math.abs
  * Mutation (adding strokes) happens on the main thread through the shared [WebInkPage]s; saving
  * takes a cheap snapshot there and serialises it on a background thread, in order, so the UI thread
  * never waits for JSON. [flushBlocking] is the lifecycle hook: it returns once the disk is current.
+ *
+ * It is the web document's [DocumentSession] (also known as [WebSession]); [WebDocSessionRegistry]
+ * hands it out.
  */
 class WebAnnotationStore internal constructor(
     val docId: String,
     private val library: WebDocLibrary,
     private val io: ExecutorService = sharedIo,
-) {
+) : DocumentSession {
     companion object {
         private const val TAG = "WebAnnotationStore"
 
         /** Relative width change above which the layout is considered different. */
         const val LAYOUT_DRIFT_FRACTION = 0.05f
+
+        private const val FLUSH_TIMEOUT_MS = 10_000L
 
         private val sharedIo: ExecutorService =
             Executors.newSingleThreadExecutor { r -> Thread(r, "web-annotations-io").apply { isDaemon = true } }
@@ -86,6 +102,44 @@ class WebAnnotationStore internal constructor(
     )
 
     private val lock = Any()
+
+    // --- DocumentSession ---
+    @Volatile var title: String = docId
+
+    override val ref: DocRef get() = DocRef(DocKind.WEB, docId, title)
+    override val capabilities: Set<Capability> = Capability.WEB
+
+    private val _saveState = MutableStateFlow<SaveState>(SaveState.Clean)
+    override val saveState: StateFlow<SaveState> = _saveState.asStateFlow()
+    private val undoChanges = MutableStateFlow(0)
+
+    /** The page undo/redo act on; hosts set it when the visible page changes. */
+    @Volatile var currentHref: String? = null
+
+    override val undo =
+        object : UndoController {
+            private fun currentPage() = currentHref?.let { this@WebAnnotationStore.page(it) }
+
+            override val canUndo get() = currentPage()?.canUndo == true
+            override val canRedo get() = currentPage()?.canRedo == true
+            override val changes: StateFlow<Int> = undoChanges.asStateFlow()
+
+            override suspend fun undo(): Boolean = (currentPage()?.undo() == true).also { if (it) inkEdited() }
+
+            override suspend fun redo(): Boolean = (currentPage()?.redo() == true).also { if (it) inkEdited() }
+        }
+
+    private fun inkEdited() {
+        currentHref?.let { markInkChanged(it) }
+    }
+
+    override suspend fun flush() {
+        withContext(Dispatchers.IO) { flushBlocking(FLUSH_TIMEOUT_MS) }
+    }
+
+    /** Flushes; the registry releases the memory when the last holder lets go. */
+    override suspend fun close() = flush()
+
     private val base = library.loadAnnotations(docId)
     private val pages = HashMap<String, WebInkPage>()
     private val strokesByPage = HashMap(base.strokes)
@@ -141,6 +195,8 @@ class WebAnnotationStore internal constructor(
     ) = synchronized(lock) {
         dirtyPages.add(href)
         changeSeq++
+        undoChanges.value++
+        if (_saveState.value !is SaveState.Saving) _saveState.value = SaveState.Dirty
         if (layoutWidthCss > 0f && href !in layout && pages[href]?.strokes?.isNotEmpty() == true) layout[href] = layoutWidthCss
     }
 
@@ -171,12 +227,14 @@ class WebAnnotationStore internal constructor(
     /** Queues a background save of the current state; returns immediately. */
     fun save() {
         synchronized(lock) { pending = snapshotLocked() to changeSeq }
+        _saveState.value = SaveState.Saving
         io.execute { writeLatest() }
     }
 
     /** Saves and waits until the disk is current (or [timeoutMs] passes). True if it finished in time. */
     fun flushBlocking(timeoutMs: Long = 2000): Boolean {
         synchronized(lock) { pending = snapshotLocked() to changeSeq }
+        _saveState.value = SaveState.Saving
         val done = io.submit { writeLatest() }
         return try {
             done.get(timeoutMs, TimeUnit.MILLISECONDS)
@@ -195,10 +253,14 @@ class WebAnnotationStore internal constructor(
         val t0 = System.nanoTime()
         try {
             library.saveAnnotations(docId, snap)
-            synchronized(lock) { if (seq > writtenSeq) writtenSeq = seq }
+            synchronized(lock) {
+                if (seq > writtenSeq) writtenSeq = seq
+                _saveState.value = if (changeSeq > writtenSeq) SaveState.Dirty else SaveState.Clean
+            }
             lastError = null
         } catch (e: Exception) {
             lastError = e.message ?: e.javaClass.simpleName
+            _saveState.value = SaveState.Error(lastError ?: "save failed")
             Logger.e(TAG, "Failed to save notes of $docId", e, showToUser = true)
             // Keep the data pending so the next save retries it, unless something newer is already queued.
             synchronized(lock) { if (pending == null) pending = snap to seq }

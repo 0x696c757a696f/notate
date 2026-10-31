@@ -64,6 +64,7 @@ class WebInkPage(
         _strokes.clear()
     }
 
+
     fun undo(): Boolean {
         val edit = undoStack.removeLastOrNull() ?: return false
         when (edit) {
