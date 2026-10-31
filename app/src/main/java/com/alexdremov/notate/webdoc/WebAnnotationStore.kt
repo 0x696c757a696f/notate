@@ -140,10 +140,17 @@ class WebAnnotationStore internal constructor(
     /** Flushes; the registry releases the memory when the last holder lets go. */
     override suspend fun close() = flush()
 
-    private val base = library.loadAnnotations(docId)
+    private val disk = library.inkStore(docId)
+    private val base = disk.load(openForSession = true)
     private val pages = HashMap<String, WebInkPage>()
     private val strokesByPage = HashMap(base.strokes)
     private val dirtyPages = HashSet<String>()
+
+    /** Pages whose ink file on disk is out of date. */
+    private val dirtyOnDisk = HashSet<String>()
+
+    /** Per page, the strokes the journal already knows (identity comparison finds what to append). */
+    private val journaled = HashMap<String, List<WebInkStroke>>()
     private val scroll = HashMap(base.scrollY)
     private val layout = HashMap(base.layoutWidth)
 
@@ -160,8 +167,14 @@ class WebAnnotationStore internal constructor(
             synchronized(lock) { changeSeq++ }
         }
 
+    private class Pending(
+        val snap: WebDocAnnotations,
+        val seq: Long,
+        val dirty: MutableSet<String>,
+    )
+
     /** Latest snapshot not yet written, with the change counter it covers. */
-    private var pending: Pair<WebDocAnnotations, Long>? = null
+    private var pending: Pending? = null
     private var changeSeq = 0L
     private var writtenSeq = 0L
 
@@ -194,10 +207,37 @@ class WebAnnotationStore internal constructor(
         layoutWidthCss: Float = 0f,
     ) = synchronized(lock) {
         dirtyPages.add(href)
+        dirtyOnDisk.add(href)
         changeSeq++
+        journalEditLocked(href, changeSeq)
         undoChanges.value++
         if (_saveState.value !is SaveState.Saving) _saveState.value = SaveState.Dirty
         if (layoutWidthCss > 0f && href !in layout && pages[href]?.strokes?.isNotEmpty() == true) layout[href] = layoutWidthCss
+    }
+
+    /** Queues a journal line describing how [href] changed since the last one (append, or replace). */
+    private fun journalEditLocked(
+        href: String,
+        seq: Long,
+    ) {
+        val cur = pages[href]?.strokes?.toList().orEmpty()
+        val prev = journaled[href] ?: strokesByPage[href].orEmpty()
+        journaled[href] = cur
+        val appended = cur.size >= prev.size && prev.indices.all { cur[it] === prev[it] }
+        val op =
+            if (appended) {
+                if (cur.size == prev.size) return
+                WebJournalOp(seq, href, "add", cur.subList(prev.size, cur.size))
+            } else {
+                WebJournalOp(seq, href, "set", cur)
+            }
+        io.execute {
+            try {
+                disk.journal.append(seq, WebInkStoreV2.opLine(WebDocLibrary.json, op))
+            } catch (e: Exception) {
+                Logger.w(TAG, "Journal append failed for $docId", e)
+            }
+        }
     }
 
     /** Immutable copy of everything (cheap: only pages touched since the last snapshot are re-listed). */
@@ -221,19 +261,19 @@ class WebAnnotationStore internal constructor(
     /** Memory strokes on [href]. */
     fun memoryStrokeCount(href: String): Int = synchronized(lock) { pages[href]?.strokes?.size ?: strokesByPage[href]?.size ?: 0 }
 
-    /** Strokes of [href] in annotations.json right now, or null if the file cannot be read. Does disk IO. */
+    /** Strokes of [href] on disk right now (ink file plus journal), or null if the file cannot be read. Does disk IO. */
     fun diskStrokeCount(href: String): Int? = library.peekAnnotations(docId)?.let { it.strokes[href]?.size ?: 0 }
 
     /** Queues a background save of the current state; returns immediately. */
     fun save() {
-        synchronized(lock) { pending = snapshotLocked() to changeSeq }
+        synchronized(lock) { pending = makePendingLocked() }
         _saveState.value = SaveState.Saving
         io.execute { writeLatest() }
     }
 
     /** Saves and waits until the disk is current (or [timeoutMs] passes). True if it finished in time. */
     fun flushBlocking(timeoutMs: Long = 2000): Boolean {
-        synchronized(lock) { pending = snapshotLocked() to changeSeq }
+        synchronized(lock) { pending = makePendingLocked() }
         _saveState.value = SaveState.Saving
         val done = io.submit { writeLatest() }
         return try {
@@ -248,11 +288,26 @@ class WebAnnotationStore internal constructor(
         }
     }
 
+    /** Waits until queued journal appends reached the file. Tests only. */
+    internal fun flushJournalForTest() {
+        io.submit {}.get(5, TimeUnit.SECONDS)
+    }
+
+    private fun makePendingLocked(): Pending {
+        val snap = snapshotLocked()
+        val dirty = HashSet(dirtyOnDisk)
+        dirtyOnDisk.clear()
+        pending?.let { dirty.addAll(it.dirty) }
+        return Pending(snap, changeSeq, dirty)
+    }
+
     private fun writeLatest() {
-        val (snap, seq) = synchronized(lock) { pending.also { pending = null } } ?: return
+        val p = synchronized(lock) { pending.also { pending = null } } ?: return
+        val snap = p.snap
+        val seq = p.seq
         val t0 = System.nanoTime()
         try {
-            library.saveAnnotations(docId, snap)
+            disk.write(snap, p.dirty, seq)
             synchronized(lock) {
                 if (seq > writtenSeq) writtenSeq = seq
                 _saveState.value = if (changeSeq > writtenSeq) SaveState.Dirty else SaveState.Clean
@@ -263,7 +318,7 @@ class WebAnnotationStore internal constructor(
             _saveState.value = SaveState.Error(lastError ?: "save failed")
             Logger.e(TAG, "Failed to save notes of $docId", e, showToUser = true)
             // Keep the data pending so the next save retries it, unless something newer is already queued.
-            synchronized(lock) { if (pending == null) pending = snap to seq }
+            synchronized(lock) { if (pending == null) pending = p else pending?.dirty?.addAll(p.dirty) }
         }
         lastSaveDurationMs = (System.nanoTime() - t0) / 1_000_000
         lastSaveAtMs = System.currentTimeMillis()

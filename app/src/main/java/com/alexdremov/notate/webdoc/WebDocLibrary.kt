@@ -14,7 +14,7 @@ import java.util.zip.ZipFile
  * Imported EPUB / HTML documents live in `<baseDir>/<id>/`:
  *  - `content/`         extracted files served to the WebView
  *  - `meta.json`        [WebDocMeta]
- *  - `annotations.json` [WebDocAnnotations] (ink + reading position)
+ *  - `state.json`, `ink/<page>.json`, `ink.journal` (ink + reading position; see [WebInkStoreV2])
  *
  * The id is a hash of the imported bytes, so importing the same book again reopens
  * the existing copy together with its notes.
@@ -61,28 +61,19 @@ class WebDocLibrary(
 
     fun saveMeta(meta: WebDocMeta) = atomicWrite(File(docDir(meta.id), "meta.json"), json.encodeToString(WebDocMeta.serializer(), meta))
 
-    fun loadAnnotations(id: String): WebDocAnnotations {
-        val f = File(docDir(id), "annotations.json")
-        if (!f.isFile) return WebDocAnnotations()
-        return try {
-            json.decodeFromString(WebDocAnnotations.serializer(), f.readText())
-        } catch (e: Exception) {
-            Logger.w(TAG, "Corrupt annotations for $id, keeping a backup", e)
-            f.copyTo(File(docDir(id), "annotations.corrupt-${System.currentTimeMillis()}.json"), overwrite = true)
-            WebDocAnnotations()
-        }
-    }
+    /** The on-disk store (state.json + ink files + journal) of a document. */
+    internal fun inkStore(id: String) = WebInkStoreV2(docDir(id), json)
 
-    /** Reads annotations.json as is (no backup, no side effects); null if missing or unreadable. For diagnostics. */
-    fun peekAnnotations(id: String): WebDocAnnotations? {
-        val f = File(docDir(id), "annotations.json")
-        if (!f.isFile) return WebDocAnnotations()
-        return try {
-            json.decodeFromString(WebDocAnnotations.serializer(), f.readText())
+    /** Reads the notes as they are on disk, replaying the journal; touches nothing. */
+    fun loadAnnotations(id: String): WebDocAnnotations = inkStore(id).load(openForSession = false)
+
+    /** Reads annotations without side effects; null if unreadable. For diagnostics. */
+    fun peekAnnotations(id: String): WebDocAnnotations? =
+        try {
+            inkStore(id).load(openForSession = false)
         } catch (e: Exception) {
             null
         }
-    }
 
     /** Identifies this library (its folder) for process-wide sharing of per-document state. */
     val path: String get() = baseDir.absolutePath
@@ -90,7 +81,7 @@ class WebDocLibrary(
     fun saveAnnotations(
         id: String,
         annotations: WebDocAnnotations,
-    ) = atomicWrite(File(docDir(id), "annotations.json"), json.encodeToString(WebDocAnnotations.serializer(), annotations))
+    ) = inkStore(id).write(annotations, null, 0)
 
     fun delete(id: String): Boolean = docDir(id).deleteRecursively()
 
