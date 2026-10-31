@@ -39,8 +39,8 @@ class WebAnnotationStoreTest {
         write(activity, "a.html", 1)
         assertEquals(1, pane.page("a.html").strokes.size)
         WebAnnotationStore.release(pane)
-        // Still open for the activity: the last holder flushes.
-        assertEquals(0, library.loadAnnotations("doc").strokes.size)
+        // Still open for the activity: only the last holder checkpoints (the journal already has the stroke).
+        assertFalse(File(library.docDir("doc"), "state.json").exists())
         WebAnnotationStore.release(activity)
         assertEquals(1, library.loadAnnotations("doc").strokes["a.html"]?.size)
     }
