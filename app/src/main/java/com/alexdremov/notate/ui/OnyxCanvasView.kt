@@ -1122,13 +1122,9 @@ class OnyxCanvasView
             if (width == 0 || height == 0) return
             val limit = Rect()
             getLocalVisibleRect(limit)
-            if (isRawDrawingActive) {
-                helper.setRawDrawingEnabled(false)
-                helper.setLimitRect(limit, exclusionRects)
-                helper.setRawDrawingEnabled(true)
-            } else {
-                helper.setLimitRect(limit, exclusionRects)
-            }
+            helper.setLimitRect(limit, exclusionRects)
+            // The driver only picks up a new limit when raw drawing restarts.
+            inkArbiter.restart(this)
         }
 
         /** True if a stylus point (view coordinates) falls on the toolbar or another UI-only area. */
