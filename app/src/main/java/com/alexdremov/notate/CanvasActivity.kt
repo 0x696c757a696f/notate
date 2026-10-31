@@ -1515,6 +1515,14 @@ class CanvasActivity : AppCompatActivity() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Rotation: popups are anchored in old coordinates, and the floating toolbar may now be off screen.
+        activePenPopup?.dismiss()
+        activePenPopup = null
+        binding.root.post { toolbarCoordinator.ensureOnScreen() }
+    }
+
     override fun onResume() {
         super.onResume()
         book?.onHostResume()

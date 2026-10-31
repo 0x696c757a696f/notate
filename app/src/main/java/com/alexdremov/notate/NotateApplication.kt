@@ -1,9 +1,13 @@
 package com.alexdremov.notate
 
+import android.app.Activity
 import android.app.Application
+import android.content.pm.ActivityInfo
+import android.os.Bundle
 import android.os.Build
 import com.alexdremov.notate.config.CanvasConfig
 import com.alexdremov.notate.data.PreferencesManager
+import com.alexdremov.notate.data.ScreenOrientationMode
 import com.alexdremov.notate.util.Logger
 import com.onyx.android.sdk.rx.RxBaseAction
 import com.onyx.android.sdk.utils.ResManager
@@ -31,6 +35,34 @@ class NotateApplication : Application() {
         CanvasConfig.DEBUG_ENABLE_PROFILING = PreferencesManager.isDebugProfilingEnabled(this)
 
         logDeviceInfo()
+
+        // One owner for rotation: every activity follows the user's orientation setting.
+        registerActivityLifecycleCallbacks(
+            object : ActivityLifecycleCallbacks {
+                private fun apply(activity: Activity) {
+                    activity.requestedOrientation =
+                        when (PreferencesManager.getScreenOrientation(activity)) {
+                            ScreenOrientationMode.AUTO -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                            ScreenOrientationMode.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                            ScreenOrientationMode.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        }
+                }
+
+                override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = apply(activity)
+
+                override fun onActivityResumed(activity: Activity) = apply(activity)
+
+                override fun onActivityStarted(activity: Activity) {}
+
+                override fun onActivityPaused(activity: Activity) {}
+
+                override fun onActivityStopped(activity: Activity) {}
+
+                override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+
+                override fun onActivityDestroyed(activity: Activity) {}
+            },
+        )
 
         // Initialize Onyx SDK managers
         ResManager.init(this)

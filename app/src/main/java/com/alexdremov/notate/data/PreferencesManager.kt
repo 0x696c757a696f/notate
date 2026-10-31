@@ -22,6 +22,9 @@ import kotlinx.serialization.protobuf.ProtoNumber
 /** What a finger does on the page. */
 enum class FingerMode { SCROLL, OFF }
 
+/** Screen rotation policy. AUTO follows the sensor even when the system's auto-rotate toggle is off (Boox default). */
+enum class ScreenOrientationMode { AUTO, PORTRAIT, LANDSCAPE }
+
 @Serializable
 enum class SortOption(
     val displayName: String,
@@ -62,6 +65,7 @@ object PreferencesManager {
     private const val KEY_SCRIBBLE_TO_ERASE = "scribble_to_erase"
     private const val KEY_PALM_REJECTION = "palm_rejection_enabled"
     private const val KEY_FINGER_MODE = "finger_mode"
+    private const val KEY_SCREEN_ORIENTATION = "screen_orientation"
     private const val KEY_HANDEDNESS = "handedness"
     private const val KEY_SHOW_FINGER_MIGRATION_BANNER = "show_finger_migration_banner"
     private const val KEY_DISTRACTION_FREE = "distraction_free_enabled"
@@ -289,6 +293,22 @@ object PreferencesManager {
     ) {
         migratePalmRejectionSetting(context)
         getPrefs(context).edit().putString(KEY_FINGER_MODE, mode.name).apply()
+    }
+
+    fun getScreenOrientation(context: Context): ScreenOrientationMode =
+        try {
+            ScreenOrientationMode.valueOf(
+                getPrefs(context).getString(KEY_SCREEN_ORIENTATION, ScreenOrientationMode.AUTO.name) ?: ScreenOrientationMode.AUTO.name,
+            )
+        } catch (e: Exception) {
+            ScreenOrientationMode.AUTO
+        }
+
+    fun setScreenOrientation(
+        context: Context,
+        mode: ScreenOrientationMode,
+    ) {
+        getPrefs(context).edit().putString(KEY_SCREEN_ORIENTATION, mode.name).apply()
     }
 
     fun isFingerOff(context: Context): Boolean = getFingerMode(context) == FingerMode.OFF
