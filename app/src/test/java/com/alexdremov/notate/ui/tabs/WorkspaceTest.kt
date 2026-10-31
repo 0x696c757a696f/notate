@@ -92,3 +92,40 @@ class WorkspaceTest {
         assertEquals(SplitDrag.Outcome.Collapse(keepIndex = 0), SplitDrag.resolve(0.95f))
     }
 }
+
+class WorkspaceBookSplitTest {
+    private fun note(p: String) = DocTab(DocKind.NOTE, p, p)
+
+    private fun book(p: String) = DocTab(DocKind.WEB, p, p)
+
+    @Test
+    fun `book and note split survives swap and ratio update`() {
+        var ws = Workspace().open(note("n")).open(book("b")).split("b", "n", SplitOrientation.STACKED)
+        ws = ws.updateSplit("b") { it.copy(first = it.second, second = it.first, ratio = 1f - it.ratio) }
+        val s = ws.splitFor("b")!!
+        assertEquals("n", s.first)
+        assertEquals("b", s.second)
+        assertEquals(SplitOrientation.STACKED, s.orientation)
+        ws = ws.updateSplit("n") { it.copy(ratio = 0.3f) }
+        assertEquals(0.3f, ws.splitFor("b")!!.ratio, 0f)
+    }
+
+    @Test
+    fun `closing the partner removes the split`() {
+        val ws = Workspace().open(note("n")).open(book("b")).split("b", "n", SplitOrientation.SIDE_BY_SIDE).close("n")
+        assertNull(ws.splitFor("b"))
+    }
+
+    @Test
+    fun `a new split replaces an older split of either path`() {
+        val ws =
+            Workspace()
+                .open(note("n"))
+                .open(book("a"))
+                .open(book("b"))
+                .split("a", "n", SplitOrientation.SIDE_BY_SIDE)
+                .split("b", "n", SplitOrientation.SIDE_BY_SIDE)
+        assertNull(ws.splitFor("a"))
+        assertEquals("n", ws.splitFor("b")?.partnerOf("b"))
+    }
+}

@@ -205,6 +205,16 @@ class WebDocActivity : AppCompatActivity() {
                     finish()
                     return
                 }
+                // A book that is split with a note is shown by the note editor, whatever the
+                // entry point (library tap, tab, deep link), so the split is always restored.
+                val ws = WorkspaceStore.load(this)
+                val host = TabNavigator.hostFor(ws, DocTab(DocKind.WEB, docId, m.title))
+                if (host.kind == DocKind.NOTE) {
+                    startActivity(TabNavigator.intentFor(this, host, ws))
+                    finish()
+                    overridePendingTransition(0, 0)
+                    return
+                }
                 open(m)
             }
             uri != null -> importThenOpen(uri, intent.getBooleanExtra(EXTRA_IS_FOLDER, false))
