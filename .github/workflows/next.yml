@@ -1,0 +1,104 @@
+name: Notate Next
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ "**" ]
+    tags-ignore: [ "**" ]
+    paths: &paths
+      - 'next/**'
+      - 'settings.gradle.kts'
+      - 'build.gradle.kts'
+      - 'gradle/**'
+      - '.github/workflows/next.yml'
+      - 'ocr-runtime/**'
+  pull_request:
+    branches: [ "main" ]
+    paths: *paths
+  workflow_dispatch:
+
+concurrency:
+  group: next-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core tests (pure JVM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with: { java-version: '21', distribution: 'temurin' }
+      - uses: gradle/actions/setup-gradle@v6
+        with: { cache-provider: basic }
+      - run: ./gradlew -p next/core test --no-daemon
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: next-core-test-reports
+          path: next/core/*/build/reports/tests/
+          retention-days: 7
+
+  guards:
+    name: Architecture guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: next/ci/guards.sh
+
+  android-unit:
+    name: Android unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with: { java-version: '21', distribution: 'temurin' }
+      - uses: gradle/actions/setup-gradle@v6
+        with: { cache-provider: basic }
+      - run: >
+          ./gradlew
+          :next:platform:testDebugUnitTest :next:render:testDebugUnitTest :next:editor:testDebugUnitTest
+          :next:pdf:testDebugUnitTest :next:web:testDebugUnitTest :next:export:testDebugUnitTest
+          :next:search:testDebugUnitTest :next:library:testDebugUnitTest :next:app:testDebugUnitTest
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: next-android-test-reports
+          path: next/android/*/build/reports/tests/
+          retention-days: 7
+
+  next-apk:
+    name: Notate Next arm64-v8a debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with: { java-version: '21', distribution: 'temurin' }
+      - uses: gradle/actions/setup-gradle@v6
+        with: { cache-provider: basic }
+      # versionCode = minutes since 2026-01-01 UTC (same scheme as the legacy app and release.yml).
+      - name: Build debug APK
+        run: |
+          code=$(( ($(date -u +%s) - 1767225600) / 60 ))
+          ./gradlew :next:app:assembleDebug -Pnotate.versionCode=$code -Pnotate.versionName=next-ci.${{ github.run_number }}
+      - name: Verify package name and ABIs
+        run: |
+          apk=$(ls next/android/app/build/outputs/apk/debug/*.apk | head -n1)
+          abis=$(unzip -Z1 "$apk" 'lib/*' 2>/dev/null | cut -d/ -f2 | sort -u || true)
+          echo "Native ABIs in $apk: ${abis:-<none>}"
+          if [ -n "$abis" ] && [ "$abis" != "arm64-v8a" ]; then
+            echo "::error::APK contains non-arm64-v8a native libraries"; exit 1
+          fi
+          aapt2=$(ls $ANDROID_HOME/build-tools/*/aapt2 | sort -V | tail -n1)
+          "$aapt2" dump badging "$apk" | tee /tmp/badging.txt | head -n1
+          grep -q "^package: name='com.alexdremov.notate.next'" /tmp/badging.txt \
+            || { echo "::error::Unexpected package name"; exit 1; }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notate-next-debug-${{ github.run_number }}
+          path: next/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 14

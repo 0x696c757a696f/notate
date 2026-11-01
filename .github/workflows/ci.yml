@@ -8,8 +8,10 @@ on:
   push:
     branches: [ "**" ]
     tags-ignore: [ "**" ]
+    paths-ignore: [ 'next/**', 'plans/**', '.github/workflows/next.yml' ]
   pull_request:
     branches: [ "main" ]
+    paths-ignore: [ 'next/**', 'plans/**', '.github/workflows/next.yml' ]
   workflow_dispatch:
 
 concurrency:
