@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="library_title">Notate Next</string>
+    <string name="library_empty">No notebooks yet</string>
+    <string name="library_new_notebook">New notebook</string>
+</resources>

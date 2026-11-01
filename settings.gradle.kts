@@ -23,3 +23,13 @@ dependencyResolutionManagement {
 rootProject.name = "Notate"
 include(":app")
 include(":ocr-runtime")
+
+// Notate Next (rewrite, see plans/rewrite): pure-JVM core as an included build + Android shells.
+includeBuild("next/core")
+include(
+    ":next:platform", ":next:render", ":next:editor", ":next:pdf", ":next:web",
+    ":next:export", ":next:search", ":next:library", ":next:app",
+)
+listOf("platform", "render", "editor", "pdf", "web", "export", "search", "library", "app").forEach {
+    project(":next:$it").projectDir = file("next/android/$it")
+}
