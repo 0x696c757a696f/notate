@@ -11,7 +11,11 @@ import app.notate.platform.fs.AppPaths
 import app.notate.platform.log.AndroidLogger
 import app.notate.platform.log.CrashHandler
 import app.notate.platform.thread.ThreadChecks
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 /** Process entry point. Builds [AppGraph] once; main thread only. */
 class NotateApp : Application() {
@@ -30,6 +34,9 @@ class NotateApp : Application() {
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_STOP) graph.appScope.launch { graph.registry.flushAll() }
             },
+        )
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            TrashPurgeWorker.UNIQUE_NAME, ExistingPeriodicWorkPolicy.KEEP, PeriodicWorkRequestBuilder<TrashPurgeWorker>(1, TimeUnit.DAYS).build(),
         )
     }
 

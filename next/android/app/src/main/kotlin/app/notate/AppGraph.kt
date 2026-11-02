@@ -19,12 +19,17 @@ import app.notate.core.store.DocStoreFactory
 import app.notate.core.store.doc.SqliteDocStoreFactory
 import app.notate.core.store.library.LibraryStore
 import app.notate.core.store.library.SqliteLibraryStore
+import app.notate.library.LibraryDeps
 import app.notate.platform.device.DeviceInfo
 import app.notate.platform.fs.AppPaths
 import app.notate.platform.log.AndroidLogger
 import app.notate.platform.prefs.PrefsKeyValueStore
 import app.notate.platform.sql.AndroidSqlDriverFactory
 import app.notate.platform.thread.DispatcherSet
+import app.notate.render.ink.GeometryCache
+import app.notate.render.ink.InkRenderer
+import app.notate.render.paper.BackgroundRendererSet
+import app.notate.render.thumb.ThumbnailRenderer
 import app.notate.web.WebImporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -87,6 +92,20 @@ class AppGraph(
 
     val documents = DocumentService(paths, docStoreFactory, { libraryStore }, dispatchers, clock)
 
+    val libraryDocs = LibraryDocsImpl(paths, documents, docStoreFactory, sqlDrivers, registry, { libraryStore }, dispatchers, clock)
+
+    val covers = CoverService(
+        paths, registry, { libraryStore },
+        ThumbnailRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), dispatchers.render),
+        dispatchers, scope, logger,
+    )
+
+    /** Bookshelf dependencies; [libraryStore] must have been opened off the main thread first. */
+    fun libraryDeps() = LibraryDeps(
+        store = libraryStore, docs = libraryDocs, clock = clock, logger = logger, coverFile = paths::coverFile,
+        defaultTemplate = settings.defaultTemplate, onNotebookCreated = covers::generateNow,
+    )
+
     init {
         EditorEnv.deps = EditorDeps(
             registry = registry,
@@ -98,7 +117,10 @@ class AppGraph(
             clock = clock,
             appScope = appScope,
             logger = logger,
-            onDocumentClosed = { id -> appScope.launch { documents.touch(id) } },
+            onDocumentClosed = { id ->
+                appScope.launch { documents.touch(id) }
+                covers.onClosed(id)
+            },
             paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
         )
