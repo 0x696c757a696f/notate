@@ -27,6 +27,7 @@ class SettingsTest {
         assertThat(s.backupUri.value).isNull()
         assertThat(s.backupFreq.value).isEqualTo(BackupFreq.OFF)
         assertThat(s.debugHud.value).isFalse()
+        assertThat(s.inkDiagnostics.value).isFalse()
     }
 
     @Test fun writeUpdatesFlowAndPersists() {

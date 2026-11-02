@@ -92,6 +92,54 @@ fun NewNotebookDialog(
     }
 }
 
+/** Settings → Default template: the paper, orientation and template choices of [NewNotebookDialog] without the title. */
+@Composable
+fun DefaultTemplateDialog(initial: PageTemplate, onPick: (PageTemplate) -> Unit, onDismiss: () -> Unit) {
+    var size by remember { mutableStateOf(initial.size) }
+    var landscape by remember { mutableStateOf(initial.landscape) }
+    var option by remember { mutableStateOf(TemplateCatalog.find(initial.background) ?: TemplateCatalog.LINED) }
+    NotateDialog(
+        title = stringResource(R.string.settings_default_template), onDismiss = onDismiss,
+        buttons = {
+            DialogButton(stringResource(R.string.dialog_cancel), onClick = onDismiss)
+            DialogButton(stringResource(R.string.settings_save), filled = true) { onPick(TemplateCatalog.template(size, landscape, option)) }
+        },
+    ) {
+        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Labeled(stringResource(R.string.new_notebook_paper)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SIZES.forEach { (sz, res) -> Chip(stringResource(res), sz == size) { size = sz } }
+                }
+            }
+            if (size != PageSize.WHITEBOARD) {
+                Labeled(stringResource(R.string.new_notebook_orientation)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Chip(stringResource(R.string.orientation_portrait), !landscape) { landscape = false }
+                        Chip(stringResource(R.string.orientation_landscape), landscape) { landscape = true }
+                    }
+                }
+            }
+            Labeled(stringResource(R.string.new_notebook_template)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TemplateCatalog.ALL.chunked(4).forEach { row ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            row.forEach { o -> TemplateCell(o, o == option, Modifier.weight(1f)) { option = o } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Short description of a template for a settings row, e.g. "A4 · Lined". */
+@Composable
+fun templateSummary(t: PageTemplate): String {
+    val size = SIZES.firstOrNull { it.first == t.size }?.second?.let { stringResource(it) } ?: ""
+    val opt = TemplateCatalog.find(t.background)?.let { stringResource(nameRes(it)) } ?: stringResource(R.string.template_blank)
+    return "$size · $opt"
+}
+
 @Composable
 private fun Labeled(label: String, content: @Composable () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
