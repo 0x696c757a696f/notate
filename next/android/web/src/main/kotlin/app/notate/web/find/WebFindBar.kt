@@ -26,7 +26,7 @@ class WebFindBar(
     private val onAllChapters: (Boolean) -> Unit,
     private val onClose: () -> Unit,
 ) : LinearLayout(context) {
-    private val field = EditText(context).apply {
+    private val input = EditText(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         setTextColor(Color.BLACK)
         setSingleLine()
@@ -59,7 +59,7 @@ class WebFindBar(
         orientation = HORIZONTAL
         setBackgroundColor(Color.WHITE)
         gravity = Gravity.CENTER_VERTICAL
-        addView(field, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+        addView(input, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
         addView(count)
         addView(previous, LayoutParams(context.dp(44), context.dp(HEIGHT_DP)))
         addView(next, LayoutParams(context.dp(44), context.dp(HEIGHT_DP)))
@@ -77,12 +77,12 @@ class WebFindBar(
         onAllChapters(allChapters)
     }
 
-    val query: String get() = field.text.toString()
+    val query: String get() = input.text.toString()
 
     fun focusField() {
-        field.requestFocus()
+        input.requestFocus()
         (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
-            ?.showSoftInput(field, 0)
+            ?.showSoftInput(input, 0)
     }
 
     /** Shows "[active] of [total]"; an empty query shows nothing, no match shows "0 of 0". */
