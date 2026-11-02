@@ -11,6 +11,7 @@ import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /** Rasterizes one tile; the seam [TileScheduler] is tested against. */
 interface TileRasterizer {
