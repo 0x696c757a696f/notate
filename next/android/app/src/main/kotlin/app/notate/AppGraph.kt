@@ -28,6 +28,7 @@ import app.notate.render.ink.GeometryCache
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.thumb.ThumbnailRenderer
+import app.notate.web.WebImporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -59,6 +60,20 @@ class AppGraph(
     val libraryStore: LibraryStore by lazy {
         SqliteLibraryStore.open(sqlDrivers.open(paths.libraryDb, readOnly = false), dispatchers.io.limitedParallelism(1), clock)
     }
+
+    /** Imports EPUB / HTML books as web documents. */
+    val webImporter = WebImporter(
+        context = app,
+        stagingRoot = paths.cacheDir,
+        docDir = paths::docDir,
+        docs = docStoreFactory,
+        libraryProvider = { libraryStore },
+        settings = settings,
+        clock = clock,
+        io = dispatchers.io,
+        logger = logger,
+        paneWidthDp = { app.resources.displayMetrics.let { it.widthPixels / it.density } },
+    )
 
     val registry = DocumentRegistry(
         opener = object : DocumentOpener {

@@ -38,7 +38,10 @@ class LibraryActivity : ComponentActivity() {
                         covers = covers,
                         onOpenDocument = { id -> open(vm, id) },
                         onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
-                        extraAdd = if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),
+                        extraAdd = listOf(
+                            getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
+                            getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },
+                        ) + if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),
                     )
                 }
             }

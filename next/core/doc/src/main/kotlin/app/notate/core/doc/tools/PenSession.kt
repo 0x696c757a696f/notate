@@ -28,6 +28,7 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
         if (preset.kind == ToolKind.HIGHLIGHTER) PenType.HIGHLIGHTER else preset.pen ?: PenType.BALLPOINT,
         preset.color ?: 0xFF000000.toInt(), preset.widthPt ?: 1.134f,
     )
+    private val pressureGain = preset.pressure / 0.7f
     private val sampler = StrokeSampler()
     private val dwell = DwellDetector()
     private var started = false
@@ -80,7 +81,7 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     }
 
     private fun feed(p: InkPoint) {
-        sampler.add(p)
+        sampler.add(if (pressureGain == 1f) p else p.copy(pressure = (0.5f + (p.pressure - 0.5f) * pressureGain).coerceIn(0f, 1f)))
         dwell.onPoint(p.x, p.y, ctx.clock.now())
     }
 

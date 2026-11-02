@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Notate Next</string>
+    <string name="import_progress">Importing book…</string>
+    <string name="import_unsupported">This file isn\'t a supported book or web page.</string>
+    <string name="import_too_large">This book is too large (over 1 GB).</string>
+    <string name="import_ok">OK</string>
+    <string name="import_book">Import EPUB or HTML</string>
+    <string name="import_folder">Import HTML folder</string>
     <string name="create_test_notebook">Create 50-page test notebook</string>
 </resources>

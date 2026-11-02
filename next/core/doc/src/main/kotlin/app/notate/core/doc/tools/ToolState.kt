@@ -12,7 +12,7 @@ import kotlinx.serialization.Serializable
 
 /** Pen or highlighter slots: three colours and widths; [color] / [width] index the selected ones. */
 @Serializable
-data class PenSlots(val pen: PenType, val colors: List<Int>, val widthsPt: List<Float>, val color: Int = 0, val width: Int = 1)
+data class PenSlots(val pen: PenType, val colors: List<Int>, val widthsPt: List<Float>, val color: Int = 0, val width: Int = 1, val pressure: Float = 0.7f)
 
 /** Toolbar data model, persisted as JSON under the `tool_state` setting. */
 @Serializable
@@ -40,7 +40,7 @@ data class ToolState(
     }
 
     private fun penPreset(kind: ToolKind, s: PenSlots) =
-        ToolPreset(kind, pen = s.pen, color = pick(s.colors, s.color), widthPt = pick(s.widthsPt, s.width))
+        ToolPreset(kind, pen = s.pen, color = pick(s.colors, s.color), widthPt = pick(s.widthsPt, s.width), pressure = s.pressure)
 
     private fun <T> pick(list: List<T>, i: Int): T = list[i.coerceIn(0, list.size - 1)]
 

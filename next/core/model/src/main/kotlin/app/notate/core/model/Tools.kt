@@ -13,6 +13,8 @@ data class ToolPreset(
     val pen: PenType? = null,
     val color: Int? = null,
     val widthPt: Float? = null,
+    /** Pressure sensitivity 0..1 of FOUNTAIN / PENCIL; 0.7 leaves recorded pressure unchanged. */
+    val pressure: Float = 0.7f,
     val eraserMode: EraserMode? = null,
     val eraserRadiusDp: Float? = null,
     val eraseHighlighterOnly: Boolean = false,

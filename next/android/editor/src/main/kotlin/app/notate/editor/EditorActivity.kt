@@ -3,7 +3,6 @@ package app.notate.editor
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,8 +10,7 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.ViewGroup
-import android.widget.FrameLayout
-import android.widget.LinearLayout
+import android.view.View
 import android.widget.Toast
 import app.notate.core.doc.registry.DocumentHandle
 import app.notate.core.doc.save.SaveState
@@ -26,28 +24,31 @@ import app.notate.core.input.PointerAction
 import app.notate.core.input.PointerKind
 import app.notate.core.input.PointerSample
 import app.notate.core.model.DocId
-import app.notate.core.model.EraserMode
-import app.notate.core.model.ToolKind
+import app.notate.core.input.EpdMode
+import app.notate.core.input.EpdTiming
+import app.notate.core.model.DocKind
 import app.notate.editor.debug.DebugHud
 import app.notate.editor.input.TouchAdapter
+import app.notate.editor.chrome.EditorChrome
 import app.notate.editor.pane.NotebookPane
 import app.notate.editor.pane.PaneHost
-import app.notate.editor.toolbar.MiniToolbar
+import app.notate.editor.popup.MenuEntry
+import app.notate.editor.popup.MoreMenu
+import app.notate.editor.toolbar.ToolbarActions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-/** Full-screen editor for one notebook: toolbar on top, one [NotebookPane] below. Main thread only. */
-class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
+/** Full-screen editor for one notebook: tab row and toolbar on top, one [NotebookPane] below. Main thread only. */
+class EditorActivity : Activity(), PaneHost, ToolbarActions {
     override val arbiter = InkArbiter()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val main = Handler(Looper.getMainLooper())
     private val deps get() = EditorEnv.deps
 
-    private lateinit var toolbar: MiniToolbar
-    private lateinit var container: FrameLayout
+    private lateinit var chrome: EditorChrome
     private lateinit var hud: DebugHud
     private lateinit var adapter: TouchAdapter
     private lateinit var palm: PalmRejector
@@ -55,6 +56,7 @@ class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
     private var handle: DocumentHandle? = null
     private var pane: NotebookPane? = null
     private var docId: DocId? = null
+    private var route = Route.NONE
     private val recentFingers = ArrayDeque<String>()
     private var ticking = false
     private val tickRunnable = object : Runnable {
@@ -90,16 +92,14 @@ class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
     }
 
     private fun buildViews() {
-        toolbar = MiniToolbar(this, this)
-        container = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        chrome = EditorChrome(
+            this, deps.toolController, arbiter, deps.epd, deps.device.xdpi, this,
+            onHome = { finish() }, onClose = { finish() },
+        )
+        chrome.popups.onRectChanged = { pane?.refreshExcludes() }
+        chrome.onFocusChanged = { pane?.refreshExcludes() }
         hud = DebugHud(this) { hudLines() }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        }
-        setContentView(root)
+        setContentView(chrome)
     }
 
     private fun observeSettings() {
@@ -114,7 +114,7 @@ class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
         }
         scope.launch { d.settings.debugHud.collect { hud.setShown(it) } }
         scope.launch {
-            d.toolController.state.collect { toolbar.setTool(it.active, it.eraserMode) }
+            d.toolController.state.collect { chrome.toolbar.render(d.toolController.baseState()) }
         }
     }
 
@@ -136,8 +136,11 @@ class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
             handle = h
             val p = NotebookPane(this@EditorActivity, h, deps, this@EditorActivity, scope)
             pane = p
-            container.addView(p.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            container.addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val area = chrome.paneArea
+            area.addView(p.view, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            area.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val reason = if (h.editor.meta.value.kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
+            chrome.toolbar.bind(p.capabilities, getString(reason))
             arbiter.block(app.notate.core.input.BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
             dispatcher.focusedPane = p.id
             bind(h)
@@ -145,13 +148,13 @@ class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
     }
 
     private fun bind(h: DocumentHandle) {
-        scope.launch { h.editor.meta.collect { toolbar.setTitle(it.title) } }
-        scope.launch { h.editor.history.canUndo.collect { toolbar.setUndoRedo(it, h.editor.history.canRedo.value) } }
-        scope.launch { h.editor.history.canRedo.collect { toolbar.setUndoRedo(h.editor.history.canUndo.value, it) } }
+        scope.launch { h.editor.meta.collect { chrome.tabs.setTitle(it.title) } }
+        scope.launch { h.editor.history.canUndo.collect { chrome.toolbar.setUndoRedo(it, h.editor.history.canRedo.value) } }
+        scope.launch { h.editor.history.canRedo.collect { chrome.toolbar.setUndoRedo(h.editor.history.canUndo.value, it) } }
         scope.launch {
             var busy = false
             h.save.state.collect { st ->
-                toolbar.setSaveState(st)
+                chrome.tabs.setSaveState(st)
                 if (st == SaveState.Clean && busy) pane?.onSaveIdle(SystemClock.uptimeMillis())
                 busy = st != SaveState.Clean
             }
@@ -160,33 +163,66 @@ class EditorActivity : Activity(), PaneHost, MiniToolbar.Callbacks {
 
     // --- PaneHost -------------------------------------------------------------------------------------------
 
-    override fun excludeRects(): List<android.graphics.Rect> = emptyList()
+    override fun excludeRects(): List<android.graphics.Rect> = pane?.let { chrome.excludeRectsFor(it.view) } ?: emptyList()
+
+    override fun onFocusModeRequested() = chrome.setFocusMode(!chrome.focusMode)
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
     // --- Toolbar --------------------------------------------------------------------------------------------
 
-    override fun onPen() = deps.toolController.select(ToolKind.PEN)
-
-    override fun onEraser() {
-        val tc = deps.toolController
-        val s = tc.state.value
-        if (s.active == ToolKind.ERASER) {
-            tc.update { it.copy(eraserMode = if (it.eraserMode == EraserMode.PARTIAL) EraserMode.STROKE else EraserMode.PARTIAL) }
-        } else {
-            tc.select(ToolKind.ERASER)
-        }
-    }
-
     override fun onUndo() { handle?.editor?.undo() }
 
     override fun onRedo() { handle?.editor?.redo() }
 
-    override fun onBack() = finish()
+    override fun onPages() { pane?.showPageGrid() }
+
+    override fun onSplit() = Unit
+
+    override fun onMore(anchor: View) {
+        val items = listOf(
+            MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) },
+            MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() },
+        )
+        MoreMenu(chrome.popups, anchor, items).show()
+    }
+
+    override fun onToolbarChanged() {
+        if (::chrome.isInitialized) deps.epd.refresh(chrome.toolbar, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+    }
+
+    private fun refreshScreen() {
+        val p = pane
+        val full = { deps.epd.refresh(chrome, EpdMode.GC, null, EpdTiming.NOW) }
+        if (p != null) arbiter.pausedDuring(p, app.notate.core.input.BlockReason.REFRESH, full) else full()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (chrome.popups.isShowing) chrome.popups.dismiss() else super.onBackPressed()
+    }
 
     // --- Input ----------------------------------------------------------------------------------------------
 
+    private enum class Route { NONE, SWALLOW, VIEWS }
+
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        val action = ev.actionMasked
+        val end = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+        if (action == MotionEvent.ACTION_DOWN) {
+            route = Route.NONE
+            val popups = chrome.popups
+            if (popups.interceptOutside(ev)) {      // a finger outside an open popup only closes it
+                route = Route.SWALLOW
+                return true
+            }
+            if (popups.isShowing && popups.contains(ev)) route = Route.VIEWS
+        }
+        when (route) {
+            Route.SWALLOW -> { if (end) route = Route.NONE; return true }
+            Route.VIEWS -> { val r = super.dispatchTouchEvent(ev); if (end) route = Route.NONE; return r }
+            Route.NONE -> Unit
+        }
         val p = pane ?: return super.dispatchTouchEvent(ev)
         val panes = listOf<app.notate.core.input.PaneTarget>(p)
         var consumed = false
