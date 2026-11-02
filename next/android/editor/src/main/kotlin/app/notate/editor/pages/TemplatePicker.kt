@@ -52,9 +52,9 @@ class TemplatePicker(
                     ),
                 )
             }
-            col.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+            col.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(48)))
         }
-        col.addView(check, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+        col.addView(check, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(48)))
         host.show(null as View?, col, app.notate.editor.popup.Placement.CENTER)
     }
 
