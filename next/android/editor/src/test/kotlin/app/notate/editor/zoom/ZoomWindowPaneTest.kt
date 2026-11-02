@@ -48,6 +48,11 @@ class ZoomWindowPaneTest {
     private var openedStore: app.notate.core.store.DocStore? = null
     private val changes = ArrayList<Boolean>()
 
+    /** Tile rendering is not under test and is slow and memory hungry in Robolectric: render jobs are accepted and never run. */
+    private val noRender = object : kotlinx.coroutines.CoroutineDispatcher() {
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) = Unit
+    }
+
     private fun registry(factory: SqliteDocStoreFactory) = DocumentRegistry(
         opener = object : DocumentOpener {
             override suspend fun open(id: DocId): Opened {
@@ -70,7 +75,7 @@ class ZoomWindowPaneTest {
         val settings = Settings(InMemoryKeyValueStore()).also { it.holdShapeMs.set(0) }
         val deps = EditorDeps(
             registry = registry, settings = settings, toolController = ToolController(settings),
-            dispatchers = DispatcherSet(Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.IO),
+            dispatchers = DispatcherSet(Dispatchers.Unconfined, noRender, Dispatchers.Unconfined, Dispatchers.IO),
             device = DeviceInfo(isOnyx = false, model = "test", xdpi = 227f, maxPressure = 4096f, hasRawDrawing = false),
             epd = EpdScheduler(NoEpdPort), clock = FakeClock(), appScope = appScope, logger = Logger.NONE,
         )
