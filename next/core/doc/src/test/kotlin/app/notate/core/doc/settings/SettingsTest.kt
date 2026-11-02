@@ -1,0 +1,69 @@
+package app.notate.core.doc.settings
+
+import app.notate.core.model.PageLayoutMode
+import app.notate.core.model.PageSize
+import app.notate.core.model.PageTemplate
+import app.notate.core.testing.InMemoryKeyValueStore
+import com.google.common.truth.Truth.assertThat
+import org.junit.Test
+
+class SettingsTest {
+    @Test fun defaults() {
+        val s = Settings(InMemoryKeyValueStore())
+        assertThat(s.fingerMode.value).isEqualTo(FingerMode.SCROLL)
+        assertThat(s.handedness.value).isEqualTo(Handedness.RIGHT)
+        assertThat(s.tap2.value).isEqualTo(Tap2Action.UNDO)
+        assertThat(s.tap3.value).isEqualTo(Tap3Action.REDO)
+        assertThat(s.penButton.value).isEqualTo(PenButton.ERASER)
+        assertThat(s.holdShapeMs.value).isEqualTo(600)
+        assertThat(s.driverInk.value).isTrue()
+        assertThat(s.pageLayout.value).isEqualTo(PageLayoutMode.CONTINUOUS)
+        assertThat(s.gcEvery.value).isEqualTo(0)
+        assertThat(s.toolbarPos.value).isEqualTo(ToolbarPos.TOP)
+        assertThat(s.defaultTemplate.value).isEqualTo(PageTemplate.DEFAULT)
+        assertThat(s.webNetworkDefault.value).isFalse()
+        assertThat(s.webJsDefault.value).isTrue()
+        assertThat(s.ocrEnabled.value).isTrue()
+        assertThat(s.backupUri.value).isNull()
+        assertThat(s.backupFreq.value).isEqualTo(BackupFreq.OFF)
+        assertThat(s.debugHud.value).isFalse()
+    }
+
+    @Test fun writeUpdatesFlowAndPersists() {
+        val kv = InMemoryKeyValueStore()
+        val s = Settings(kv)
+        s.handedness.set(Handedness.LEFT)
+        s.holdShapeMs.set(900)
+        s.backupUri.set("content://x")
+        s.defaultTemplate.set(PageTemplate.DEFAULT.copy(size = PageSize.A5))
+        assertThat(s.handedness.value).isEqualTo(Handedness.LEFT)
+        assertThat(kv.map["handedness"]).isEqualTo("LEFT")
+        val s2 = Settings(kv)
+        assertThat(s2.handedness.value).isEqualTo(Handedness.LEFT)
+        assertThat(s2.holdShapeMs.value).isEqualTo(900)
+        assertThat(s2.backupUri.value).isEqualTo("content://x")
+        assertThat(s2.defaultTemplate.value.size).isEqualTo(PageSize.A5)
+        s2.backupUri.set(null)
+        assertThat(kv.map).doesNotContainKey("backup_uri")
+    }
+
+    @Test fun unknownValuesFallBackToDefault() {
+        val kv = InMemoryKeyValueStore()
+        kv.putString("handedness", "AMBIDEXTROUS")
+        kv.putString("hold_shape_ms", "123")
+        kv.putString("driver_ink", "maybe")
+        kv.putString("default_template", "{not json")
+        val s = Settings(kv)
+        assertThat(s.handedness.value).isEqualTo(Handedness.RIGHT)
+        assertThat(s.holdShapeMs.value).isEqualTo(600)
+        assertThat(s.driverInk.value).isTrue()
+        assertThat(s.defaultTemplate.value).isEqualTo(PageTemplate.DEFAULT)
+    }
+
+    @Test fun toolStateStoreRoundTrips() {
+        val t = ToolStateStore(InMemoryKeyValueStore())
+        assertThat(t.getJson("pen")).isNull()
+        t.putJson("pen", "{\"w\":1}")
+        assertThat(t.getJson("pen")).isEqualTo("{\"w\":1}")
+    }
+}
