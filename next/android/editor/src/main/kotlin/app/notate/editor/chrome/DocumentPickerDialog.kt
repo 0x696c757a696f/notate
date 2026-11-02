@@ -59,7 +59,7 @@ class DocumentPickerDialog(
                     ellipsize = android.text.TextUtils.TruncateAt.END
                     setPadding(context.dp(12), 0, context.dp(12), 0)
                     gravity = android.view.Gravity.CENTER_VERTICAL
-                    layoutParams = ListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(ROW_DP))
+                    layoutParams = android.widget.AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(ROW_DP))
                 }
                 t.text = entries[position].title
                 return t
