@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.view.View
 import app.notate.core.doc.registry.DocumentHandle
+import app.notate.core.input.PaneId
 import app.notate.core.model.DocKind
 import app.notate.editor.pane.DocumentPane
 import app.notate.editor.pane.PaneHost
@@ -48,7 +49,7 @@ class EditorDeps(
 
 /** Creates the pane that shows a document of some kind. */
 fun interface PaneFactory {
-    fun create(context: Context, handle: DocumentHandle, deps: EditorDeps, host: PaneHost, scope: CoroutineScope): DocumentPane
+    fun create(context: Context, handle: DocumentHandle, deps: EditorDeps, host: PaneHost, scope: CoroutineScope, id: PaneId): DocumentPane
 }
 
 /** Holder filled by the application at startup. */

@@ -45,6 +45,15 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Extra rows of the More menu that only this kind of pane has. */
     fun moreEntries(): List<app.notate.editor.popup.MenuEntry> = emptyList()
 
+    /** Where the reader should start when the pane is first laid out (a restored split pane); null keeps the document's own position. */
+    fun setInitialView(s: ViewState?) {}
+
+    /** True when the pane draws its own 32 dp bar (a web page); otherwise a split window puts a bar with title and page above it. */
+    val ownsPaneBar: Boolean get() = false
+
+    /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
+    fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
 }
@@ -61,6 +70,9 @@ interface PaneHost {
 
     /** Shows [content] as the window's popup near [anchor] (the pen is kept off the page while it is up); null if unsupported. */
     fun showPopup(anchor: View?, content: View, placement: app.notate.editor.popup.Placement = app.notate.editor.popup.Placement.BELOW_ANCHOR): app.notate.editor.popup.PopupHandle? = null
+
+    /** The pane has a size and is attached to the arbiter: take the pen if this pane has the focus (default: always). */
+    fun claimPen(pane: DocumentPane) { arbiter.setOwner(pane) }
 
     /** Closes the window's popup, if any. */
     fun dismissPopup() {}

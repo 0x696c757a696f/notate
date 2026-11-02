@@ -71,6 +71,15 @@
     <string name="tab_menu_close_others">Close others</string>
     <string name="tab_menu_split">Open in split</string>
     <string name="tab_save_failed">Couldn\'t save your last changes. They\'re kept in memory and will be retried.</string>
+    <string name="split_open_beside">Open beside</string>
+    <string name="split_swap">Swap sides</string>
+    <string name="split_side_by_side">Side by side</string>
+    <string name="split_stack">Stack vertically</string>
+    <string name="split_close_right">Close right pane</string>
+    <string name="split_close_bottom">Close bottom pane</string>
+    <string name="pane_maximize">Fill window</string>
+    <string name="pane_close">Close pane</string>
+    <string name="pane_untitled">Untitled</string>
     <string name="picker_title">Open document</string>
     <string name="picker_search">Search by title</string>
     <string name="picker_empty">No documents</string>

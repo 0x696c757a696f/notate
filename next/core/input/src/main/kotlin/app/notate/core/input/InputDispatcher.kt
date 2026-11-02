@@ -14,6 +14,11 @@ sealed interface PenEvent {
         val tiltY: Float,
         val tMs: Long,
         val eraser: Boolean,
+        /**
+         * True when this very touch moved the focus to the pane (the pen came down on a pane that was not focused). The
+         * driver was only just opened for it and has not seen this stroke, so the pane must ink it from the touch events.
+         */
+        val focusSwitched: Boolean = false,
     ) : PenEvent
 
     data class Move(
@@ -203,10 +208,11 @@ class InputDispatcher(
                     InputPenMode.READ_ONLY -> return true
                     InputPenMode.WRITE -> Unit
                 }
-                if (focusedPane != pane.id) focusPane(pane)
+                val switched = focusedPane != pane.id
+                if (switched) focusPane(pane)
                 penPane = pane
                 val eraser = s.kind == PointerKind.ERASER_END || s.buttons and PointerSample.BUTTON_STYLUS_PRIMARY != 0
-                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser))
+                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser, switched))
                 return true
             }
             PointerAction.MOVE -> {

@@ -132,6 +132,7 @@ class NotebookPane(
         private set
 
     private var placed = false
+    private var initialView: ViewState? = null
     private var attached = false
     private var released = false
     private var inkSuspended = false
@@ -282,7 +283,7 @@ class NotebookPane(
         var vp = viewport.copy(widthPx = w, heightPx = h)
         if (!placed && layout.pageCount > 0) {
             placed = true
-            val saved = editor.meta.value.view
+            val saved = initialView ?: editor.meta.value.view
             vp = if (saved != null && layout.indexOf(saved.page) >= 0) {
                 val f = layout.frameOf(saved.page)
                 vp.copy(zoom = saved.zoom.coerceIn(Viewport.MIN_ZOOM, Viewport.MAX_ZOOM), scrollX = f.l + saved.scrollXPt, scrollY = f.t + saved.scrollYPt)
@@ -298,7 +299,7 @@ class NotebookPane(
         if (!attached) {
             attached = true
             host.arbiter.attach(this)
-            host.arbiter.setOwner(this)
+            host.claimPen(this)
             updateHandMode()
         }
     }
@@ -481,7 +482,10 @@ class NotebookPane(
             panWithPen(ev)
             return
         }
-        if (driverActive) return    // the driver reports its own points; touch events only feed palm rejection
+        // The driver reports its own points; touch events only feed palm rejection. Two exceptions: a stroke that began from touch
+        // events goes on that way, and a pen that came down on an unfocused pane has opened the driver just now, too late for this stroke.
+        val touchStroke = session != null && !sessionViaDriver
+        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -498,17 +502,19 @@ class NotebookPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
+        if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
 
     override fun onRawMove(batch: List<RawPoint>) {
-        if (session == null || batch.isEmpty()) return
+        if (session == null || !sessionViaDriver || batch.isEmpty()) return
         val last = batch.last()
         movePen(batch.map { InkPoint(0f, 0f, it.pressure, it.tiltX, it.tiltY, it.tMs) }, last.x, last.y, batch.map { it.x to it.y })
     }
 
     override fun onRawEnd(p: RawPoint, eraser: Boolean) {
+        if (session != null && !sessionViaDriver) return
         endPen(p.x, p.y, p.tMs, p.pressure)
         host.onDriverStroke(false, SystemClock.uptimeMillis())
     }
@@ -892,6 +898,8 @@ class NotebookPane(
     // ---------------------------------------------------------------------------------------------------------
     // View state, lifecycle
     // ---------------------------------------------------------------------------------------------------------
+
+    override fun setInitialView(s: ViewState?) { initialView = s }
 
     override fun saveViewState(): ViewState? {
         if (layout.pageCount == 0 || viewport.widthPx == 0) return null

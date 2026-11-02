@@ -277,7 +277,7 @@ class WebPane(
         if (w <= 0 || h <= 0 || released) return
         if (!started) {
             started = true
-            val saved = editor.meta.value.view
+            val saved = initialView ?: editor.meta.value.view
             val first = chapters().let { list -> list.firstOrNull { it.id == saved?.page } ?: list.firstOrNull() }
             if (first == null) {
                 bar.setTitle("")
@@ -295,7 +295,7 @@ class WebPane(
         if (!attached) {
             attached = true
             host.arbiter.attach(this)
-            host.arbiter.setOwner(this)
+            host.claimPen(this)
             updateMode()
         }
     }
@@ -572,7 +572,9 @@ class WebPane(
             onHover(ev)
             return
         }
-        if (driverActive) return    // the driver reports its own points; touch events only feed palm rejection
+        // See NotebookPane.onPen: a touch-driven stroke goes on that way, and so does the first stroke after a focus switch.
+        val touchStroke = session != null && !sessionViaDriver
+        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -589,17 +591,19 @@ class WebPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
+        if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
 
     override fun onRawMove(batch: List<RawPoint>) {
-        if (session == null || batch.isEmpty()) return
+        if (session == null || !sessionViaDriver || batch.isEmpty()) return
         val last = batch.last()
         movePen(batch.map { InkPoint(0f, 0f, it.pressure, it.tiltX, it.tiltY, it.tMs) }, last.x, last.y, batch.map { it.x to it.y })
     }
 
     override fun onRawEnd(p: RawPoint, eraser: Boolean) {
+        if (session != null && !sessionViaDriver) return
         endPen(p.x, p.y, p.tMs, p.pressure)
         host.onDriverStroke(false, SystemClock.uptimeMillis())
     }
@@ -989,6 +993,14 @@ class WebPane(
         val meta: DocumentMeta = editor.meta.value
         if (meta.view != state) editor.apply(Edit.SetMeta(meta, meta.copy(view = state)), undoable = false)
     }
+
+    private var initialView: ViewState? = null
+
+    override fun setInitialView(s: ViewState?) { initialView = s }
+
+    override val ownsPaneBar: Boolean get() = true
+
+    override fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) = bar.setSplitControls(maximize, close)
 
     override fun restoreViewState(s: ViewState) {
         val page = chapters().firstOrNull { it.id == s.page } ?: return
