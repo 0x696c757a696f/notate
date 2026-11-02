@@ -55,6 +55,23 @@ class PaneBar(
     private fun button(icon: Int, label: Int, onClick: () -> Unit) =
         ToolButton(context, icon, context.getString(label), size = HEIGHT_DP).onClick(onClick).apply { layoutParams = params() }
 
+    private var maximize: ToolButton? = null
+    private var close: ToolButton? = null
+
+    /** Adds (or removes, when both are null) the maximize and close buttons that a split window needs. */
+    fun setSplitControls(onMaximize: (() -> Unit)?, onClose: (() -> Unit)?) {
+        maximize?.let { removeView(it) }
+        close?.let { removeView(it) }
+        maximize = null
+        close = null
+        if (onMaximize != null) {
+            maximize = button(app.notate.editor.R.drawable.ic_open_in_full, app.notate.editor.R.string.pane_maximize) { onMaximize() }.also { addView(it, params()) }
+        }
+        if (onClose != null) {
+            close = button(app.notate.editor.R.drawable.ic_close, app.notate.editor.R.string.pane_close) { onClose() }.also { addView(it, params()) }
+        }
+    }
+
     fun setTitle(text: String) {
         title.text = text
     }

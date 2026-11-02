@@ -164,4 +164,97 @@ class WorkspaceOpsTest {
         assertThat(fixed.focusRight).isFalse()
         assertThat(WorkspaceOps.normalize(Workspace(emptyList(), PaneSlot(0))).left).isNull()
     }
+
+    // --- split (R5-2) ---
+
+    @Test fun openBesideCreatesTheRightPaneAndFocusesIt() {
+        val ws = WorkspaceOps.openBeside(wsOf("a"), tab("b"))
+        assertThat(ws.leftName()).isEqualTo("a")
+        assertThat(ws.rightName()).isEqualTo("b")
+        assertThat(ws.focusRight).isTrue()
+        assertThat(ws.split).isEqualTo(SplitSpec(Orientation.HORIZONTAL, 0.5f))
+        assertThat(ws.names()).containsExactly("a", "b").inOrder()
+    }
+
+    @Test fun theSameDocumentCanBeInBothPanes() {
+        val ws = WorkspaceOps.openBeside(wsOf("a"), tab("a"))
+        assertThat(ws.names()).containsExactly("a")
+        assertThat(ws.leftName()).isEqualTo("a")
+        assertThat(ws.rightName()).isEqualTo("a")
+        assertThat(WorkspaceOps.normalize(ws).right).isNotNull()
+    }
+
+    @Test fun openBesideInASplitReplacesThePaneWithoutFocus() {
+        val ws = WorkspaceOps.openBeside(split(wsOf("a", "b", "c"), 0, 1).copy(focusRight = false), tab("c"))
+        assertThat(ws.leftName()).isEqualTo("a")
+        assertThat(ws.rightName()).isEqualTo("c")
+        assertThat(ws.focusRight).isTrue()
+        val other = WorkspaceOps.openBeside(ws, tab("b"))
+        assertThat(other.leftName()).isEqualTo("b")
+        assertThat(other.rightName()).isEqualTo("c")
+        assertThat(other.focusRight).isFalse()
+    }
+
+    @Test fun swapKeepsTheFocusOnTheSameDocumentAndFlipsTheRatio() {
+        val ws = WorkspaceOps.setRatio(split(wsOf("a", "b"), 0, 1).copy(focusRight = true), 2f / 3f)
+        val swapped = WorkspaceOps.swap(ws)
+        assertThat(swapped.leftName()).isEqualTo("b")
+        assertThat(swapped.rightName()).isEqualTo("a")
+        assertThat(swapped.focusRight).isFalse()
+        assertThat(swapped.focusedTab!!.doc.value).isEqualTo("b")
+        assertThat(swapped.split!!.ratio).isWithin(0.001f).of(1f / 3f)
+    }
+
+    @Test fun closingAPaneKeepsItsTab() {
+        val ws = split(wsOf("a", "b"), 0, 1)
+        val closed = WorkspaceOps.closePane(ws, right = true)
+        assertThat(closed.names()).containsExactly("a", "b")
+        assertThat(closed.leftName()).isEqualTo("a")
+        assertThat(closed.right).isNull()
+        assertThat(closed.split).isNull()
+        val leftClosed = WorkspaceOps.closePane(ws, right = false)
+        assertThat(leftClosed.leftName()).isEqualTo("b")
+        assertThat(leftClosed.names()).containsExactly("a", "b")
+    }
+
+    @Test fun maximizeKeepsOnlyThatPane() {
+        val ws = split(wsOf("a", "b"), 0, 1)
+        val max = WorkspaceOps.maximize(ws, right = true)
+        assertThat(max.leftName()).isEqualTo("b")
+        assertThat(max.right).isNull()
+        assertThat(max.names()).containsExactly("a", "b")
+    }
+
+    @Test fun orientationAndRatioChangeOnlyTheSplit() {
+        val ws = split(wsOf("a", "b"), 0, 1)
+        val v = WorkspaceOps.setOrientation(ws, Orientation.VERTICAL)
+        assertThat(v.split!!.orientation).isEqualTo(Orientation.VERTICAL)
+        assertThat(WorkspaceOps.setOrientation(v, Orientation.VERTICAL)).isSameInstanceAs(v)
+        assertThat(WorkspaceOps.setRatio(v, 0.99f).split!!.ratio).isEqualTo(0.95f)
+        assertThat(WorkspaceOps.setOrientation(wsOf("a"), Orientation.VERTICAL).split).isNull()
+    }
+
+    @Test fun focusMovesOnlyToExistingPanes() {
+        val single = wsOf("a")
+        assertThat(WorkspaceOps.focus(single, right = true)).isSameInstanceAs(single)
+        val ws = split(wsOf("a", "b"), 0, 1).copy(focusRight = false)
+        assertThat(WorkspaceOps.focus(ws, right = true).focusRight).isTrue()
+    }
+
+    @Test fun closingTheTabShownInBothPanesLeavesOnePane() {
+        val ws = WorkspaceOps.openBeside(wsOf("a", "b"), tab("a"))
+        val closed = WorkspaceOps.close(ws, 0)
+        assertThat(closed.names()).containsExactly("b")
+        assertThat(closed.right).isNull()
+        assertThat(closed.leftName()).isEqualTo("b")
+    }
+
+    @Test fun paneViewsAreStoredPerPaneEvenForTheSameDocument() {
+        val ws = WorkspaceOps.openBeside(wsOf("a"), tab("a"))
+        val l = PaneViewStateDto(1, 1f, 0f, 0f)
+        val r = PaneViewStateDto(2, 2f, 0f, 10f)
+        val out = WorkspaceOps.withPaneView(WorkspaceOps.withPaneView(ws, false, l), true, r)
+        assertThat(out.left!!.view).isEqualTo(l)
+        assertThat(out.right!!.view).isEqualTo(r)
+    }
 }

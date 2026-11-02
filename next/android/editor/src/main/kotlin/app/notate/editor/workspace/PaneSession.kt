@@ -27,13 +27,20 @@ class PaneSession internal constructor(
 ) {
     val doc: DocId get() = handle.id
 
-    /** Set when the pane has been in the window (and therefore attached to the ink arbiter) at least once. */
-    internal var shown = false
+    /** What the pane was last told about its focus (null: nothing yet). */
+    internal var focusAnnounced: Boolean? = null
     var thumbs: ThumbnailStore? = null
+
+    /** The window's frame around the pane (bar, focus strip); built by the window, kept as long as the session lives. */
+    var frame: app.notate.editor.split.PaneFrame? = null
+
+    /** False for the second pane of a document that is open in both panes: only one of them may write the reader's position. */
+    var persistsMeta = true
     private var closed = false
 
     /** Writes the reader's position into the document (not undoable; the save queue merges these writes). */
     fun persistView() {
+        if (!persistsMeta) return
         val state = pane.saveViewState() ?: return
         val meta = handle.editor.meta.value
         if (meta.view != state) handle.editor.apply(Edit.SetMeta(meta, meta.copy(view = state)), undoable = false)
@@ -60,6 +67,12 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
     private var active = false
     private var hasGrid = false
 
+    /** Whether this pane has the pen and the toolbar. Set by the controller. */
+    var focused = false
+
+    /** Told about page changes of the pane (the split bar shows them). */
+    var onPage: ((Int, Int) -> Unit)? = null
+
     override val arbiter get() = outer.arbiter
     override fun excludeRects(): List<Rect> = view?.let(rectsFor) ?: emptyList()
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = outer.onDriverStroke(begin, timeMs)
@@ -68,16 +81,28 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
         if (active) outer.showPopup(anchor, content, placement) else null
 
     override fun dismissPopup() { if (active) outer.dismissPopup() }
-    override fun onPageChanged(index: Int, count: Int) { indicator?.setPage(index, count) }
+    override fun onPageChanged(index: Int, count: Int) {
+        indicator?.setPage(index, count)
+        onPage?.invoke(index, count)
+    }
     override fun onFocusModeRequested() { if (active) outer.onFocusModeRequested() }
 
     override fun onPageGrid(hasGrid: Boolean) {
         this.hasGrid = hasGrid
-        if (active) outer.onPageGrid(hasGrid)
+        if (active && focused) outer.onPageGrid(hasGrid)
     }
 
+    /** A pane that gets its size takes the pen only when it has the focus; the controller hands it over otherwise. */
+    override fun claimPen(pane: app.notate.editor.pane.DocumentPane) {
+        if (focused) outer.claimPen(pane)
+    }
+
+    /** The pane is shown in the window (or not, e.g. in the cache). */
     fun activate(on: Boolean) {
         active = on
-        if (on) outer.onPageGrid(hasGrid)
+        if (on && focused) outer.onPageGrid(hasGrid)
     }
+
+    /** The grid state belongs to the toolbar, which follows the focus. */
+    fun pushGrid() { if (active && focused) outer.onPageGrid(hasGrid) }
 }

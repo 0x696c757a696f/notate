@@ -23,6 +23,11 @@ import app.notate.core.input.PointerAction
 import app.notate.core.input.PointerKind
 import app.notate.core.input.PointerSample
 import app.notate.core.model.DocId
+import app.notate.core.workspace.DividerDrop
+import app.notate.core.workspace.Orientation
+import app.notate.core.workspace.SplitSpec
+import app.notate.editor.split.PaneFrame
+import app.notate.editor.split.SplitPaneLayout
 import app.notate.editor.chrome.DocumentPickerDialog
 import app.notate.editor.chrome.TabStripView
 import app.notate.editor.workspace.PaneSession
@@ -83,6 +88,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private val pane: DocumentPane? get() = controller.current?.pane
     private val handle: DocumentHandle? get() = controller.current?.handle
     private val pageActions: PageActions? get() = controller.current?.pageActions
+    private lateinit var splitLayout: SplitPaneLayout
     private var gridOverlay: PageGridOverlay? = null
     private var bindJob: Job? = null
     private var workspaceStore: app.notate.core.workspace.WorkspaceStore? = null
@@ -113,7 +119,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
             palm,
             GestureClassifier(touchSlopPx = ViewConfiguration.get(this).scaledTouchSlop.toFloat(), multiTapSlopPx = 24f * density),
             HoverFocusDebouncer(),
-        ) { }
+        ) { id -> controller.focus(id) }
         buildViews()
         observeSettings()
         scope.launch {
@@ -148,15 +154,18 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         controller = WorkspaceController(
             this, deps, scope, this, { v -> chrome.excludeRectsFor(v) },
             object : WorkspaceController.Listener {
-                override fun onSessionChanged(old: PaneSession?, new: PaneSession?) = swapSession(old, new)
+                override fun onPanesChanged(left: PaneSession?, right: PaneSession?, split: SplitSpec?) = layoutPanes(left, right, split)
+                override fun onFocusChanged(focused: PaneSession?) = bindFocused(focused)
                 override fun onMessage(text: String) { Toast.makeText(this@EditorActivity, text, Toast.LENGTH_LONG).show() }
                 override fun onEmpty() = goHome()
             },
         )
         controller.pageGridRequest = { openPageGrid() }
         chrome = EditorChrome(this, deps.toolController, arbiter, deps.epd, deps.device.xdpi, this, tabCallbacks())
-        chrome.popups.onRectChanged = { pane?.refreshExcludes() }
-        chrome.onFocusChanged = { pane?.refreshExcludes() }
+        splitLayout = SplitPaneLayout(this, dividerListener())
+        chrome.paneArea.addView(splitLayout, 0, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        chrome.popups.onRectChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
+        chrome.onFocusChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         hud = DebugHud(this) { hudLines() }
         chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(chrome)
@@ -177,7 +186,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 listOf(
                     MenuEntry(getString(R.string.tab_menu_close)) { scope.launch { controller.close(index) } },
                     MenuEntry(getString(R.string.tab_menu_close_others)) { scope.launch { controller.closeOthers(index) } },
-                    MenuEntry(getString(R.string.tab_menu_split), enabled = false) { },     // R5-2
+                    MenuEntry(getString(R.string.tab_menu_split)) { controller.openTabBeside(index) },
                 ),
             ).show()
         }
@@ -186,6 +195,30 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private fun showPicker() {
         val library = deps.libraryStore?.invoke() ?: return
         DocumentPickerDialog(chrome.popups, library, scope) { id -> scope.launch { controller.open(id) } }.show(this)
+    }
+
+    /** "Open beside": the picker, but the document opens in a second pane. */
+    private fun showBesidePicker() {
+        val library = deps.libraryStore?.invoke() ?: return
+        DocumentPickerDialog(chrome.popups, library, scope, R.string.split_open_beside) { id -> scope.launch { controller.openBeside(id) } }.show(this)
+    }
+
+    private fun dividerListener() = object : SplitPaneLayout.Listener {
+        override fun onDividerDragStarted() {
+            chrome.popups.dismiss()
+            arbiter.block(BlockReason.DIVIDER_DRAG, true)
+        }
+
+        override fun onDividerDropped(drop: DividerDrop) {
+            arbiter.block(BlockReason.DIVIDER_DRAG, false)
+            when (drop) {
+                is DividerDrop.Ratio -> controller.setRatio(drop.value)
+                DividerDrop.CloseFirst -> controller.closePane(right = false)
+                DividerDrop.CloseSecond -> controller.closePane(right = true)
+            }
+        }
+
+        override fun onDividerDragCancelled() = arbiter.block(BlockReason.DIVIDER_DRAG, false)
     }
 
     private fun libraryIntent(): Intent = deps.libraryIntent?.invoke(this) ?: Intent()
@@ -199,31 +232,52 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     // --- Switching documents --------------------------------------------------------------------------------
 
-    private fun swapSession(old: PaneSession?, new: PaneSession?) {
-        closePageGrid()
-        chrome.popups.dismiss()
-        val area = chrome.paneArea
-        old?.let {
-            area.removeView(it.pane.view)
-            it.indicator?.let { v -> area.removeView(v) }
-        }
-        bindJob?.cancel()
-        bindJob = null
-        if (new == null) return
+    /** The frame (bar, focus strip) around a session's pane; built once, when the session is first shown. */
+    private fun frameOf(s: PaneSession): PaneFrame = s.frame ?: PaneFrame(this, s.pane.ownsPaneBar).also { f ->
+        s.frame = f
         val match = ViewGroup.LayoutParams.MATCH_PARENT
-        area.addView(new.pane.view, 0, android.widget.FrameLayout.LayoutParams(match, match))
-        new.indicator?.let { ind ->
-            area.addView(
+        f.content.addView(s.pane.view, 0, android.widget.FrameLayout.LayoutParams(match, match))
+        s.indicator?.let { ind ->
+            f.content.addView(
                 ind, 1,
                 android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.BOTTOM or android.view.Gravity.END)
                     .apply { setMargins(0, 0, ind.dp(16), ind.dp(16)) },
             )
         }
+        s.host.onPage = { index, count -> f.setPage(index, count) }
+        s.scope.launch { s.handle.editor.meta.collect { f.setTitle(it.title) } }
+    }
+
+    private fun layoutPanes(left: PaneSession?, right: PaneSession?, split: SplitSpec?) {
+        closePageGrid()
+        chrome.popups.dismiss()
+        val lf = left?.let(::frameOf)
+        val rf = right?.let(::frameOf)
+        if (split != null) {
+            splitLayout.orientation = split.orientation
+            splitLayout.ratio = split.ratio
+        }
+        splitLayout.setPanes(lf, rf)
+        val isSplit = rf != null
+        lf?.setSplit(isSplit, { controller.maximize(right = false) }, { controller.closePane(right = false) })
+        rf?.setSplit(true, { controller.maximize(right = true) }, { controller.closePane(right = true) })
+        val focused = controller.current
+        lf?.setFocused(left === focused)
+        rf?.setFocused(right === focused)
+        deps.epd.refresh(chrome.paneArea, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+    }
+
+    /** The focus moved: toolbar, undo and redo follow the focused pane; only the bars and the toolbar are refreshed. */
+    private fun bindFocused(new: PaneSession?) {
+        for (s in controller.displayed) s.frame?.setFocused(s === new)
+        bindJob?.cancel()
+        bindJob = null
+        dispatcher.focusedPane = new?.pane?.id
+        if (new == null) return
         val kind = new.handle.editor.meta.value.kind
         val reason = if (kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
         chrome.toolbar.bind(new.pane.capabilities, getString(reason))
         arbiter.block(BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
-        dispatcher.focusedPane = new.pane.id
         val h = new.handle
         bindJob = scope.launch {
             launch { combine(h.editor.history.canUndo, h.editor.history.canRedo) { u, r -> u to r }.collect { (u, r) -> chrome.toolbar.setUndoRedo(u, r) } }
@@ -235,7 +289,11 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 }
             }
         }
-        deps.epd.refresh(area, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+        deps.epd.refresh(chrome.toolbar, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+        for (s in controller.displayed) {
+            val f = s.frame ?: continue
+            if (f.split) deps.epd.refresh(f, EpdMode.GU, intArrayOf(0, 0, f.width, f.dp(PaneFrame.BAR_DP + 3)), EpdTiming.AFTER_DRAW)
+        }
     }
 
     private fun observeSettings() {
@@ -291,7 +349,24 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onPages() = openPageGrid()
 
-    override fun onSplit() = Unit
+    override fun onSplit(anchor: View) {
+        val split = controller.workspace.value.split
+        if (split == null) {
+            showBesidePicker()
+            return
+        }
+        val horizontal = split.orientation == Orientation.HORIZONTAL
+        MoreMenu(
+            chrome.popups, anchor,
+            listOf(
+                MenuEntry(getString(R.string.split_swap)) { controller.swapSides() },
+                MenuEntry(getString(if (horizontal) R.string.split_stack else R.string.split_side_by_side)) {
+                    controller.setOrientation(if (horizontal) Orientation.VERTICAL else Orientation.HORIZONTAL)
+                },
+                MenuEntry(getString(if (horizontal) R.string.split_close_right else R.string.split_close_bottom)) { controller.closePane(right = true) },
+            ),
+        ).show()
+    }
 
     override fun onMore(anchor: View) {
         val items = ArrayList<MenuEntry>()
@@ -369,10 +444,16 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     private fun hitsPageUi(ev: MotionEvent): Boolean {
         if (gridOverlay != null) return true
-        val v = controller.current?.indicator ?: return false
+        if (splitLayout.hitsDivider(ev.x, ev.y)) return true
         val loc = IntArray(2)
-        v.getLocationInWindow(loc)
-        return ev.x >= loc[0] && ev.x < loc[0] + v.width && ev.y >= loc[1] && ev.y < loc[1] + v.height
+        for (s in controller.displayed) {
+            val f = s.frame
+            if (f != null && f.split && f.hitsBar(ev.x, ev.y)) return true
+            val v = s.indicator ?: continue
+            v.getLocationInWindow(loc)
+            if (ev.x >= loc[0] && ev.x < loc[0] + v.width && ev.y >= loc[1] && ev.y < loc[1] + v.height) return true
+        }
+        return false
     }
 
     override fun onToolbarChanged() {
@@ -417,7 +498,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
             Route.NONE -> Unit
         }
         val p = pane ?: return super.dispatchTouchEvent(ev)
-        val panes = listOf<app.notate.core.input.PaneTarget>(p)
+        val panes = controller.displayed.map { it.pane as app.notate.core.input.PaneTarget }
         var consumed = false
         for (s in adapter.convert(ev)) {
             val c = dispatcher.onSample(s, panes)
@@ -444,8 +525,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     }
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
-        val p = pane ?: return super.dispatchGenericMotionEvent(ev)
-        val panes = listOf<app.notate.core.input.PaneTarget>(p)
+        if (pane == null) return super.dispatchGenericMotionEvent(ev)
+        val panes = controller.displayed.map { it.pane as app.notate.core.input.PaneTarget }
         var consumed = false
         for (s in adapter.convert(ev)) consumed = dispatcher.onSample(s, panes) || consumed
         return if (consumed) true else super.dispatchGenericMotionEvent(ev)

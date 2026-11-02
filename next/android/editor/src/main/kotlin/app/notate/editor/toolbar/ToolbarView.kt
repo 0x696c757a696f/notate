@@ -34,7 +34,7 @@ interface ToolbarActions {
     fun onUndo()
     fun onRedo()
     fun onPages()
-    fun onSplit()
+    fun onSplit(anchor: android.view.View)
     fun onMore(anchor: View)
     fun onRulerToggled(on: Boolean) {}
 
@@ -129,9 +129,8 @@ class ToolbarView(
         undo = ToolButton(context, R.drawable.ic_undo, context.getString(R.string.action_undo)).onClick { actions.onUndo() }
         redo = ToolButton(context, R.drawable.ic_redo, context.getString(R.string.action_redo)).onClick { actions.onRedo() }
         pages = ToolButton(context, R.drawable.ic_grid_view, context.getString(R.string.action_pages)).onClick { actions.onPages() }
-        split = ToolButton(context, R.drawable.ic_view_column, context.getString(R.string.action_split)).onClick { actions.onSplit() }
+        split = ToolButton(context, R.drawable.ic_view_column, context.getString(R.string.action_split)).onClick { actions.onSplit(split) }
         more = ToolButton(context, R.drawable.ic_more_horiz, context.getString(R.string.action_more)).onClick { actions.onMore(more) }
-        split.reason = context.getString(R.string.coming_soon)
         undo.reason = context.getString(R.string.nothing_to_undo)
         redo.reason = context.getString(R.string.nothing_to_redo)
         listOf(undo, redo, pages, split, more).forEach { right.addView(it) }

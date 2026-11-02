@@ -38,6 +38,7 @@ class DocumentPickerDialog(
     private val popups: PopupHost,
     private val library: LibraryStore,
     private val scope: CoroutineScope,
+    private val titleRes: Int = R.string.picker_title,
     private val onPick: (DocId) -> Unit,
 ) {
     private var entries: List<DocumentEntry> = emptyList()
@@ -97,7 +98,7 @@ class DocumentPickerDialog(
             })
         }
         val title = TextView(context).apply {
-            text = context.getString(R.string.picker_title)
+            text = context.getString(titleRes)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             setTextColor(Color.BLACK)
             setPadding(context.dp(12), context.dp(8), context.dp(12), 0)

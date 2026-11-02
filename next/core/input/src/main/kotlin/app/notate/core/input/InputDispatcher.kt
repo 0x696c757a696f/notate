@@ -17,6 +17,11 @@ sealed interface PenEvent {
         val tiltY: Float,
         val tMs: Long,
         val eraser: Boolean,
+        /**
+         * True when this very touch moved the focus to the pane (the pen came down on a pane that was not focused). The
+         * driver was only just opened for it and has not seen this stroke, so the pane must ink it from the touch events.
+         */
+        val focusSwitched: Boolean = false,
         /** The barrel button is held and Settings maps it to the lasso. */
         val lasso: Boolean = false,
     ) : PenEvent
@@ -211,12 +216,13 @@ class InputDispatcher(
                     InputPenMode.READ_ONLY -> return true
                     InputPenMode.WRITE -> Unit
                 }
-                if (focusedPane != pane.id) focusPane(pane)
+                val switched = focusedPane != pane.id
+                if (switched) focusPane(pane)
                 penPane = pane
                 val button = s.buttons and PointerSample.BUTTON_STYLUS_PRIMARY != 0
                 val eraser = s.kind == PointerKind.ERASER_END || (button && penButton == PenButtonAction.ERASER)
                 val lasso = !eraser && button && penButton == PenButtonAction.LASSO
-                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser, lasso))
+                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser, lasso = lasso, focusSwitched = switched))
                 return true
             }
             PointerAction.MOVE -> {
