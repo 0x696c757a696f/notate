@@ -53,6 +53,19 @@ class GestureClassifierTest {
     }
 
     @Test
+    fun `two finger twist reports the rotation`() {
+        val out =
+            feed(
+                s(PointerAction.DOWN, 0, 100f, 100f, 0),
+                s(PointerAction.POINTER_DOWN, 1, 200f, 100f, 10),
+                s(PointerAction.MOVE, 1, 200f, 200f, 50), // second finger swings from east to south of the first: 45° clockwise (y down)
+            )
+        val p = out.filterIsInstance<Pinch>().first()
+        assertEquals(45f, p.rotationDeg, 1e-3f)
+        assertEquals(0f, (feed(s(PointerAction.MOVE, 1, 200f, 200f, 60)).filterIsInstance<Pinch>().firstOrNull()?.rotationDeg ?: 0f), 1e-3f)
+    }
+
+    @Test
     fun `two finger tap`() {
         val out =
             feed(

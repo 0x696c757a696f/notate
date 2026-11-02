@@ -1,6 +1,7 @@
 package app.notate.core.input
 
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.hypot
 
 sealed interface FingerGesture {
@@ -33,6 +34,8 @@ sealed interface FingerGesture {
         val fy: Float,
         val dx: Float,
         val dy: Float,
+        /** Twist of the two fingers since the previous [Pinch], degrees, clockwise on screen positive (-180..180). */
+        val rotationDeg: Float = 0f,
     ) : FingerGesture
 
     data object PinchEnd : FingerGesture
@@ -89,6 +92,7 @@ class GestureClassifier(
     private var panX = 0f
     private var panY = 0f
     private var prevDist = 1f
+    private var prevAngle = 0.0
     private var prevMx = 0f
     private var prevMy = 0f
     private val trail = ArrayList<Triple<Long, Float, Float>>()
@@ -273,6 +277,7 @@ class GestureClassifier(
         prevDist = maxOf(hypot(ax - bx, ay - by), 1f)
         prevMx = (ax + bx) / 2f
         prevMy = (ay + by) / 2f
+        prevAngle = atan2((by - ay).toDouble(), (bx - ax).toDouble())
         out += FingerGesture.PinchStart(prevMx, prevMy)
     }
 
@@ -285,10 +290,15 @@ class GestureClassifier(
         val scale = dist / prevDist
         val dx = mx - prevMx
         val dy = my - prevMy
-        if (abs(scale - 1f) < 1e-6f && dx == 0f && dy == 0f) return
+        val angle = atan2((b.y - a.y).toDouble(), (b.x - a.x).toDouble())
+        var turn = Math.toDegrees(angle - prevAngle)
+        while (turn > 180.0) turn -= 360.0
+        while (turn < -180.0) turn += 360.0
+        if (abs(scale - 1f) < 1e-6f && dx == 0f && dy == 0f && turn == 0.0) return
         prevDist = dist
         prevMx = mx
         prevMy = my
-        out += FingerGesture.Pinch(scale, mx, my, dx, dy)
+        prevAngle = angle
+        out += FingerGesture.Pinch(scale, mx, my, dx, dy, turn.toFloat())
     }
 }
