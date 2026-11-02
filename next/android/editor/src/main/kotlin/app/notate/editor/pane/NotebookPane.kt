@@ -196,6 +196,13 @@ class NotebookPane(
     private var session: ToolSession? = null
     private var sessionViaDriver = false
     private var rawBegins = 0
+    private var penNote = "-"
+
+    /** Last reason a pen-down did or did not start a stroke (debug HUD + log), so "nothing happens" can be diagnosed. */
+    private fun note(text: String) {
+        penNote = text
+        deps.logger.i(TAG, text)
+    }
     private var touchDowns = 0
     private var strokeViewport: Viewport = viewport
     private var strokeFrame: Rect = Rect.EMPTY
@@ -537,6 +544,7 @@ class NotebookPane(
             return
         }
         if (handMode) {
+            if (ev is PenEvent.Down) note("hand tool: pen pans")
             panWithPen(ev)
             return
         }
@@ -601,7 +609,10 @@ class NotebookPane(
     private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean, lasso: Boolean = false) {
         if (session != null) cancelPen()
         if (objects.editingText) objects.finishTextEdit()      // the pen came down outside the text editor: that ends the edit
-        if (inkSuspended) return
+        if (inkSuspended) {
+            note("ignored: ink suspended by ${host.arbiter.let { a -> BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) } }}")
+            return
+        }
         if (fingerBusy && !viaDriver) {
             main.removeCallbacks(endFingerRunnable)
             endFinger()
@@ -618,9 +629,11 @@ class NotebookPane(
         val content = hit?.let { editor.content(it.page) }
         val info = hit?.let { h -> editor.pages.value.firstOrNull { it.id == h.page } }
         if (hit == null || content == null || info == null) {
+            note("ignored: page=${hit?.page?.value} loaded=${content != null} xy=${x.toInt()},${y.toInt()} view=${vp.widthPx}x${vp.heightPx}")
             restoreEraser()
             return
         }
+        note("stroke started (${if (viaDriver) "driver" else "touch"})")
         strokeViewport = vp
         strokeFrame = layout.frameOf(hit.page)
         strokePage = hit.page
@@ -1092,6 +1105,7 @@ class NotebookPane(
             "level=${Viewport.levelFor(viewport.scale)} zoom=${"%.2f".format(viewport.zoom)}",
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
             "pen strokes: driver=$rawBegins touch=$touchDowns",
+            "last pen: $penNote",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",
         )
     }
