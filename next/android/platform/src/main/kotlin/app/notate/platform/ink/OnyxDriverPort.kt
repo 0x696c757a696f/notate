@@ -141,7 +141,7 @@ class OnyxDriverPort(
         try {
             // The editor surface is a plain View, so use the plain form that the legacy web overlay (also a plain View)
             // has always used. The SurfaceView-only "SFTouchRender" mode (create(view, true, ...)) delivered no points here.
-            val h = TouchHelper.create(view, callback)
+            val h = if (sfRender) TouchHelper.create(view, true, callback) else TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
             h.setLimitRect(currentLimit(), exclude)
@@ -168,6 +168,20 @@ class OnyxDriverPort(
             Log.w(TAG, "close failed", t)
         }
         synchronized(lock) { queue.clear() }
+    }
+
+    /** Which TouchHelper form the session uses; [reopen] alternates it so a deaf session tries the other one. */
+    var sfRender = false
+        private set
+
+    override fun reopen() {
+        if (helper == null) return
+        val wasActive = active
+        sfRender = !sfRender
+        Log.i(TAG, "reopen: sfRender=$sfRender")
+        close()
+        open()
+        if (wasActive) setActive(true)
     }
 
     override fun setActive(on: Boolean) {
