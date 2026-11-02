@@ -195,6 +195,8 @@ class NotebookPane(
     // --- pen state ---
     private var session: ToolSession? = null
     private var sessionViaDriver = false
+    private var rawBegins = 0
+    private var touchDowns = 0
     private var strokeViewport: Viewport = viewport
     private var strokeFrame: Rect = Rect.EMPTY
     private var strokePage: PageId? = null
@@ -541,7 +543,12 @@ class NotebookPane(
         // The driver reports its own points; touch events only feed palm rejection. Two exceptions: a stroke that began from touch
         // events goes on that way, and a pen that came down on an unfocused pane has opened the driver just now, too late for this stroke.
         val touchStroke = session != null && !sessionViaDriver
-        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
+        // A driver that has never delivered a stroke is not trusted: until it does, touch events ink (nothing may swallow a pen).
+        if (ev is PenEvent.Down) {
+            touchDowns++
+            if (touchDowns <= LOG_FIRST) deps.logger.i(TAG, "pen down (touch) driverActive=$driverActive rawBegins=$rawBegins")
+        }
+        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive && rawBegins > 0, touchStroke, ev)) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -558,6 +565,8 @@ class NotebookPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
+        rawBegins++
+        if (rawBegins <= LOG_FIRST) deps.logger.i(TAG, "pen down (driver) eraser=$eraser")
         if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
@@ -1082,6 +1091,7 @@ class NotebookPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "level=${Viewport.levelFor(viewport.scale)} zoom=${"%.2f".format(viewport.zoom)}",
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
+            "pen strokes: driver=$rawBegins touch=$touchDowns",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",
         )
     }
@@ -1127,6 +1137,7 @@ class NotebookPane(
 
     private companion object {
         const val TAG = "NotebookPane"
+        const val LOG_FIRST = 5
         const val FIT_MARGIN_DP = 12f
         const val ZOOM_RENDER_DELAY_MS = 150L
         const val FINGER_SETTLE_MS = 700L
