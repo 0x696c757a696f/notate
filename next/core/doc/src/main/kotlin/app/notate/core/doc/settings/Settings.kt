@@ -71,6 +71,8 @@ class Settings(private val kv: KeyValueStore) {
     val backupFreq = enumPref("backup_freq", BackupFreq.OFF)
     val debugHud = boolPref("debug_hud", false)
     val inkDiagnostics = boolPref("ink_diagnostics", false)
+    /** Toolbar state as JSON (see `ToolState`); null = defaults. */
+    val toolStateJson = Pref<String?>(kv, "tool_state", null, { it }, { it })
 
     private companion object { val json = Json { ignoreUnknownKeys = true } }
 }

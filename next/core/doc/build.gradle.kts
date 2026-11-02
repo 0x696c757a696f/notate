@@ -1,4 +1,4 @@
-plugins { kotlin("jvm") }
+plugins { kotlin("jvm"); kotlin("plugin.serialization") }
 dependencies {
     api(project(":store"))
     api(project(":ink"))
