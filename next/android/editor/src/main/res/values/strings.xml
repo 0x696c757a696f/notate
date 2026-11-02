@@ -8,6 +8,7 @@
     <string name="tool_text">Text</string>
     <string name="tool_image">Image</string>
     <string name="tool_ruler">Ruler</string>
+    <string name="tool_protractor">Protractor</string>
     <string name="tool_zoom">Zoom window</string>
     <string name="tool_hand">Hand</string>
 

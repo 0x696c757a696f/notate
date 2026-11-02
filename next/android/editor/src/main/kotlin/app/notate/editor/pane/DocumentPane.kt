@@ -54,6 +54,12 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
     fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
 
+    /** The ruler or protractor this pane shows, or null. */
+    val guideKind: app.notate.core.ink.guide.GuideKind? get() = null
+
+    /** Shows ([kind]) or hides (null) a ruler or protractor on the page in view. Panes without pages ignore it. */
+    fun setGuide(kind: app.notate.core.ink.guide.GuideKind?) {}
+
     /** Imports a picked image (a content Uri) and places it on the page in view; panes without images ignore it. */
     fun importImage(uri: android.net.Uri) {}
 

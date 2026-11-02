@@ -30,7 +30,9 @@ class ToolbarViewTest {
     private val controller = ToolController(Settings(InMemoryKeyValueStore()))
     private val arbiter = InkArbiter()
     private val popups = PopupHost(FrameLayout(context), arbiter, EpdScheduler(NoEpdPort))
+    private val guideEvents = ArrayList<app.notate.core.ink.guide.GuideKind?>()
     private val actions = object : ToolbarActions {
+        override fun onGuideChanged(kind: app.notate.core.ink.guide.GuideKind?) { guideEvents.add(kind) }
         override fun onUndo() = Unit
         override fun onRedo() = Unit
         override fun onPages() = Unit
@@ -97,6 +99,20 @@ class ToolbarViewTest {
         select(ToolKind.LASSO)
         toolbar.bind(Capabilities.forKind(DocKind.WEB), "Not available on books")
         assertThat(controller.baseState().active).isEqualTo(ToolKind.PEN)
+    }
+
+    @Test fun rulerButtonTogglesTheGuideAndShowGuideDoesNotNotify() {
+        val b = button("Ruler")
+        b.performClick()
+        assertThat(guideEvents).containsExactly(app.notate.core.ink.guide.GuideKind.RULER)
+        assertThat(b.isSelected).isTrue()
+        b.performClick()
+        assertThat(guideEvents).containsExactly(app.notate.core.ink.guide.GuideKind.RULER, null).inOrder()
+        assertThat(b.isSelected).isFalse()
+        toolbar.showGuide(app.notate.core.ink.guide.GuideKind.PROTRACTOR)
+        assertThat(guideEvents).hasSize(2)
+        val shown = button("Protractor")
+        assertThat(shown.isSelected).isTrue()
     }
 
     @Test fun undoRedoStateFollowsTheHistory() {

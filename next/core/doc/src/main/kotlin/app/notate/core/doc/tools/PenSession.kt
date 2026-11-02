@@ -2,6 +2,9 @@ package app.notate.core.doc.tools
 
 import app.notate.core.geometry.Affine
 import app.notate.core.geometry.Vec2
+import app.notate.core.ink.guide.GuidePath
+import app.notate.core.ink.guide.GuideSnap
+import app.notate.core.ink.guide.Guides
 import app.notate.core.ink.sample.StrokeSampler
 import app.notate.core.ink.shape.DwellDetector
 import app.notate.core.ink.shape.ShapeRecognizer
@@ -12,6 +15,7 @@ import app.notate.core.model.ItemBounds
 import app.notate.core.model.PenType
 import app.notate.core.model.Shape
 import app.notate.core.model.ShapeKind
+import app.notate.core.model.StrokePoints
 import app.notate.core.model.Stroke
 import app.notate.core.model.ToolKind
 import app.notate.core.model.ToolPreset
@@ -41,11 +45,20 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     private var holdVec = Vec2(1f, 0f)      // polygon kinds: fixed → the vertex that follows the pen, as recognised
     private var holdPen = Vec2(0f, 0f)      // pen position when the shape was recognised
 
+    // Ruler / protractor: the geometry the whole stroke follows, and the raw pen positions it is built from.
+    private var snap: GuideSnap? = null
+    private var raw = FloatArray(64)
+    private var rawN = 0
+    private var pressureSum = 0f
+    private var lastT = 0
+    private var firstT = 0L
+
     /** True once a held shape replaced the stroke: the pen now only resizes it (hosts swap the driver ink for the software ghost). */
     val isAdjusting: Boolean get() = recognised != null
 
     override fun begin(p: InkPoint) {
         started = true
+        snap = findSnap(p.x, p.y)
         feed(p)
         preview()
     }
@@ -61,7 +74,7 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     /** Checks the dwell timer; call when no pen movement arrives. */
     fun poll() {
         val hold = ctx.settings.holdShapeMs ?: return
-        if (!started || recognised != null) return
+        if (!started || recognised != null || snap != null) return
         if (dwell.isDwelling(ctx.clock.now(), hold)) tryRecognise()
     }
 
@@ -74,9 +87,11 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
             commit(ghost ?: shape)
         } else {
             feed(p)
-            val pts = sampler.finish()
+            val g = snap
+            val pts = if (g != null) guided(g) else sampler.finish()
             if (pts.size >= 1) {
                 commit(Stroke(editor.newItemId(), editor.nextOrder(ctx.page), style, pts, ItemBounds.strokeBounds(pts, style)))
+                if (g is GuideSnap.Ray && rawN > 0) ctx.guides.onRay(Guides.rayAngleDeg(g, raw[2 * rawN - 2], raw[2 * rawN - 1]))
             }
         }
         ctx.preview.clear()
@@ -87,12 +102,34 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
         ctx.preview.clear()
     }
 
+    private fun findSnap(x: Float, y: Float): GuideSnap? {
+        val g = ctx.guides
+        val tol = g.snapTolPt
+        return g.ruler?.let { Guides.rulerSnap(it, x, y, tol) } ?: g.protractor?.let { Guides.protractorSnap(it, x, y, tol) }
+    }
+
+    /** The stroke projected onto the guide geometry; pressure is the average of the pen's. */
+    private fun guided(g: GuideSnap): StrokePoints {
+        val xy = GuidePath.build(g, raw.copyOf(2 * rawN))
+        val n = xy.size / 2
+        val pr = if (rawN > 0) pressureSum / rawN else 0.5f
+        return StrokePoints(xy, FloatArray(n) { pr }, IntArray(n) { if (n <= 1) 0 else (lastT.toLong() * it / (n - 1)).toInt() })
+    }
+
     private fun feed(p: InkPoint) {
+        if (snap != null) {
+            if (rawN == 0) firstT = p.tMs
+            if (2 * rawN + 2 > raw.size) raw = raw.copyOf(raw.size * 2)
+            raw[2 * rawN] = p.x; raw[2 * rawN + 1] = p.y
+            rawN++
+            pressureSum += p.pressure.coerceIn(0f, 1f)
+            lastT = (p.tMs - firstT).toInt().coerceAtLeast(0)
+        }
         sampler.add(if (pressureGain == 1f) p else p.copy(pressure = (0.5f + (p.pressure - 0.5f) * pressureGain).coerceIn(0f, 1f)))
         dwell.onPoint(p.x, p.y, ctx.clock.now())
     }
 
-    private fun preview() = ctx.preview.show(Preview.LiveStroke(sampler.points(), style))
+    private fun preview() = ctx.preview.show(Preview.LiveStroke(snap?.let { guided(it) } ?: sampler.points(), style))
 
     private fun tryRecognise() {
         val rec = ShapeRecognizer.recognize(sampler.points().xy)

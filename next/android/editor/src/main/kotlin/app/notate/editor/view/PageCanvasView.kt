@@ -18,6 +18,9 @@ class PageCanvasView(context: Context) : View(context) {
     var live: LiveInkLayer? = null
     var sizeListener: ((Int, Int) -> Unit)? = null
 
+    /** Drawn on top of everything else (ruler, protractor). */
+    var overlay: ((Canvas) -> Unit)? = null
+
     /** Label of the "Add page" button below the last page (continuous mode); null = no button. */
     var addButtonLabel: String? = null
 
@@ -78,6 +81,7 @@ class PageCanvasView(context: Context) : View(context) {
             canvas.drawText(addButtonLabel.orEmpty(), r.centerX(), r.centerY() + label.textSize / 3f, label)
         }
         live?.draw(canvas, viewport, l)
+        overlay?.invoke(canvas)
     }
 
     companion object {
