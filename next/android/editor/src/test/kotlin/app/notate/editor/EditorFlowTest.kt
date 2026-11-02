@@ -14,6 +14,7 @@ import app.notate.core.model.DocId
 import app.notate.core.model.SystemClock
 import app.notate.core.model.log.Logger
 import app.notate.core.store.doc.SqliteDocStoreFactory
+import app.notate.core.testing.FakeClock
 import app.notate.core.testing.InMemoryKeyValueStore
 import app.notate.core.testing.meta
 import app.notate.core.testing.page
@@ -59,12 +60,12 @@ class EditorFlowTest {
 
         val registry = registry(factory)
         val handle = registry.acquire(meta.id)
-        val settings = Settings(InMemoryKeyValueStore())
+        val settings = Settings(InMemoryKeyValueStore()).also { it.holdShapeMs.set(0) }   // no timing-dependent shape recognition
         val deps = EditorDeps(
             registry = registry, settings = settings, toolController = ToolController(settings),
             dispatchers = DispatcherSet(Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.IO),
             device = DeviceInfo(isOnyx = false, model = "test", xdpi = 227f, maxPressure = 4096f, hasRawDrawing = false),
-            epd = EpdScheduler(NoEpdPort), clock = SystemClock, appScope = appScope, logger = Logger.NONE,
+            epd = EpdScheduler(NoEpdPort), clock = FakeClock(), appScope = appScope, logger = Logger.NONE,
         )
         val host = object : PaneHost {
             override val arbiter = InkArbiter()
@@ -87,8 +88,15 @@ class EditorFlowTest {
         handle.save.flush()
         registry.flushAll()
 
-        val reopened = registry(factory).acquire(meta.id)
-        val content = withTimeout(10_000) { reopened.editor.ensureLoaded(pageId) }
+        // Another connection to the same file: retry briefly in case the first one is still finishing its checkpoint.
+        var reopened = registry(factory).let { r -> runCatching { r.acquire(meta.id) } }
+        var attempts = 0
+        while (reopened.isFailure && attempts++ < 10) {
+            kotlinx.coroutines.delay(200)
+            reopened = runCatching { registry(factory).acquire(meta.id) }
+        }
+        val reopenedHandle = reopened.getOrThrow()
+        val content = withTimeout(10_000) { reopenedHandle.editor.ensureLoaded(pageId) }
         assertThat(content.all().toList()).hasSize(1)
     }
 
@@ -99,11 +107,11 @@ class EditorFlowTest {
         factory.create(dir, meta, listOf(page(1))).close()
         val registry = registry(factory)
         val handle = registry.acquire(meta.id)
-        val settings = Settings(InMemoryKeyValueStore())
+        val settings = Settings(InMemoryKeyValueStore()).also { it.holdShapeMs.set(0) }   // no timing-dependent shape recognition
         val deps = EditorDeps(
             registry, settings, ToolController(settings),
             DispatcherSet(Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.IO),
-            DeviceInfo(false, "test", 227f, 4096f, false), EpdScheduler(NoEpdPort), SystemClock, appScope, Logger.NONE,
+            DeviceInfo(false, "test", 227f, 4096f, false), EpdScheduler(NoEpdPort), FakeClock(), appScope, Logger.NONE,
         )
         val host = object : PaneHost {
             override val arbiter = InkArbiter()
