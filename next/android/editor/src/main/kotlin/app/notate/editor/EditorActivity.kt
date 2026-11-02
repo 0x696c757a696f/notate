@@ -167,6 +167,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onFocusModeRequested() = chrome.setFocusMode(!chrome.focusMode)
 
+    override fun onPageGrid(hasGrid: Boolean) { chrome.toolbar.gridAvailable = hasGrid }
+
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
     // --- Toolbar --------------------------------------------------------------------------------------------
