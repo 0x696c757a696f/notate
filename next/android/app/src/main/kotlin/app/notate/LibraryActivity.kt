@@ -15,6 +15,15 @@ import app.notate.library.LibraryViewModel
 import app.notate.library.NotateTheme
 import app.notate.library.ui.CoverLoader
 import app.notate.library.ui.LibraryScreen
+import app.notate.library.ui.DialogButton
+import app.notate.library.ui.NotateDialog
+import app.notate.platform.log.CrashHandler
+import app.notate.platform.log.ShareLogs
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -37,10 +46,12 @@ class LibraryActivity : ComponentActivity() {
                 NotateTheme {
                     val covers = remember { CoverLoader(graph.paths::coverFile) }
                     val hud by graph.settings.debugHud.collectAsStateWithLifecycle()
+                    CrashPrompt()
                     LibraryScreen(
                         vm = vm,
                         covers = covers,
                         onOpenDocument = { id -> open(vm, id) },
+                        onSettings = { startActivity(SettingsActivity.intent(this@LibraryActivity)) },
                         onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
                         extraAdd = listOfNotNull(
                             continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
@@ -52,6 +63,25 @@ class LibraryActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** After a crash: offers the reports once; they are filed under `crash/sent/` whatever the answer. */
+    @Composable
+    private fun CrashPrompt() {
+        var reports by remember { mutableStateOf(CrashHandler.pendingCrashReports(graph.paths)) }
+        if (reports.isEmpty()) return
+        val done = { CrashHandler.markSent(graph.paths, reports); reports = emptyList() }
+        NotateDialog(
+            title = stringResource(R.string.crash_dialog_title), onDismiss = done,
+            buttons = {
+                DialogButton(stringResource(R.string.crash_not_now), onClick = done)
+                DialogButton(stringResource(R.string.crash_share), filled = true) {
+                    val intent = ShareLogs.crashIntent(this, graph.paths, graph.logger, reports, getString(R.string.share_crash_subject))
+                    done()
+                    startActivity(intent)
+                }
+            },
+        ) { Text(stringResource(R.string.crash_dialog_message), fontSize = 16.sp) }
     }
 
     override fun onResume() {

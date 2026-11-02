@@ -43,6 +43,24 @@ object CrashHandler {
         )
     }
 
+    /** Moves [reports] to `crash/sent/` so they are not offered again (whether or not the user shared them). */
+    fun markSent(paths: AppPaths, reports: List<File>) {
+        val sent = File(paths.crashDir, "sent").also { it.mkdirs() }
+        for (f in reports) if (!f.renameTo(File(sent, f.name))) f.delete()
+    }
+
+    /** Merges [reports] into one text file [out] (oldest first) for sharing. */
+    fun bundle(reports: List<File>, out: File): File {
+        out.bufferedWriter().use { w ->
+            for (f in reports) {
+                w.write("===== ${f.name} =====\n")
+                w.write(f.readText())
+                w.write("\n")
+            }
+        }
+        return out
+    }
+
     /** Crash reports not yet cleared by the user, oldest first. */
     fun pendingCrashReports(paths: AppPaths): List<File> =
         paths.crashDir.listFiles { f -> f.isFile && f.name.endsWith(".txt") }.orEmpty().sortedBy { it.name }

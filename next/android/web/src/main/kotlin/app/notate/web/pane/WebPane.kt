@@ -126,7 +126,7 @@ class WebPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
 
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing) OnyxDriverPort(overlay, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(overlay, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val consumesFingers: Boolean = false
 
@@ -578,7 +578,7 @@ class WebPane(
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
-            is PenEvent.Down -> beginPen(x, y, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs, ev.eraser, viaDriver = false)
+            is PenEvent.Down -> beginPen(x, y, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs, ev.eraser, viaDriver = false, lasso = ev.lasso)
             is PenEvent.Move -> movePen(listOf(InkPoint(0f, 0f, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs)), x, y)
             is PenEvent.Up -> endPen(x, y, ev.tMs, 0f)
             is PenEvent.Cancel -> cancelPen()
@@ -621,7 +621,7 @@ class WebPane(
     // Pen: common. A pen event this pane accepted always reaches a tool session; nothing is dropped for being early.
     // ---------------------------------------------------------------------------------------------------------
 
-    private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean) {
+    private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean, lasso: Boolean = false) {
         if (session != null) cancelPen()
         if (fingerBusy && !viaDriver) {
             main.removeCallbacks(endFingerRunnable)
@@ -630,6 +630,9 @@ class WebPane(
         if (eraser) {
             tempEraser = true
             deps.toolController.temporaryEraser(true)
+        } else if (lasso) {
+            tempEraser = true
+            deps.toolController.temporaryTool(ToolKind.LASSO)
         }
         syncViewport()
         val vp = viewport

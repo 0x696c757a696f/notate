@@ -102,8 +102,9 @@ class NotebookPane(
         onTileReady = { onTileReady() },
     )
 
+    // "Low-latency pen" off (Settings): no driver at all, the pen arrives as touch events; takes effect when the document is reopened.
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val penMode: InputPenMode = InputPenMode.WRITE
     override val takesConstraintFinger: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
@@ -119,6 +120,8 @@ class NotebookPane(
         private set
     private val pageActions = PageActions(context, editor, scope, deps.logger)
     private var addCard = false
+    private var pageTurns = 0
+    private var fullRefreshAfterTurn = false
     private var panDx = 0f
     private var panDy = 0f
     private var edgeBack = false
@@ -203,7 +206,6 @@ class NotebookPane(
             editor.pages.collect { onPagesChanged() }
         }
         scope.launch { deps.toolController.state.collect { onToolChanged(it.preset()) } }
-        scope.launch { deps.settings.driverInk.collect { updateDriverInk() } }
     }
 
     private fun buildLayout() = DocumentLayout(editor.pages.value, layoutMode)
@@ -462,7 +464,9 @@ class NotebookPane(
         host.arbiter.block(this, BlockReason.FINGER_GESTURE, false)
         updateDriverInk()
         requestTiles()
-        deps.epd.refresh(canvasView, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+        val full = fullRefreshAfterTurn
+        fullRefreshAfterTurn = false
+        deps.epd.refresh(canvasView, if (full) EpdMode.GC else EpdMode.GU, null, EpdTiming.AFTER_DRAW)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -489,7 +493,7 @@ class NotebookPane(
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
-            is PenEvent.Down -> beginPen(x, y, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs, ev.eraser, viaDriver = false)
+            is PenEvent.Down -> beginPen(x, y, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs, ev.eraser, viaDriver = false, lasso = ev.lasso)
             is PenEvent.Move -> movePen(listOf(InkPoint(0f, 0f, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs)), x, y)
             is PenEvent.Up -> endPen(x, y, ev.tMs, 0f)
             is PenEvent.Cancel -> cancelPen()
@@ -533,7 +537,7 @@ class NotebookPane(
     // Pen: common
     // ---------------------------------------------------------------------------------------------------------
 
-    private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean) {
+    private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean, lasso: Boolean = false) {
         if (session != null) cancelPen()
         if (inkSuspended) return
         if (fingerBusy && !viaDriver) {
@@ -543,6 +547,9 @@ class NotebookPane(
         if (eraser) {
             tempEraser = true
             deps.toolController.temporaryEraser(true)
+        } else if (lasso) {
+            tempEraser = true
+            deps.toolController.temporaryTool(ToolKind.LASSO)
         }
         val vp = viewport
         val hit = PaneCoords.toPage(vp, layout, x, y)
@@ -833,9 +840,21 @@ class NotebookPane(
         } else {
             panned(0f, 0f, viewport.copy(scrollY = layout.frameOf(page).t - GO_TO_MARGIN_DP * density / viewport.scale))
         }
+        if (layoutMode == PageLayoutMode.SINGLE) countPageTurn()
         beginFinger()
         setViewport(vp, delayTiles = false)
         scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+    }
+
+    /** Settings → Full refresh every N page turns (single-page mode): every Nth turn ends with a full refresh. */
+    private fun countPageTurn() {
+        val n = deps.settings.gcEvery.value
+        if (n <= 0) { pageTurns = 0; return }
+        pageTurns++
+        if (pageTurns >= n) {
+            pageTurns = 0
+            fullRefreshAfterTurn = true
+        }
     }
 
     override fun setLayoutMode(mode: PageLayoutMode) {

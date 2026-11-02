@@ -10,6 +10,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.doc.tools.ToolState
@@ -56,6 +57,19 @@ class ToolbarView(
 
     private val tools = ArrayList<Def>()
     private val middle = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+    private val leftGroup: LinearLayout
+    private val rightGroup: LinearLayout
+    private val hScroll: HorizontalScrollView
+    private val vScroll: ScrollView
+    private val vBox = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+
+    /** Left-side vertical layout (landscape, Settings → Toolbar position); a 64 dp wide column instead of the 52 dp top row. */
+    var vertical: Boolean = false
+        set(v) {
+            if (field == v && childCount > 0) return
+            field = v
+            applyOrientation()
+        }
     private val undo: ToolButton
     private val redo: ToolButton
     private val pages: ToolButton
@@ -76,12 +90,8 @@ class ToolbarView(
     private var last: ToolState? = null
 
     init {
-        orientation = HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        background = LayerDrawable(arrayOf(ColorDrawable(Color.WHITE), GradientDrawable().apply { setColor(Color.BLACK) })).also {
-            it.setLayerInset(1, 0, dp(51), 0, 0)
-        }
         val left = LinearLayout(context).apply { orientation = HORIZONTAL }
+        leftGroup = left
         fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int): Def {
             val name = context.getString(label)
             val b = ToolButton(context, icon, name).onClick {
@@ -105,16 +115,17 @@ class ToolbarView(
         rulerDef = tool(null, Capability.RULER, R.drawable.ic_straighten, R.string.tool_ruler)
         tool(ToolKind.ZOOM_WINDOW, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom)
         tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand)
-        addView(left)
-
-        val scroll = HorizontalScrollView(context).apply {
+        hScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = OVER_SCROLL_NEVER
-            addView(middle)
         }
-        addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+        vScroll = ScrollView(context).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = OVER_SCROLL_NEVER
+        }
 
         val right = LinearLayout(context).apply { orientation = HORIZONTAL }
+        rightGroup = right
         undo = ToolButton(context, R.drawable.ic_undo, context.getString(R.string.action_undo)).onClick { actions.onUndo() }
         redo = ToolButton(context, R.drawable.ic_redo, context.getString(R.string.action_redo)).onClick { actions.onRedo() }
         pages = ToolButton(context, R.drawable.ic_grid_view, context.getString(R.string.action_pages)).onClick { actions.onPages() }
@@ -123,12 +134,45 @@ class ToolbarView(
         undo.reason = context.getString(R.string.nothing_to_undo)
         redo.reason = context.getString(R.string.nothing_to_redo)
         listOf(undo, redo, pages, split, more).forEach { right.addView(it) }
-        addView(right)
+        applyOrientation()
         render(controller.baseState())
     }
 
+    private fun applyOrientation() {
+        val v = vertical
+        removeAllViews()
+        vBox.removeAllViews()
+        hScroll.removeAllViews()
+        vScroll.removeAllViews()
+        (middle.parent as? android.view.ViewGroup)?.removeView(middle)
+        orientation = if (v) VERTICAL else HORIZONTAL
+        gravity = if (v) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+        leftGroup.orientation = if (v) VERTICAL else HORIZONTAL
+        rightGroup.orientation = if (v) VERTICAL else HORIZONTAL
+        middle.orientation = if (v) VERTICAL else HORIZONTAL
+        middle.gravity = if (v) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+        background = LayerDrawable(arrayOf(ColorDrawable(Color.WHITE), GradientDrawable().apply { setColor(Color.BLACK) })).also {
+            if (v) it.setLayerInset(1, dp(WIDTH_DP - 1), 0, 0, 0) else it.setLayerInset(1, 0, dp(HEIGHT_DP - 1), 0, 0)
+        }
+        if (v) {
+            // One scrolling column: tools, options of the active tool, actions.
+            vBox.addView(leftGroup)
+            vBox.addView(middle, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            vBox.addView(rightGroup)
+            vScroll.addView(vBox)
+            addView(vScroll, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        } else {
+            addView(leftGroup)
+            hScroll.addView(middle)
+            addView(hScroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+            addView(rightGroup)
+        }
+        if (last != null) render(last!!, force = true)
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(dp(HEIGHT_DP), MeasureSpec.EXACTLY))
+        if (vertical) super.onMeasure(MeasureSpec.makeMeasureSpec(dp(WIDTH_DP), MeasureSpec.EXACTLY), heightMeasureSpec)
+        else super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(dp(HEIGHT_DP), MeasureSpec.EXACTLY))
     }
 
     /** Greys out what the focused pane cannot do; if the active tool became unavailable the pen is selected. */
@@ -176,6 +220,7 @@ class ToolbarView(
 
     companion object {
         const val HEIGHT_DP = 52
+        const val WIDTH_DP = 64
     }
 }
 
@@ -189,8 +234,9 @@ internal class ToolbarOptions(
     private val gridAvailable: Boolean = true,
 ) {
     private fun divider() {
-        row.addView(View(context).apply { setBackgroundColor(Ink.GRAY) }, LinearLayout.LayoutParams(context.dp(1), context.dp(24)).apply {
-            leftMargin = context.dp(4); rightMargin = context.dp(4)
+        val v = row.orientation == LinearLayout.VERTICAL
+        row.addView(View(context).apply { setBackgroundColor(Ink.GRAY) }, LinearLayout.LayoutParams(context.dp(if (v) 24 else 1), context.dp(if (v) 1 else 24)).apply {
+            if (v) { topMargin = context.dp(4); bottomMargin = context.dp(4) } else { leftMargin = context.dp(4); rightMargin = context.dp(4) }
         })
     }
 

@@ -2,6 +2,9 @@ package app.notate.core.input
 
 enum class InputPenMode { WRITE, INTERACT, READ_ONLY }
 
+/** What the pen's barrel button does (Settings → Pen button). */
+enum class PenButtonAction { ERASER, LASSO, NONE }
+
 sealed interface PenEvent {
     val x: Float
     val y: Float
@@ -19,6 +22,8 @@ sealed interface PenEvent {
          * driver was only just opened for it and has not seen this stroke, so the pane must ink it from the touch events.
          */
         val focusSwitched: Boolean = false,
+        /** The barrel button is held and Settings maps it to the lasso. */
+        val lasso: Boolean = false,
     ) : PenEvent
 
     data class Move(
@@ -92,6 +97,9 @@ class InputDispatcher(
 
     /** False when the finger mode is Off: finger samples are left to ordinary views. */
     var fingersEnabled: Boolean = true
+
+    /** What the pen's barrel button does; the eraser end of the pen always erases. */
+    var penButton: PenButtonAction = PenButtonAction.ERASER
 
     private var gesturePane: PaneTarget? = null
     private var penPane: PaneTarget? = null
@@ -211,8 +219,10 @@ class InputDispatcher(
                 val switched = focusedPane != pane.id
                 if (switched) focusPane(pane)
                 penPane = pane
-                val eraser = s.kind == PointerKind.ERASER_END || s.buttons and PointerSample.BUTTON_STYLUS_PRIMARY != 0
-                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser, switched))
+                val button = s.buttons and PointerSample.BUTTON_STYLUS_PRIMARY != 0
+                val eraser = s.kind == PointerKind.ERASER_END || (button && penButton == PenButtonAction.ERASER)
+                val lasso = !eraser && button && penButton == PenButtonAction.LASSO
+                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser, lasso = lasso, focusSwitched = switched))
                 return true
             }
             PointerAction.MOVE -> {

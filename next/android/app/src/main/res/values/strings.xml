@@ -9,4 +9,10 @@
     <string name="import_book">Import EPUB or HTML</string>
     <string name="import_folder">Import HTML folder</string>
     <string name="create_test_notebook">Create 50-page test notebook</string>
+    <string name="share_logs_subject">Notate logs</string>
+    <string name="share_crash_subject">Notate crash report</string>
+    <string name="crash_dialog_title">Notate closed unexpectedly</string>
+    <string name="crash_dialog_message">Notate closed unexpectedly. Share a report to help fix it?</string>
+    <string name="crash_share">Share</string>
+    <string name="crash_not_now">Not now</string>
 </resources>

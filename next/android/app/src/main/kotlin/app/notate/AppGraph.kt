@@ -126,6 +126,7 @@ class AppGraph(
                 covers.onClosed(id)
             },
             paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
+            openSettings = { ctx -> ctx.startActivity(SettingsActivity.intent(ctx)) },
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
             workspaceStore = { workspaceStore },
             libraryStore = { libraryStore },

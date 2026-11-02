@@ -306,6 +306,19 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 palm.handedness = if (it == app.notate.core.doc.settings.Handedness.LEFT) app.notate.core.input.Handedness.LEFT else app.notate.core.input.Handedness.RIGHT
             }
         }
+        scope.launch {
+            d.settings.penButton.collect {
+                dispatcher.penButton = when (it) {
+                    app.notate.core.doc.settings.PenButton.ERASER -> app.notate.core.input.PenButtonAction.ERASER
+                    app.notate.core.doc.settings.PenButton.LASSO -> app.notate.core.input.PenButtonAction.LASSO
+                    app.notate.core.doc.settings.PenButton.NONE -> app.notate.core.input.PenButtonAction.NONE
+                }
+            }
+        }
+        scope.launch {
+            val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            d.settings.toolbarPos.collect { chrome.toolbarLeft = landscape && it == app.notate.core.doc.settings.ToolbarPos.LEFT }
+        }
         scope.launch { d.settings.debugHud.collect { hud.setShown(it) } }
         scope.launch {
             d.toolController.state.collect { chrome.toolbar.render(d.toolController.baseState()) }
@@ -373,6 +386,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         items += MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) }
         items += MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() }
         items += pane?.moreEntries() ?: emptyList()
+        items += MenuEntry(getString(R.string.more_settings)) { deps.openSettings(this) }
         MoreMenu(chrome.popups, anchor, items).show()
     }
 
