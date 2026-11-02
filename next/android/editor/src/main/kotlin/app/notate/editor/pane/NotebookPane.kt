@@ -359,7 +359,16 @@ class NotebookPane(
             host.arbiter.attach(this)
             host.claimPen(this)
             updateHandMode()
+            // The first config is sent while the window is still laying out; the Onyx service drops it. Re-sending
+            // once the view is drawn is what switching "low-latency pen" off and on does by hand.
+            for (delay in REAPPLY_DRIVER_MS) main.postDelayed({ reapplyDriver() }, delay)
         }
+    }
+
+    private fun reapplyDriver() {
+        if (released || viewport.widthPx == 0) return
+        driver.setLimits(android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx), host.excludeRects())
+        updateDriverInk()
     }
 
     private fun setViewport(vp: Viewport, delayTiles: Boolean) {
@@ -1154,6 +1163,7 @@ class NotebookPane(
         const val LOG_FIRST = 5
         const val FIT_MARGIN_DP = 12f
         const val ZOOM_RENDER_DELAY_MS = 150L
+        val REAPPLY_DRIVER_MS = longArrayOf(400L, 1500L)
         const val FINGER_SETTLE_MS = 700L
         const val POLL_MS = 50L
         const val HOVER_QUIET_MS = 400L
