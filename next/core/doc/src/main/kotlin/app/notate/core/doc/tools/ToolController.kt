@@ -16,6 +16,9 @@ class ToolController(private val settings: Settings) {
     private val _state = MutableStateFlow(effective())
     val state: StateFlow<ToolState> get() = _state
 
+    /** The saved state, without the temporary eraser (what the toolbar shows, so it does not flicker while the pen button is held). */
+    fun baseState(): ToolState = base
+
     fun select(kind: ToolKind) = update { it.copy(active = kind) }
 
     fun update(transform: (ToolState) -> ToolState) {
