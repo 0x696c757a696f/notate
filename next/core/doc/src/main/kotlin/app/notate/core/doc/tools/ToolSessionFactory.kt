@@ -10,9 +10,12 @@ class ToolSessionFactory {
         ToolKind.PEN, ToolKind.HIGHLIGHTER -> PenSession(tool, ctx)
         ToolKind.ERASER -> when (tool.eraserMode ?: EraserMode.PARTIAL) {
             EraserMode.PARTIAL -> PartialEraserSession(tool, ctx)
-            EraserMode.STROKE, EraserMode.LASSO -> StrokeEraserSession(tool, ctx)   // LASSO arrives in R2-4
+            EraserMode.STROKE -> StrokeEraserSession(tool, ctx)
+            EraserMode.LASSO -> LassoEraserSession(tool, ctx)
         }
+        ToolKind.LASSO -> ctx.selection?.let { LassoSelectSession(tool, ctx, it) } ?: NoopSession
         ToolKind.SHAPE -> ShapeDragSession(tool, ctx)
+        ToolKind.TEXT -> TextPlaceSession(tool, ctx)
         else -> NoopSession
     }
 }

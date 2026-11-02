@@ -74,6 +74,7 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
     var onPage: ((Int, Int) -> Unit)? = null
 
     override val arbiter get() = outer.arbiter
+    override val popups get() = if (active) outer.popups else null
     override fun excludeRects(): List<Rect> = view?.let(rectsFor) ?: emptyList()
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = outer.onDriverStroke(begin, timeMs)
 
@@ -89,6 +90,7 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
 
     override fun onZoomWindowChanged(open: Boolean) { if (active && focused) outer.onZoomWindowChanged(open) }
     override fun onFocusModeRequested() { if (active) outer.onFocusModeRequested() }
+    override fun openDocumentAt(doc: app.notate.core.model.DocId, page: app.notate.core.model.PageId) = outer.openDocumentAt(doc, page)
 
     override fun onPageGrid(hasGrid: Boolean) {
         this.hasGrid = hasGrid

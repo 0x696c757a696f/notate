@@ -16,6 +16,8 @@ class PageCanvasView(context: Context) : View(context) {
     var layout: DocumentLayout? = null
     var compositor: TileCompositor? = null
     var live: LiveInkLayer? = null
+    /** Draws the selection box above everything else. */
+    var overlay: ((Canvas) -> Unit)? = null
     var sizeListener: ((Int, Int) -> Unit)? = null
 
     /** The zoom writing window drawn over the lower third while it is open. */
@@ -81,6 +83,7 @@ class PageCanvasView(context: Context) : View(context) {
             canvas.drawText(addButtonLabel.orEmpty(), r.centerX(), r.centerY() + label.textSize / 3f, label)
         }
         live?.draw(canvas, viewport, l)
+        overlay?.invoke(canvas)
         zoom?.takeIf { it.isOpen }?.draw(canvas)
     }
 

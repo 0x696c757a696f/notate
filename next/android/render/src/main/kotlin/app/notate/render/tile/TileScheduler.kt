@@ -45,9 +45,10 @@ class TileScheduler(
     private class Running(val job: Job)
 
     private var wanted: List<Wanted> = emptyList()
-    private val wantedKeys = HashSet<TileKey>()
-    private val running = HashMap<TileKey, Running>()
-    private val failed = HashSet<TileKey>()
+    private val wantedKeys: MutableSet<TileKey> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    // Concurrent maps: tests (and a misconfigured scope) can resume tile jobs on other threads than the one calling cancelAll.
+    private val running = java.util.concurrent.ConcurrentHashMap<TileKey, Running>()
+    private val failed: MutableSet<TileKey> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private var lastViewport: Viewport? = null
     private var lastLayout: DocumentLayout? = null
 
@@ -112,7 +113,7 @@ class TileScheduler(
         return dx * dx + dy * dy
     }
 
-    private fun needsRender(k: TileKey) = !cache.isFresh(k) && k !in failed && k !in running
+    private fun needsRender(k: TileKey) = !cache.isFresh(k) && k !in failed && !running.containsKey(k)
 
     private fun pump() {
         if (running.size >= maxInFlight) return

@@ -5,13 +5,16 @@ import app.notate.core.doc.edit.IdAllocator
 import app.notate.core.doc.history.History
 import app.notate.core.doc.save.SaveQueue
 import app.notate.core.geometry.Rect
+import app.notate.core.model.AssetId
 import app.notate.core.model.Clock
 import app.notate.core.model.DocumentMeta
 import app.notate.core.model.ItemId
 import app.notate.core.model.PageId
 import app.notate.core.model.PageInfo
 import app.notate.core.model.edit.Edit
+import app.notate.core.store.AssetKind
 import app.notate.core.store.DocStore
+import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.channels.BufferOverflow
@@ -58,6 +61,13 @@ class DocumentEditor(
 
     /** Loaded snapshot of [page], or null when not loaded. */
     fun content(page: PageId): PageContent? = contents[page]
+
+    /** File of a stored asset, or null when this document does not hold it. */
+    fun assetFile(id: AssetId): File? = store.assetFile(id)
+
+    /** Copies [source] into this document's asset store (content-addressed, so repeated imports are free). */
+    suspend fun importAsset(kind: AssetKind, mime: String, source: File, ext: String): AssetId =
+        withContext(io) { store.putAsset(kind, mime, source, ext) }
 
     fun newItemId(): ItemId = ids.nextItem()
     fun newPageId(): PageId = ids.nextPage()

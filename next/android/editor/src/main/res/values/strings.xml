@@ -69,6 +69,22 @@
     <string name="text_larger">Larger text</string>
     <string name="text_bold">Bold</string>
     <string name="text_color">Text color</string>
+    <string name="text_align_left">Align left</string>
+    <string name="text_align_center">Align center</string>
+    <string name="text_align_right">Align right</string>
+
+    <string name="image_lock">Lock image</string>
+    <string name="image_unlock">Unlock image</string>
+    <string name="link_title">Link to</string>
+    <string name="link_this_notebook">Page in this notebook</string>
+    <string name="link_other_document">Another document</string>
+    <string name="link_web_address">Web address</string>
+    <string name="link_page_number">Page number</string>
+    <string name="link_url_hint">https://</string>
+    <string name="link_open_browser">Open link in browser?</string>
+    <string name="link_open">Open</string>
+    <string name="link_cancel">Cancel</string>
+    <string name="link_ok">OK</string>
 
     <string name="tab_home">Library</string>
     <string name="tab_close">Close</string>
@@ -133,4 +149,16 @@
     <string name="template_engineering">Engineering</string>
     <string name="template_cornell">Cornell</string>
     <string name="template_isometric">Isometric</string>
+
+    <string name="sel_cut">Cut</string>
+    <string name="sel_copy">Copy</string>
+    <string name="sel_duplicate">Duplicate</string>
+    <string name="sel_delete">Delete</string>
+    <string name="sel_color">Color</string>
+    <string name="sel_thickness">Thickness</string>
+    <string name="sel_front">Front</string>
+    <string name="sel_back">Back</string>
+    <string name="menu_paste">Paste</string>
+    <string name="sel_lock">Lock</string>
+    <string name="sel_link">Link…</string>
 </resources>

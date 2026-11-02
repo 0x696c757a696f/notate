@@ -20,6 +20,8 @@ class MoreMenu(
     private val entries: List<MenuEntry>,
     private val context: Context? = null,
     private val centered: Boolean = false,
+    /** Window position for the menu's top-left corner (long-press menus); overrides [anchor] placement. */
+    private val windowPoint: android.graphics.Point? = null,
 ) {
     fun show() {
         val ctx = anchor?.context ?: context ?: return
@@ -35,6 +37,6 @@ class MoreMenu(
             }
             list.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, ctx.dp(52)))
         }
-        if (centered || anchor == null) host.show(null, list, Placement.CENTER) else host.show(anchor, list)
+        if (windowPoint != null) host.show(null, list, Placement.POINT, windowPoint) else if (centered || anchor == null) host.show(null, list, Placement.CENTER) else host.show(anchor, list)
     }
 }

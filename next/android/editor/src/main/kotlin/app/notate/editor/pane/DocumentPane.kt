@@ -63,13 +63,25 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Opens or closes the zoom writing window; false when it cannot be opened. */
     fun setZoomWindowOpen(open: Boolean): Boolean = false
 
+    /** Imports a picked image (a content Uri) and places it on the page in view; panes without images ignore it. */
+    fun importImage(uri: android.net.Uri) {}
+
+    /** True when ([x], [y]) in window coordinates is on a view of the pane that takes touches itself (the text editor). */
+    fun hitsOwnUi(x: Float, y: Float): Boolean = false
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
+
+    /** Drops the selection, if any (tab switch, page grid). */
+    fun clearSelection() {}
 }
 
 /** What a pane needs from the window that hosts it. */
 interface PaneHost {
     val arbiter: InkArbiter
+
+    /** Popup host of the window (selection bar, long-press menu); null in hosts without one. */
+    val popups: app.notate.editor.popup.PopupHost? get() = null
 
     /** Areas of the pane's view (view-local px) where the pen must be ignored, e.g. floating toolbars. */
     fun excludeRects(): List<android.graphics.Rect>
@@ -93,6 +105,9 @@ interface PaneHost {
 
     /** The zoom window of the pane opened or closed (the toolbar's Zoom button follows). */
     fun onZoomWindowChanged(open: Boolean) {}
+
+    /** A link in the pane points at [page] of another document: open it (a tab) and show that page. */
+    fun openDocumentAt(doc: app.notate.core.model.DocId, page: PageId) {}
 
     /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
     fun onPageGrid(hasGrid: Boolean) {}

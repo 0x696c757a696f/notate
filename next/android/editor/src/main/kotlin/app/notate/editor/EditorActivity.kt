@@ -165,6 +165,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         splitLayout = SplitPaneLayout(this, dividerListener())
         chrome.paneArea.addView(splitLayout, 0, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         chrome.popups.onRectChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
+        chrome.popups.onBarChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         chrome.onFocusChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         hud = DebugHud(this) { hudLines() }
         chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -328,6 +329,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     // --- PaneHost -------------------------------------------------------------------------------------------
 
+    override val popups: app.notate.editor.popup.PopupHost get() = chrome.popups
+
     override fun excludeRects(): List<android.graphics.Rect> = pane?.let { chrome.excludeRectsFor(it.view) } ?: emptyList()
 
     override fun onFocusModeRequested() = chrome.setFocusMode(!chrome.focusMode)
@@ -337,6 +340,14 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun dismissPopup() = chrome.popups.dismiss()
     override fun onPageGrid(hasGrid: Boolean) { chrome.toolbar.gridAvailable = hasGrid }
+
+    override fun openDocumentAt(doc: DocId, page: app.notate.core.model.PageId) {
+        scope.launch {
+            controller.open(doc)
+            // The new tab's pane gets its size on the next layout pass; jump once it has one.
+            main.postDelayed({ if (controller.current?.doc == doc) pane?.goToPage(page) }, OPEN_AT_DELAY_MS)
+        }
+    }
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
@@ -363,6 +374,21 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     }
 
     // --- Toolbar --------------------------------------------------------------------------------------------
+
+    override fun onInsertImage() {
+        val i = Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE)
+        try {
+            startActivityForResult(i, REQ_IMAGE)
+        } catch (e: android.content.ActivityNotFoundException) {
+            deps.logger.e(TAG, "No image picker", e)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_IMAGE && resultCode == RESULT_OK) data?.data?.let { pane?.importImage(it) }
+    }
 
     override fun onUndo() { handle?.editor?.undo() }
 
@@ -433,6 +459,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val actions = session.pageActions
         if (gridOverlay != null) return
         chrome.popups.dismiss()
+        controller.displayed.forEach { it.pane.clearSelection() }
         val overlay = PageGridOverlay(
             this, h.editor, thumbnails(session), actions, chrome.popups,
             object : PageGridHost {
@@ -470,6 +497,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         for (s in controller.displayed) {
             val f = s.frame
             if (f != null && f.split && f.hitsBar(ev.x, ev.y)) return true
+            if (s.pane.hitsOwnUi(ev.x, ev.y)) return true
             val v = s.indicator ?: continue
             v.getLocationInWindow(loc)
             if (ev.x >= loc[0] && ev.x < loc[0] + v.width && ev.y >= loc[1] && ev.y < loc[1] + v.height) return true
@@ -511,6 +539,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 return true
             }
             if (popups.isShowing && popups.contains(ev)) route = Route.VIEWS
+            else if (popups.barContains(ev)) route = Route.VIEWS
             else if (hitsPageUi(ev)) route = Route.VIEWS
         }
         when (route) {
@@ -599,6 +628,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         private const val TAG = "EditorActivity"
         private const val EXTRA_DOC_ID = "doc_id"
         private const val TICK_MS = 50L
+        private const val REQ_IMAGE = 71
+        private const val OPEN_AT_DELAY_MS = 350L
         private const val RECENT_FINGERS = 5
 
         /** Opens [id] in a tab of the editor window (starting the window if needed). */

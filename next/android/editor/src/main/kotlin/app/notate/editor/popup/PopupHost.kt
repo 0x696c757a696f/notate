@@ -13,7 +13,7 @@ import app.notate.core.input.InkArbiter
 import app.notate.editor.ui.dp
 import app.notate.editor.ui.popupBackground
 
-enum class Placement { BELOW_ANCHOR, CENTER }
+enum class Placement { BELOW_ANCHOR, CENTER, POINT }
 
 /** Handle to a shown popup. */
 interface PopupHandle {
@@ -44,8 +44,13 @@ class PopupHost(
     /** The popup rectangle in root coordinates, or null. */
     fun rect(): Rect? = rect?.let { Rect(it) }
 
-    /** Shows [content] near [anchor] (a previous popup is closed first). */
-    fun show(anchor: View?, content: View, placement: Placement = Placement.BELOW_ANCHOR): PopupHandle {
+    /**
+     * Shows [content] near [anchor] (a previous popup is closed first). [Placement.POINT] puts its top-left corner at
+     * [windowPoint] (window coordinates), moved inside the window if needed.
+     */
+    fun show(
+        anchor: View?, content: View, placement: Placement = Placement.BELOW_ANCHOR, windowPoint: android.graphics.Point? = null,
+    ): PopupHandle {
         dismissInternal(refresh = false)
         val box = FrameLayout(root.context).apply {
             background = popupBackground(root.context)
@@ -70,6 +75,11 @@ class PopupHost(
             left = a.left
             top = a.bottom
             if (top + h > root.height - m && a.top - h >= m) top = a.top - h
+        } else if (placement == Placement.POINT && windowPoint != null) {
+            val o = IntArray(2)
+            root.getLocationInWindow(o)
+            left = windowPoint.x - o[0]
+            top = windowPoint.y - o[1]
         } else {
             left = (root.width - w) / 2
             top = (root.height - h) / 2
@@ -145,6 +155,79 @@ class PopupHost(
         val l = a[0] - b[0]
         val t = a[1] - b[1]
         return Rect(l, t, l + anchor.width, t + anchor.height)
+    }
+
+    // --- Selection bar: a second, persistent slot. It never blocks the pen, is not closed by outside touches and does not
+    // replace the popup above; its rectangle is excluded from pen input. ---
+
+    private var bar: FrameLayout? = null
+    private var barRect: Rect? = null
+
+    /** Called when the bar appears, moves or goes away. */
+    var onBarChanged: (() -> Unit)? = null
+
+    /** The bar rectangle in root coordinates, or null. */
+    fun barRect(): Rect? = barRect?.let { Rect(it) }
+
+    /**
+     * Shows or moves the bar holding [content] above [local] (pixels of [anchorView]; below it when there is no room above).
+     * Passing the same [content] view again only moves it.
+     */
+    fun showBar(content: View, anchorView: View, local: Rect) {
+        val a = anchorRect(anchorView)
+        val target = Rect(a.left + local.left, a.top + local.top, a.left + local.right, a.top + local.bottom)
+        val m = root.dp(MARGIN_DP)
+        var box = bar
+        if (box == null || box.getChildAt(0) !== content) {
+            box?.let { root.removeView(it) }
+            box = FrameLayout(root.context).apply {
+                background = popupBackground(root.context)
+                val pad = dp(2)
+                setPadding(pad, pad, pad, pad)
+                addView(content)
+                isClickable = true
+            }
+            root.addView(box, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
+            bar = box
+        }
+        box.measure(
+            View.MeasureSpec.makeMeasureSpec(maxOf(root.width - 2 * m, 1), View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(maxOf(root.height - 2 * m, 1), View.MeasureSpec.AT_MOST),
+        )
+        val w = box.measuredWidth
+        val h = box.measuredHeight
+        var top = target.top - h - m
+        if (top < m) top = target.bottom + m
+        val left = (target.centerX() - w / 2).coerceIn(m, maxOf(m, root.width - w - m))
+        top = top.coerceIn(m, maxOf(m, root.height - h - m))
+        val lp = box.layoutParams as FrameLayout.LayoutParams
+        lp.leftMargin = left; lp.topMargin = top
+        box.layoutParams = lp
+        val r = Rect(left, top, left + w, top + h)
+        val changed = r != barRect
+        barRect = r
+        if (changed) {
+            onBarChanged?.invoke()
+            refreshArea(r)
+        }
+    }
+
+    fun hideBar() {
+        val box = bar ?: return
+        val r = barRect
+        bar = null
+        barRect = null
+        root.removeView(box)
+        onBarChanged?.invoke()
+        if (r != null) refreshArea(r)
+    }
+
+    /** True when the touch point of [ev] (window coordinates) is inside the bar. */
+    fun barContains(ev: MotionEvent): Boolean {
+        val r = barRect ?: return false
+        val loc = IntArray(2)
+        root.getLocationInWindow(loc)
+        return r.contains((ev.x - loc[0]).toInt(), (ev.y - loc[1]).toInt())
     }
 
     private inner class Handle(val view: View) : PopupHandle {

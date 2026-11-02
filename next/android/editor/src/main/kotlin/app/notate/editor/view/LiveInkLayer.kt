@@ -60,7 +60,17 @@ class LiveInkLayer(
     var projectionProvider: () -> Projection? = { null }
     var layoutProvider: () -> DocumentLayout? = { null }
 
-    private class Entry(val page: PageId, val item: Item, val hide: Boolean)
+    private class Entry(val page: PageId, val item: Item, val hide: Boolean, val clip: Boolean = true)
+
+    /** True while a selection is dragged: the ghost may leave its page (cross-page move) instead of being clipped to it. */
+    var unclippedGhost: Boolean = false
+
+    private val lassoPaint = Paint().apply {
+        color = 0xFF000000.toInt(); style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f * density, 4f * density), 0f)
+        strokeWidth = 2f * density
+    }
+    private var lasso: FloatArray? = null
 
     private var stroke: Stroke? = null
     private var ghost: List<Item> = emptyList()
@@ -72,7 +82,7 @@ class LiveInkLayer(
     private var lastBounds: Rect = Rect.EMPTY
     private var lastPageForBounds: PageId? = null
 
-    val hasOverlay: Boolean get() = stroke != null || ghost.isNotEmpty() || hidden.isNotEmpty() || overlay.isNotEmpty()
+    val hasOverlay: Boolean get() = lasso != null || stroke != null || ghost.isNotEmpty() || hidden.isNotEmpty() || overlay.isNotEmpty()
 
     override fun show(p: Preview) {
         when (p) {
@@ -83,7 +93,7 @@ class LiveInkLayer(
                 for (id in p.ids) if (id !in hidden) c?.get(id)?.let { hidden[id] = it }
             }
             is Preview.EraserCursor -> { cursorCenterX = p.center.x; cursorCenterY = p.center.y; cursorRadius = p.radius }
-            is Preview.LassoPath -> Unit
+            is Preview.LassoPath -> lasso = p.points
         }
         invalidateChanged()
     }
@@ -93,12 +103,13 @@ class LiveInkLayer(
         val pg = page
         if (pg != null) {
             for (h in hidden.values) overlay.add(Entry(pg, h, hide = true))
-            ghost.forEach { overlay.add(Entry(pg, it, hide = false)) }
+            ghost.forEach { overlay.add(Entry(pg, it, hide = false, clip = !unclippedGhost)) }
             stroke?.let { overlay.add(Entry(pg, it, hide = false)) }
         }
         hidden.clear()
         ghost = emptyList()
         stroke = null
+        lasso = null
         cursorRadius = -1f
         invalidateChanged()
     }
@@ -108,6 +119,7 @@ class LiveInkLayer(
         hidden.clear()
         ghost = emptyList()
         stroke = null
+        lasso = null
         cursorRadius = -1f
         invalidateChanged()
     }
@@ -121,12 +133,13 @@ class LiveInkLayer(
     fun draw(canvas: Canvas, vp: Viewport, layout: DocumentLayout) {
         if (!hasOverlay && cursorRadius < 0f) return
         val s = vp.scale
-        for (e in overlay) drawEntry(canvas, vp, layout, e.page, e.item, e.hide)
+        for (e in overlay) drawEntry(canvas, vp, layout, e.page, e.item, e.hide, e.clip)
         val pg = page ?: return
         for (item in hidden.values) drawEntry(canvas, vp, layout, pg, item, true)
-        for (item in ghost) drawEntry(canvas, vp, layout, pg, item, false)
+        for (item in ghost) drawEntry(canvas, vp, layout, pg, item, false, !unclippedGhost)
         val st = stroke
         if (st != null && !driverDraws) drawEntry(canvas, vp, layout, pg, st, false)
+        lasso?.let { pts -> drawLasso(canvas, vp, layout, pg, pts) }
         if (cursorRadius >= 0f) {
             val f = layout.frameOf(pg)
             canvas.save()
@@ -138,12 +151,24 @@ class LiveInkLayer(
         }
     }
 
-    private fun drawEntry(canvas: Canvas, vp: Viewport, layout: DocumentLayout, pg: PageId, item: Item, hide: Boolean) {
+    private fun drawLasso(canvas: Canvas, vp: Viewport, layout: DocumentLayout, pg: PageId, pts: FloatArray) {
+        val f = layout.frameOf(pg)
+        if (f.isEmpty || pts.size < 4) return
+        val s = vp.scale
+        val path = android.graphics.Path()
+        path.moveTo((f.l + pts[0] - vp.scrollX) * s, (f.t + pts[1] - vp.scrollY) * s)
+        var i = 2
+        while (i + 1 < pts.size) { path.lineTo((f.l + pts[i] - vp.scrollX) * s, (f.t + pts[i + 1] - vp.scrollY) * s); i += 2 }
+        path.close()
+        canvas.drawPath(path, lassoPaint)
+    }
+
+    private fun drawEntry(canvas: Canvas, vp: Viewport, layout: DocumentLayout, pg: PageId, item: Item, hide: Boolean, clip: Boolean = true) {
         val f = layout.frameOf(pg)
         if (f.isEmpty) return
         val s = vp.scale
         canvas.save()
-        canvas.clipRect((f.l - vp.scrollX) * s, (f.t - vp.scrollY) * s, (f.r - vp.scrollX) * s, (f.b - vp.scrollY) * s)
+        if (clip) canvas.clipRect((f.l - vp.scrollX) * s, (f.t - vp.scrollY) * s, (f.r - vp.scrollX) * s, (f.b - vp.scrollY) * s)
         canvas.scale(s, s)
         canvas.translate(f.l - vp.scrollX, f.t - vp.scrollY)
         if (hide) { if (paintHiddenWhite) drawWhite(canvas, item, s) } else renderer.draw(canvas, item, paints)
@@ -175,6 +200,7 @@ class LiveInkLayer(
         for (g in ghost) r = r.union(g.bounds)
         for (h in hidden.values) r = r.union(h.bounds)
         if (cursorRadius >= 0f) r = r.union(Rect.around(cursorCenterX, cursorCenterY, cursorRadius + 2f))
+        lasso?.let { r = r.union(Rect.ofPoints(it).inset(-4f)) }
         return r
     }
 
