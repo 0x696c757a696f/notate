@@ -177,6 +177,9 @@ class OnyxDriverPort(
             if (on) {
                 h.setRawDrawingEnabled(true)
                 h.setRawDrawingRenderEnabled(ink != null && !erasing)
+                // Legacy WebDriverPort does this on every switch-on: another pane may have left the pen out of scribble
+                // mode, and the call made in open() can come before the view is attached.
+                runCatching { EpdController.enterScribbleMode(view) }
                 EpdController.setScreenHandWritingPenState(view, EpdPenManager.PEN_DRAWING)
                 applyInk()
             } else {
