@@ -27,4 +27,25 @@
     <string name="web_clear_confirm">Erase all handwriting on this page?</string>
     <string name="web_clear">Erase</string>
     <string name="web_page_crashed">The page stopped working. Use More → Refresh screen to try again.</string>
+    <string name="web_export_annotations">Export annotations…</string>
+    <string name="web_export_pdf_chapter">PDF: this chapter</string>
+    <string name="web_export_pdf_all">PDF: all chapters with notes</string>
+    <string name="web_export_json">Notes data (JSON)</string>
+    <string name="web_export_progress">Exporting… chapter %1$d / %2$d</string>
+    <string name="web_export_preparing">Exporting…</string>
+    <string name="web_export_nothing">No chapter has handwriting yet.</string>
+    <string name="web_export_failed">Export failed. Try again.</string>
+    <string name="web_export_share">Share exported file</string>
+    <string name="web_find_in_document">Find in document</string>
+    <string name="web_find_hint">Find</string>
+    <string name="web_find_previous">Previous match</string>
+    <string name="web_find_next">Next match</string>
+    <string name="web_find_all_chapters">Search all chapters</string>
+    <string name="web_find_close">Close find</string>
+    <string name="web_find_count">%1$d of %2$d</string>
+    <string name="web_find_none">0 of 0</string>
+    <string name="web_find_results_none">No matches in other chapters.</string>
+    <string name="web_find_result_fmt">%1$s (%2$d)</string>
+    <string name="web_compat_check">Compatibility check</string>
+    <string name="web_compat_close">Close</string>
 </resources>

@@ -27,6 +27,9 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
     @Volatile var contentHeightCss = 0f
         private set
 
+    @Volatile var features = 0
+        private set
+
     inner class JsApi {
         @JavascriptInterface
         fun onScroll(x: Float, y: Float, contentWidth: Float, contentHeight: Float) {
@@ -42,6 +45,12 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
         fun onLayout(innerWidth: Float, fixed: Boolean) {
             if (!innerWidth.isFinite() || innerWidth <= 0f) return
             webView.post { listener.onLayoutReported(innerWidth, fixed) }
+        }
+
+        /** Bit set of features the page used: 1 service worker, 2 WebGL, 4 WebAssembly, 8 ES modules. */
+        @JavascriptInterface
+        fun onFeatures(bits: Int) {
+            features = features or (bits and ALL_FEATURES)
         }
 
         @JavascriptInterface
@@ -84,6 +93,7 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
         innerY = 0f
         contentWidthCss = 0f
         contentHeightCss = 0f
+        features = 0
     }
 
     fun release() {
@@ -92,6 +102,11 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
 
     companion object {
         const val NAME = "NotateBridge"
+        const val FEATURE_SERVICE_WORKER = 1
+        const val FEATURE_WEBGL = 2
+        const val FEATURE_WASM = 4
+        const val FEATURE_MODULES = 8
+        private const val ALL_FEATURES = 15
         private const val ASSET = "notate-web/bridge.js"
         private const val MAX_CSS = 1_000_000f
 

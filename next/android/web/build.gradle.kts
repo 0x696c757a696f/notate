@@ -18,6 +18,8 @@ dependencies {
     api("app.notate.core:web")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("androidx.core:core:1.16.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     testImplementation("app.notate.core:testing")
     testImplementation("junit:junit:4.13.2")
