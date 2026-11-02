@@ -42,10 +42,13 @@ class EditorFlowTest {
     private val dir = Files.createTempDirectory("editorflow").toFile()
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private var openedStore: app.notate.core.store.DocStore? = null
+
     private fun registry(factory: SqliteDocStoreFactory) = DocumentRegistry(
         opener = object : DocumentOpener {
             override suspend fun open(id: DocId): Opened {
                 val store = factory.open(dir)
+                openedStore = store
                 return Opened(store, store.readMeta(), store.readPages(), store.maxIds())
             }
         },
@@ -86,18 +89,17 @@ class EditorFlowTest {
 
         pane.release()
         handle.save.flush()
-        registry.flushAll()
+        // Close the first connection before the second one opens: two live connections to one file are not what
+        // this test is about and make the Robolectric SQLite shadow racy.
+        handle.save.close()
+        openedStore!!.close()
 
-        // Another connection to the same file: retry briefly in case the first one is still finishing its checkpoint.
-        var reopened = registry(factory).let { r -> runCatching { r.acquire(meta.id) } }
-        var attempts = 0
-        while (reopened.isFailure && attempts++ < 10) {
-            kotlinx.coroutines.delay(200)
-            reopened = runCatching { registry(factory).acquire(meta.id) }
+        val reopened = factory.open(dir)
+        try {
+            assertThat(withTimeout(10_000) { reopened.readItems(pageId) }).hasSize(1)
+        } finally {
+            reopened.close()
         }
-        val reopenedHandle = reopened.getOrThrow()
-        val content = withTimeout(10_000) { reopenedHandle.editor.ensureLoaded(pageId) }
-        assertThat(content.all().toList()).hasSize(1)
     }
 
     @Test fun undoRemovesTheStroke() = runBlocking {
