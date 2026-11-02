@@ -60,6 +60,9 @@ interface SettingsHost {
     val isDebugBuild: Boolean
     fun shareLogs()
 
+    /** Opens the flow that copies notes from the old Notate app into this library. */
+    fun importFromOldNotate()
+
     /** Lines for the full-screen ink diagnostics page (device facts and recent log lines). */
     fun diagnosticLines(): List<String>
 }
@@ -169,6 +172,9 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
         Group(R.string.settings_group_books)
         Toggle(R.string.settings_web_network, settings.webNetworkDefault)
         Toggle(R.string.settings_web_js, settings.webJsDefault)
+
+        Group(R.string.settings_group_import)
+        Row2(stringResource(R.string.settings_import_old), null) { host.importFromOldNotate() }
 
         Group(R.string.settings_group_search)
         Toggle(R.string.settings_ocr, settings.ocrEnabled, R.string.settings_ocr_hint)

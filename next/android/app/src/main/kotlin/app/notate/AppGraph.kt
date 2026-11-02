@@ -31,6 +31,8 @@ import app.notate.render.ink.GeometryCache
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.thumb.ThumbnailRenderer
+import app.notate.export.legacy.LegacyImporter
+import app.notate.export.legacy.LegacyLocalMigrator
 import app.notate.web.WebImporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -103,6 +105,21 @@ class AppGraph(
         ThumbnailRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), dispatchers.render),
         dispatchers, scope, logger,
     )
+
+    /** Copies old Notate notes into the library (Settings → Import from old Notate…, and the in-place migration). */
+    val legacyImporter = LegacyImporter(
+        docs = docStoreFactory,
+        libraryProvider = { libraryStore },
+        docDir = paths::docDir,
+        stagingRoot = paths.cacheDir,
+        clock = clock,
+        io = dispatchers.io,
+        logger = logger,
+        onImported = { id -> covers.generateNow(id) },
+    )
+
+    /** One-time move of the old app's own data; R7-1 starts it once Notate Next replaces Notate. */
+    val legacyMigrator = LegacyLocalMigrator(legacyImporter, { libraryStore }, clock)
 
     /** Bookshelf dependencies; [libraryStore] must have been opened off the main thread first. */
     fun libraryDeps() = LibraryDeps(
