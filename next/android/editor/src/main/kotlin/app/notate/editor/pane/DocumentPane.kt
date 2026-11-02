@@ -33,6 +33,9 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Scrolls (continuous) or flips (single page) to [page]. */
     fun goToPage(page: PageId) {}
 
+    /** Like [goToPage], then scrolls so that [yPt] (page pt from the page top) is near the top of the pane; [yPt] null = page top. */
+    fun goToPage(page: PageId, yPt: Float?) = goToPage(page)
+
     /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
     fun setLayoutMode(mode: PageLayoutMode) {}
 

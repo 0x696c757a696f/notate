@@ -67,6 +67,10 @@ class LibraryActivity : Activity() {
             text = getString(R.string.new_notebook)
             setOnClickListener { createNotebook(1) }
         }
+        val importPdfButton = Button(this).apply {
+            text = getString(R.string.import_pdf)
+            setOnClickListener { startActivity(ImportActivity.pickPdfIntent(this@LibraryActivity)) }
+        }
         testButton = Button(this).apply {
             text = getString(R.string.create_test_notebook)
             visibility = View.GONE
@@ -81,6 +85,7 @@ class LibraryActivity : Activity() {
             setBackgroundColor(Color.WHITE)
             addView(title)
             addView(newButton)
+            addView(importPdfButton)
             addView(testButton)
             addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }

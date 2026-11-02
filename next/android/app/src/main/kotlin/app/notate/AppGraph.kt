@@ -23,6 +23,8 @@ import app.notate.platform.log.AndroidLogger
 import app.notate.platform.prefs.PrefsKeyValueStore
 import app.notate.platform.sql.AndroidSqlDriverFactory
 import app.notate.platform.thread.DispatcherSet
+import app.notate.pdf.PdfBackgrounds
+import app.notate.pdf.PdfImporter
 import app.notate.web.WebImporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -70,6 +72,21 @@ class AppGraph(
         paneWidthDp = { app.resources.displayMetrics.let { it.widthPixels / it.density } },
     )
 
+    /** Imports PDFs as documents (R3-1). */
+    val pdfImporter = PdfImporter(
+        context = app,
+        stagingRoot = paths.cacheDir,
+        docDir = paths::docDir,
+        docs = docStoreFactory,
+        libraryProvider = { libraryStore },
+        clock = clock,
+        io = dispatchers.io,
+        logger = logger,
+    )
+
+    /** PDF page backgrounds for every open PDF document; the PDF thread owns the renderers. */
+    val pdfBackgrounds = PdfBackgrounds(dispatchers.pdf)
+
     val registry = DocumentRegistry(
         opener = object : DocumentOpener {
             override suspend fun open(id: DocId): Opened {
@@ -98,6 +115,7 @@ class AppGraph(
             logger = logger,
             onDocumentClosed = { id -> appScope.launch { documents.touch(id) } },
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
+            pdfBackgrounds = pdfBackgrounds,
         )
     }
 }
