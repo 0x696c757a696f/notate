@@ -16,10 +16,9 @@ class PageCanvasView(context: Context) : View(context) {
     var layout: DocumentLayout? = null
     var compositor: TileCompositor? = null
     var live: LiveInkLayer? = null
-    var sizeListener: ((Int, Int) -> Unit)? = null
-
-    /** Drawn on top of everything else (ruler, protractor). */
+    /** Draws the selection box and the ruler / protractor above everything else. */
     var overlay: ((Canvas) -> Unit)? = null
+    var sizeListener: ((Int, Int) -> Unit)? = null
 
     /** Label of the "Add page" button below the last page (continuous mode); null = no button. */
     var addButtonLabel: String? = null

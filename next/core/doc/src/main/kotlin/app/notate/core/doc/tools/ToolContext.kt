@@ -1,6 +1,7 @@
 package app.notate.core.doc.tools
 
 import app.notate.core.doc.editor.DocumentEditor
+import app.notate.core.doc.select.SelectionController
 import app.notate.core.geometry.Rect
 import app.notate.core.ink.guide.ProtractorState
 import app.notate.core.ink.guide.RulerState
@@ -11,7 +12,14 @@ import app.notate.core.model.PageId
 import app.notate.core.model.Units
 
 /** Per-gesture tool configuration. [holdShapeMs] null = hold-to-shape off. */
-data class ToolSettings(val holdShapeMs: Long?, val eraserRadiusPx: Float)
+data class ToolSettings(
+    val holdShapeMs: Long?,
+    val eraserRadiusPx: Float,
+    /** Half-size of a selection handle's touch target in screen px (visual 6 dp + 8 dp slop). */
+    val handleHitPx: Float = 20f,
+    /** Distance of the rotation handle above the selection box in screen px (24 dp). */
+    val rotateOffsetPx: Float = 34f,
+)
 
 /** Ruler / protractor on the page of the gesture (page coordinates), as far as the pane shows one. Main thread only. */
 interface GuideState {
@@ -40,6 +48,8 @@ class ToolContext(
     val guides: GuideState = GuideState.NONE,
     /** Background of [page]; shape tools read the grid spacing and snap to it. */
     val background: Background? = null,
+    /** Selection owner of the pane; lasso select needs it, other tools ignore it. */
+    val selection: SelectionController? = null,
     /** Text measurement for the TEXT tool; the Android layer passes a `StaticLayout` implementation. */
     val textMetrics: TextLayoutMetrics = TextLayoutMetrics.Estimate,
 ) {

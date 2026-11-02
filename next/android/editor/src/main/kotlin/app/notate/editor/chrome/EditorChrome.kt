@@ -115,6 +115,7 @@ class EditorChrome(
             out.add(Rect(m + dx, m + dy, m + dp(48) + dx, m + dp(48) + dy))
         }
         popups.rect()?.let { out.add(Rect(it.left + dx, it.top + dy, it.right + dx, it.bottom + dy)) }
+        popups.barRect()?.let { out.add(Rect(it.left + dx, it.top + dy, it.right + dx, it.bottom + dy)) }
         return out
     }
 

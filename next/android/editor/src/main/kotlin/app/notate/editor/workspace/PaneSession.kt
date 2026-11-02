@@ -74,6 +74,7 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
     var onPage: ((Int, Int) -> Unit)? = null
 
     override val arbiter get() = outer.arbiter
+    override val popups get() = if (active) outer.popups else null
     override fun excludeRects(): List<Rect> = view?.let(rectsFor) ?: emptyList()
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = outer.onDriverStroke(begin, timeMs)
 

@@ -165,6 +165,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         splitLayout = SplitPaneLayout(this, dividerListener())
         chrome.paneArea.addView(splitLayout, 0, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         chrome.popups.onRectChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
+        chrome.popups.onBarChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         chrome.onFocusChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         hud = DebugHud(this) { hudLines() }
         chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -328,6 +329,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     // --- PaneHost -------------------------------------------------------------------------------------------
 
+    override val popups: app.notate.editor.popup.PopupHost get() = chrome.popups
+
     override fun excludeRects(): List<android.graphics.Rect> = pane?.let { chrome.excludeRectsFor(it.view) } ?: emptyList()
 
     override fun onFocusModeRequested() = chrome.setFocusMode(!chrome.focusMode)
@@ -440,6 +443,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val actions = session.pageActions
         if (gridOverlay != null) return
         chrome.popups.dismiss()
+        controller.displayed.forEach { it.pane.clearSelection() }
         val overlay = PageGridOverlay(
             this, h.editor, thumbnails(session), actions, chrome.popups,
             object : PageGridHost {
@@ -519,6 +523,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 return true
             }
             if (popups.isShowing && popups.contains(ev)) route = Route.VIEWS
+            else if (popups.barContains(ev)) route = Route.VIEWS
             else if (hitsPageUi(ev)) route = Route.VIEWS
         }
         when (route) {
