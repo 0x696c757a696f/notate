@@ -78,6 +78,7 @@ dependencies {
     implementation(project(":next:export"))
     implementation(project(":next:search"))
     implementation(project(":next:library"))
+    implementation("app.notate.core:workspace")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     testImplementation("junit:junit:4.13.2")

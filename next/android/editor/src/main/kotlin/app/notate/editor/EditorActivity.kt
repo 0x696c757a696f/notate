@@ -13,7 +13,6 @@ import android.view.ViewGroup
 import android.view.View
 import android.widget.Toast
 import app.notate.core.doc.registry.DocumentHandle
-import app.notate.core.doc.save.SaveState
 import app.notate.core.doc.settings.FingerMode
 import app.notate.core.input.GestureClassifier
 import app.notate.core.input.HoverFocusDebouncer
@@ -24,6 +23,13 @@ import app.notate.core.input.PointerAction
 import app.notate.core.input.PointerKind
 import app.notate.core.input.PointerSample
 import app.notate.core.model.DocId
+import app.notate.editor.chrome.DocumentPickerDialog
+import app.notate.editor.chrome.TabStripView
+import app.notate.editor.workspace.PaneSession
+import app.notate.editor.workspace.WorkspaceController
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.combine
 import app.notate.core.input.EpdMode
 import app.notate.core.input.EpdTiming
 import app.notate.core.model.Capability
@@ -56,8 +62,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** Full-screen editor for one notebook: tab row and toolbar on top, one [NotebookPane] below. Main thread only. */
+/**
+ * The editor window (single instance): tab row and toolbar on top, the visible document's pane below. Which documents are open
+ * is the [WorkspaceController]'s business; opening a document from anywhere ends up in [onNewIntent]. Main thread only.
+ */
 class EditorActivity : Activity(), PaneHost, ToolbarActions {
     override val arbiter = InkArbiter()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -69,13 +79,14 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private lateinit var adapter: TouchAdapter
     private lateinit var palm: PalmRejector
     private lateinit var dispatcher: InputDispatcher
-    private var handle: DocumentHandle? = null
-    private var pane: DocumentPane? = null
-    private var docId: DocId? = null
-    private var pageActions: PageActions? = null
-    private var indicator: PageIndicator? = null
+    private lateinit var controller: WorkspaceController
+    private val pane: DocumentPane? get() = controller.current?.pane
+    private val handle: DocumentHandle? get() = controller.current?.handle
+    private val pageActions: PageActions? get() = controller.current?.pageActions
     private var gridOverlay: PageGridOverlay? = null
-    private var thumbs: ThumbnailStore? = null
+    private var bindJob: Job? = null
+    private var workspaceStore: app.notate.core.workspace.WorkspaceStore? = null
+    private val ready = CompletableDeferred<Unit>()
     private var route = Route.NONE
 
     /** A touch sequence was handed on to the views because the pane leaves fingers to its own view (a web page). */
@@ -91,12 +102,6 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val id = intent.getStringExtra(EXTRA_DOC_ID)
-        if (id == null) {
-            finish()
-            return
-        }
-        docId = DocId(id)
         val density = resources.displayMetrics.density
         val xdpi = deps.device.xdpi
         adapter = TouchAdapter(xdpi)
@@ -111,18 +116,126 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         ) { }
         buildViews()
         observeSettings()
-        open()
+        scope.launch {
+            val store = withContext(deps.dispatchers.io) { deps.workspaceStore?.invoke() }
+            workspaceStore = store
+            val ws = store?.load() ?: app.notate.core.workspace.Workspace()
+            controller.restore(ws)
+            // Only now: saving the still-empty initial state would wipe what was just read.
+            scope.launch { controller.workspace.collect { store?.save(it) } }
+            ready.complete(Unit)
+            handleIntent(intent)
+            if (controller.workspace.value.isEmpty) goHome()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        scope.launch {
+            ready.await()
+            handleIntent(intent)
+        }
+    }
+
+    private suspend fun handleIntent(intent: Intent) {
+        val id = intent.getStringExtra(EXTRA_DOC_ID) ?: return
+        intent.removeExtra(EXTRA_DOC_ID)
+        controller.open(DocId(id))
     }
 
     private fun buildViews() {
-        chrome = EditorChrome(
-            this, deps.toolController, arbiter, deps.epd, deps.device.xdpi, this,
-            onHome = { finish() }, onClose = { finish() },
+        controller = WorkspaceController(
+            this, deps, scope, this, { v -> chrome.excludeRectsFor(v) },
+            object : WorkspaceController.Listener {
+                override fun onSessionChanged(old: PaneSession?, new: PaneSession?) = swapSession(old, new)
+                override fun onMessage(text: String) { Toast.makeText(this@EditorActivity, text, Toast.LENGTH_LONG).show() }
+                override fun onEmpty() = goHome()
+            },
         )
+        controller.pageGridRequest = { openPageGrid() }
+        chrome = EditorChrome(this, deps.toolController, arbiter, deps.epd, deps.device.xdpi, this, tabCallbacks())
         chrome.popups.onRectChanged = { pane?.refreshExcludes() }
         chrome.onFocusChanged = { pane?.refreshExcludes() }
         hud = DebugHud(this) { hudLines() }
+        chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(chrome)
+        scope.launch {
+            combine(controller.workspace, controller.saveStates, controller.closing) { ws, st, cl -> Triple(ws, st, cl) }
+                .collect { (ws, st, cl) -> chrome.tabs.render(ws, st, cl) }
+        }
+    }
+
+    private fun tabCallbacks() = object : TabStripView.Callbacks {
+        override fun onHome() = startActivity(libraryIntent())
+        override fun onSelect(index: Int) = controller.select(index)
+        override fun onClose(index: Int) { scope.launch { controller.close(index) } }
+        override fun onNew(anchor: View) = showPicker()
+        override fun onLongPress(index: Int, anchor: View) {
+            MoreMenu(
+                chrome.popups, anchor,
+                listOf(
+                    MenuEntry(getString(R.string.tab_menu_close)) { scope.launch { controller.close(index) } },
+                    MenuEntry(getString(R.string.tab_menu_close_others)) { scope.launch { controller.closeOthers(index) } },
+                    MenuEntry(getString(R.string.tab_menu_split), enabled = false) { },     // R5-2
+                ),
+            ).show()
+        }
+    }
+
+    private fun showPicker() {
+        val library = deps.libraryStore?.invoke() ?: return
+        DocumentPickerDialog(chrome.popups, library, scope) { id -> scope.launch { controller.open(id) } }.show(this)
+    }
+
+    private fun libraryIntent(): Intent = deps.libraryIntent?.invoke(this) ?: Intent()
+
+    /** Leaves the editor for the bookshelf; the bookshelf is started first when the editor is the only screen. */
+    private fun goHome() {
+        if (isFinishing) return
+        if (isTaskRoot) startActivity(libraryIntent())
+        finish()
+    }
+
+    // --- Switching documents --------------------------------------------------------------------------------
+
+    private fun swapSession(old: PaneSession?, new: PaneSession?) {
+        closePageGrid()
+        chrome.popups.dismiss()
+        val area = chrome.paneArea
+        old?.let {
+            area.removeView(it.pane.view)
+            it.indicator?.let { v -> area.removeView(v) }
+        }
+        bindJob?.cancel()
+        bindJob = null
+        if (new == null) return
+        val match = ViewGroup.LayoutParams.MATCH_PARENT
+        area.addView(new.pane.view, 0, android.widget.FrameLayout.LayoutParams(match, match))
+        new.indicator?.let { ind ->
+            area.addView(
+                ind, 1,
+                android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.BOTTOM or android.view.Gravity.END)
+                    .apply { setMargins(0, 0, ind.dp(16), ind.dp(16)) },
+            )
+        }
+        val kind = new.handle.editor.meta.value.kind
+        val reason = if (kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
+        chrome.toolbar.bind(new.pane.capabilities, getString(reason))
+        arbiter.block(BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
+        dispatcher.focusedPane = new.pane.id
+        val h = new.handle
+        bindJob = scope.launch {
+            launch { combine(h.editor.history.canUndo, h.editor.history.canRedo) { u, r -> u to r }.collect { (u, r) -> chrome.toolbar.setUndoRedo(u, r) } }
+            launch {
+                var busy = false
+                h.save.state.collect { st ->
+                    if (st == app.notate.core.doc.save.SaveState.Clean && busy) new.pane.onSaveIdle(SystemClock.uptimeMillis())
+                    busy = st != app.notate.core.doc.save.SaveState.Clean
+                }
+            }
+        }
+        deps.epd.refresh(area, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
     }
 
     private fun observeSettings() {
@@ -141,61 +254,6 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         }
     }
 
-    private fun open() {
-        val id = docId ?: return
-        scope.launch {
-            val h = try {
-                deps.registry.acquire(id)
-            } catch (e: Exception) {
-                deps.logger.e(TAG, "Opening $id failed", e)
-                Toast.makeText(this@EditorActivity, R.string.open_failed, Toast.LENGTH_LONG).show()
-                finish()
-                return@launch
-            }
-            if (isDestroyed || isFinishing) {
-                deps.registry.release(h)
-                return@launch
-            }
-            handle = h
-            val kind = h.editor.meta.value.kind
-            val p = deps.paneFactories[kind]?.create(this@EditorActivity, h, deps, this@EditorActivity, scope)
-                ?: NotebookPane(this@EditorActivity, h, deps, this@EditorActivity, scope)
-            pane = p
-            val area = chrome.paneArea
-            area.addView(p.view, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            area.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            pageActions = PageActions(this@EditorActivity, h.editor, scope, deps.logger)
-            if (Capability.PAGES in p.capabilities) {
-                val ind = PageIndicator(this@EditorActivity) { openPageGrid() }
-                indicator = ind
-                area.addView(
-                    ind,
-                    android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.BOTTOM or android.view.Gravity.END)
-                        .apply { setMargins(0, 0, ind.dp(16), ind.dp(16)) },
-                )
-            }
-            val reason = if (h.editor.meta.value.kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
-            chrome.toolbar.bind(p.capabilities, getString(reason))
-            arbiter.block(app.notate.core.input.BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
-            dispatcher.focusedPane = p.id
-            bind(h)
-        }
-    }
-
-    private fun bind(h: DocumentHandle) {
-        scope.launch { h.editor.meta.collect { chrome.tabs.setTitle(it.title) } }
-        scope.launch { h.editor.history.canUndo.collect { chrome.toolbar.setUndoRedo(it, h.editor.history.canRedo.value) } }
-        scope.launch { h.editor.history.canRedo.collect { chrome.toolbar.setUndoRedo(h.editor.history.canUndo.value, it) } }
-        scope.launch {
-            var busy = false
-            h.save.state.collect { st ->
-                chrome.tabs.setSaveState(st)
-                if (st == SaveState.Clean && busy) pane?.onSaveIdle(SystemClock.uptimeMillis())
-                busy = st != SaveState.Clean
-            }
-        }
-    }
-
     // --- PaneHost -------------------------------------------------------------------------------------------
 
     override fun excludeRects(): List<android.graphics.Rect> = pane?.let { chrome.excludeRectsFor(it.view) } ?: emptyList()
@@ -210,9 +268,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
-    override fun onPageChanged(index: Int, count: Int) {
-        indicator?.setPage(index, count)
-    }
+    override fun onPageChanged(index: Int, count: Int) = Unit      // each pane's own indicator follows it (GatedHost)
 
     // --- Toolbar --------------------------------------------------------------------------------------------
 
@@ -255,19 +311,20 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         TemplatePicker(chrome.popups, this, current) { bg, all -> actions.setTemplate(target, bg, all) }.show()
     }
 
-    private fun thumbnails(h: DocumentHandle): ThumbnailStore = thumbs ?: ThumbnailStore(
-        h.editor,
+    private fun thumbnails(s: PaneSession): ThumbnailStore = s.thumbs ?: ThumbnailStore(
+        s.handle.editor,
         ThumbnailRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), deps.dispatchers.render),
-        deps.thumbsDir?.invoke(h.id), scope, deps.dispatchers.io, deps.logger,
-    ).also { thumbs = it }
+        deps.thumbsDir?.invoke(s.handle.id), s.scope, deps.dispatchers.io, deps.logger,
+    ).also { s.thumbs = it }
 
     private fun openPageGrid() {
-        val h = handle ?: return
-        val actions = pageActions ?: return
+        val session = controller.current ?: return
+        val h = session.handle
+        val actions = session.pageActions
         if (gridOverlay != null) return
         chrome.popups.dismiss()
         val overlay = PageGridOverlay(
-            this, h.editor, thumbnails(h), actions, chrome.popups,
+            this, h.editor, thumbnails(session), actions, chrome.popups,
             object : PageGridHost {
                 override fun onJump(page: PageId) {
                     closePageGrid()
@@ -298,7 +355,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     private fun hitsPageUi(ev: MotionEvent): Boolean {
         if (gridOverlay != null) return true
-        val v = indicator ?: return false
+        val v = controller.current?.indicator ?: return false
         val loc = IntArray(2)
         v.getLocationInWindow(loc)
         return ev.x >= loc[0] && ev.x < loc[0] + v.width && ev.y >= loc[1] && ev.y < loc[1] + v.height
@@ -405,30 +462,20 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onStop() {
         super.onStop()
-        saveViewState()
+        controller.persistViews()
         deps.appScope.launch { deps.registry.flushAll() }
-    }
-
-    private fun saveViewState() {
-        val h = handle ?: return
-        val state = pane?.saveViewState() ?: return
-        val meta = h.editor.meta.value
-        if (meta.view != state) h.editor.apply(app.notate.core.model.edit.Edit.SetMeta(meta, meta.copy(view = state)), undoable = false)
     }
 
     override fun onDestroy() {
         ticking = false
         main.removeCallbacksAndMessages(null)
-        saveViewState()
         gridOverlay?.release()
         gridOverlay = null
-        thumbs = null
-        pane?.release()
-        pane = null
+        // Written on the app scope because this window's scope ends with it; the last state must still reach the disk.
+        controller.shutdown()
+        val last = controller.workspace.value
+        if (ready.isCompleted) workspaceStore?.let { store -> deps.appScope.launch { store.save(last) } }
         scope.cancel()
-        handle?.let { deps.registry.release(it) }
-        handle = null
-        docId?.let { deps.onDocumentClosed(it) }
         super.onDestroy()
     }
 
@@ -438,7 +485,11 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         private const val TICK_MS = 50L
         private const val RECENT_FINGERS = 5
 
+        /** Opens [id] in a tab of the editor window (starting the window if needed). */
         fun intent(context: Context, id: DocId): Intent =
             Intent(context, EditorActivity::class.java).putExtra(EXTRA_DOC_ID, id.value)
+
+        /** Brings the editor window back with the tabs it had. */
+        fun continueIntent(context: Context): Intent = Intent(context, EditorActivity::class.java)
     }
 }

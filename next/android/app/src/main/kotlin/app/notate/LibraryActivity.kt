@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Date
 
 /**
@@ -32,6 +33,7 @@ class LibraryActivity : Activity() {
     private val graph get() = NotateApp.graph
     private var entries: List<DocumentEntry> = emptyList()
     private lateinit var testButton: Button
+    private lateinit var continueButton: Button
 
     private val listAdapter = object : BaseAdapter() {
         override fun getCount() = entries.size
@@ -63,6 +65,11 @@ class LibraryActivity : Activity() {
                 true
             }
         }
+        continueButton = Button(this).apply {
+            visibility = View.GONE
+            isAllCaps = false
+            setOnClickListener { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) }
+        }
         val newButton = Button(this).apply {
             text = getString(R.string.new_notebook)
             setOnClickListener { createNotebook(1) }
@@ -80,6 +87,7 @@ class LibraryActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
             addView(title)
+            addView(continueButton)
             addView(newButton)
             addView(testButton)
             addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -92,6 +100,27 @@ class LibraryActivity : Activity() {
             }
         }
         scope.launch { graph.settings.debugHud.collect { testButton.visibility = if (it) View.VISIBLE else View.GONE } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        showContinue()
+    }
+
+    /** Offers to go back to the tabs the editor had open (04 §6), labelled with the tab that had the focus. */
+    private fun showContinue() {
+        scope.launch {
+            val title = withContext(graph.dispatchers.io) {
+                try {
+                    graph.workspaceStore.load().focusedTab?.title
+                } catch (e: Exception) {
+                    graph.logger.e("LibraryActivity", "Reading the workspace failed", e)
+                    null
+                }
+            }
+            continueButton.visibility = if (title == null) View.GONE else View.VISIBLE
+            if (title != null) continueButton.text = getString(R.string.continue_with, title)
+        }
     }
 
     private fun row(): LinearLayout {
