@@ -53,6 +53,17 @@ android {
         debug { signingConfig = signingConfigs.getByName("debug") }
     }
 
+    packaging {
+        jniLibs { pickFirsts.add("lib/**/libc++_shared.so") } // Onyx pen, pennative and mmkv each ship one
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/LICENSE*"
+            excludes += "META-INF/NOTICE*"
+            excludes += "META-INF/*.kotlin_module"
+        }
+    }
+
     buildFeatures { compose = true }
     kotlin { jvmToolchain(21) }
     testOptions { unitTests { isIncludeAndroidResources = true; isReturnDefaultValues = true } }
