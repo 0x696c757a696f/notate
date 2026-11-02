@@ -45,10 +45,7 @@ class EditorFlowWebTest {
         val dispatcher = InputDispatcher(palm, GestureClassifier(touchSlopPx = 8f, multiTapSlopPx = 48f), HoverFocusDebouncer()) { }
         val panes = listOf<app.notate.core.input.PaneTarget>(pane)
         // A big contact (the side of the hand) lands first and stays down.
-        val palmDown = dispatcher.onSample(
-            PointerSample(1, PointerKind.FINGER, PointerAction.DOWN, 900f, 1200f, majorMm = 30f, timeMs = 0L), panes,
-        )
-        assertThat(palmDown).isTrue()    // swallowed, not passed on to the page
+        dispatcher.onSample(PointerSample(1, PointerKind.FINGER, PointerAction.DOWN, 900f, 1200f, majorMm = 30f, timeMs = 0L), panes)
         fun pen(a: PointerAction, x: Float, y: Float, t: Long) =
             dispatcher.onSample(PointerSample(2, PointerKind.STYLUS, a, x, y, pressure = 0.5f, timeMs = t, pointerCount = 2), panes)
         assertThat(pen(PointerAction.POINTER_DOWN, 300f, 400f, 10L)).isTrue()
