@@ -36,6 +36,15 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
     fun setLayoutMode(mode: PageLayoutMode) {}
 
+    /** Called by the window when the save queue went idle after a change (debug timings). */
+    fun onSaveIdle(nowUptime: Long) {}
+
+    /** Lines for the debug HUD. */
+    fun debugLines(): List<String> = emptyList()
+
+    /** Extra rows of the More menu that only this kind of pane has. */
+    fun moreEntries(): List<app.notate.editor.popup.MenuEntry> = emptyList()
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
 }
@@ -50,6 +59,11 @@ interface PaneHost {
     /** The e-ink driver reported a stroke start/end; feeds palm rejection. [timeMs] is `SystemClock.uptimeMillis()`. */
     fun onDriverStroke(begin: Boolean, timeMs: Long)
 
+    /** Shows [content] as the window's popup near [anchor] (the pen is kept off the page while it is up); null if unsupported. */
+    fun showPopup(anchor: View?, content: View, placement: app.notate.editor.popup.Placement = app.notate.editor.popup.Placement.BELOW_ANCHOR): app.notate.editor.popup.PopupHandle? = null
+
+    /** Closes the window's popup, if any. */
+    fun dismissPopup() {}
     /** The page in view changed: [index] (0-based) of [count]. Drives the page indicator. */
     fun onPageChanged(index: Int, count: Int) {}
 

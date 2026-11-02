@@ -15,7 +15,7 @@ import app.notate.editor.ui.dp
 import app.notate.editor.ui.invertingBackground
 
 /** Small view builders shared by the popups (code-built views: no layout XML, no theme dependence). */
-internal object PopupUi {
+object PopupUi {
     fun text(context: Context, text: CharSequence, sp: Float = 16f, color: Int = Color.BLACK): TextView =
         TextView(context).apply {
             this.text = text

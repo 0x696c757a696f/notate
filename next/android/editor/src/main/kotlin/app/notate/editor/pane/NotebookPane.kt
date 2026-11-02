@@ -912,7 +912,7 @@ class NotebookPane(
     }
 
     /** Debug lines for the HUD. */
-    fun debugLines(): List<String> {
+    override fun debugLines(): List<String> {
         val (cov, inFlight) = tileStats()
         val a = host.arbiter
         val reasons = BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) }
@@ -926,7 +926,7 @@ class NotebookPane(
     }
 
     /** Called by the HUD when the save queue went idle after a stroke. */
-    fun onSaveIdle(nowUptime: Long) {
+    override fun onSaveIdle(nowUptime: Long) {
         if (lastUpAt != 0L) {
             lastUpToDiskMs = nowUptime - lastUpAt
             lastUpAt = 0L

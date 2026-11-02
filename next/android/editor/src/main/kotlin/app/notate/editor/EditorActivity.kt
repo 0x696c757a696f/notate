@@ -45,6 +45,7 @@ import app.notate.core.input.BlockReason
 import app.notate.editor.debug.DebugHud
 import app.notate.editor.input.TouchAdapter
 import app.notate.editor.chrome.EditorChrome
+import app.notate.editor.pane.DocumentPane
 import app.notate.editor.pane.NotebookPane
 import app.notate.editor.pane.PaneHost
 import app.notate.editor.popup.MenuEntry
@@ -69,13 +70,16 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private lateinit var palm: PalmRejector
     private lateinit var dispatcher: InputDispatcher
     private var handle: DocumentHandle? = null
-    private var pane: NotebookPane? = null
+    private var pane: DocumentPane? = null
     private var docId: DocId? = null
     private var pageActions: PageActions? = null
     private var indicator: PageIndicator? = null
     private var gridOverlay: PageGridOverlay? = null
     private var thumbs: ThumbnailStore? = null
     private var route = Route.NONE
+
+    /** A touch sequence was handed on to the views because the pane leaves fingers to its own view (a web page). */
+    private var forwardedToViews = false
     private val recentFingers = ArrayDeque<String>()
     private var ticking = false
     private val tickRunnable = object : Runnable {
@@ -153,7 +157,9 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 return@launch
             }
             handle = h
-            val p = NotebookPane(this@EditorActivity, h, deps, this@EditorActivity, scope)
+            val kind = h.editor.meta.value.kind
+            val p = deps.paneFactories[kind]?.create(this@EditorActivity, h, deps, this@EditorActivity, scope)
+                ?: NotebookPane(this@EditorActivity, h, deps, this@EditorActivity, scope)
             pane = p
             val area = chrome.paneArea
             area.addView(p.view, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -196,6 +202,10 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onFocusModeRequested() = chrome.setFocusMode(!chrome.focusMode)
 
+    override fun showPopup(anchor: View?, content: View, placement: app.notate.editor.popup.Placement) =
+        chrome.popups.show(anchor, content, placement)
+
+    override fun dismissPopup() = chrome.popups.dismiss()
     override fun onPageGrid(hasGrid: Boolean) { chrome.toolbar.gridAvailable = hasGrid }
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
@@ -231,6 +241,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         }
         items += MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) }
         items += MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() }
+        items += pane?.moreEntries() ?: emptyList()
         MoreMenu(chrome.popups, anchor, items).show()
     }
 
@@ -346,7 +357,19 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
             MotionEvent.ACTION_DOWN -> startTicking()
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> ticking = false
         }
-        return if (consumed) true else super.dispatchTouchEvent(ev)
+        if (consumed) {
+            // The page's view saw the start of this touch sequence but the dispatcher took it over (palm detected): cancel it there.
+            if (forwardedToViews && !p.consumesFingers) {
+                val cancel = MotionEvent.obtain(ev)
+                cancel.action = MotionEvent.ACTION_CANCEL
+                super.dispatchTouchEvent(cancel)
+                cancel.recycle()
+            }
+            forwardedToViews = false
+            return true
+        }
+        forwardedToViews = !p.consumesFingers && !end
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
