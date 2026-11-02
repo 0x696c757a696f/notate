@@ -54,6 +54,12 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
     fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
 
+    /** Imports a picked image (a content Uri) and places it on the page in view; panes without images ignore it. */
+    fun importImage(uri: android.net.Uri) {}
+
+    /** True when ([x], [y]) in window coordinates is on a view of the pane that takes touches itself (the text editor). */
+    fun hitsOwnUi(x: Float, y: Float): Boolean = false
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
 }
@@ -81,6 +87,9 @@ interface PaneHost {
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** A link in the pane points at [page] of another document: open it (a tab) and show that page. */
+    fun openDocumentAt(doc: app.notate.core.model.DocId, page: PageId) {}
 
     /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
     fun onPageGrid(hasGrid: Boolean) {}

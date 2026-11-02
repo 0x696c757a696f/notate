@@ -86,6 +86,7 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
         onPage?.invoke(index, count)
     }
     override fun onFocusModeRequested() { if (active) outer.onFocusModeRequested() }
+    override fun openDocumentAt(doc: app.notate.core.model.DocId, page: app.notate.core.model.PageId) = outer.openDocumentAt(doc, page)
 
     override fun onPageGrid(hasGrid: Boolean) {
         this.hasGrid = hasGrid

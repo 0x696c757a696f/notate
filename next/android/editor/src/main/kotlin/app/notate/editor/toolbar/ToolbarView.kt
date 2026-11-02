@@ -38,6 +38,9 @@ interface ToolbarActions {
     fun onMore(anchor: View)
     fun onRulerToggled(on: Boolean) {}
 
+    /** The Image button was tapped: pick a picture and place it on the page. */
+    fun onInsertImage() {}
+
     /** The toolbar's picture changed (tool switch, selection): the window may refresh its area. */
     fun onToolbarChanged() {}
 }
@@ -99,6 +102,8 @@ class ToolbarView(
                     rulerOn = !rulerOn
                     actions.onRulerToggled(rulerOn)
                     last?.let { render(it, force = true) }
+                } else if (kind == ToolKind.IMAGE) {
+                    actions.onInsertImage()          // a one-shot action, not a mode
                 } else {
                     controller.select(kind)
                 }
@@ -370,6 +375,12 @@ internal class ToolbarOptions(
         row.addView(ToolButton(context, R.drawable.ic_format_bold, context.getString(R.string.text_bold)).onClick {
             controller.update { it.copy(textBold = !it.textBold) }
         }.also { it.isSelected = s.textBold })
+        fun align(a: app.notate.core.model.TextAlign, icon: Int, label: Int) {
+            row.addView(ToolButton(context, icon, context.getString(label)).onClick { controller.update { it.copy(textAlign = a) } }.also { it.isSelected = s.textAlign == a })
+        }
+        align(app.notate.core.model.TextAlign.LEFT, R.drawable.ic_format_align_left, R.string.text_align_left)
+        align(app.notate.core.model.TextAlign.CENTER, R.drawable.ic_format_align_center, R.string.text_align_center)
+        align(app.notate.core.model.TextAlign.RIGHT, R.drawable.ic_format_align_right, R.string.text_align_right)
         divider()
         lateinit var v: ColorSlot
         v = ColorSlot(context, s.textColor, true, context.getString(R.string.text_color), {}) {

@@ -13,6 +13,7 @@ class ToolSessionFactory {
             EraserMode.STROKE, EraserMode.LASSO -> StrokeEraserSession(tool, ctx)   // LASSO arrives in R2-4
         }
         ToolKind.SHAPE -> ShapeDragSession(tool, ctx)
+        ToolKind.TEXT -> TextPlaceSession(tool, ctx)
         else -> NoopSession
     }
 }

@@ -33,6 +33,13 @@ class DocumentHandle internal constructor(
     /** The document's directory on disk (web documents keep their files in `assets/web`). */
     val dir: java.io.File get() = store.dir
 
+    /** Copies [source] into the document's assets (deduplicated by content) and returns its id. Call off the main thread. */
+    suspend fun putAsset(kind: app.notate.core.store.AssetKind, mime: String, source: java.io.File, ext: String): app.notate.core.model.AssetId =
+        store.putAsset(kind, mime, source, ext)
+
+    /** The file of an asset, or null when unknown. */
+    fun assetFile(id: app.notate.core.model.AssetId): java.io.File? = store.assetFile(id)
+
     suspend fun readOutline(): List<app.notate.core.store.OutlineEntry> = store.readOutline()
 }
 

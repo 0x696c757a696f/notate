@@ -53,6 +53,9 @@ import app.notate.platform.ink.OnyxDriverPort
 import app.notate.platform.ink.RawPenSink
 import app.notate.platform.ink.RawPoint
 import app.notate.render.ink.GeometryCache
+import app.notate.render.image.AssetFiles
+import app.notate.render.image.ImageCache
+import app.notate.render.image.StaticLayoutMetrics
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.tile.TileCache
@@ -89,10 +92,11 @@ class NotebookPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
     private val live = LiveInkLayer(canvasView, density) { editor.content(it) }
 
+    private val images = ImageCache(AssetFiles { handle.assetFile(it) }, onLoaded = { a -> main.post { onImageLoaded(a) } })
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
     private val scheduler = TileScheduler(
         cache = cache,
-        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache())),
+        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache(), images)),
         source = object : TileSource {
             override fun pageInfo(page: PageId): PageInfo? = editor.pages.value.firstOrNull { it.id == page }
             override fun content(page: PageId): PageContent? = editor.content(page)
@@ -119,6 +123,13 @@ class NotebookPane(
     override var layoutMode: PageLayoutMode = editor.meta.value.view?.layout ?: deps.settings.pageLayout.value
         private set
     private val pageActions = PageActions(context, editor, scope, deps.logger)
+    private val objects = ObjectsController(
+        context, handle, scope, deps, host, this, canvasView,
+        viewport = { viewport }, frameOf = { layout.frameOf(it) },
+        pointAt = { x, y -> PaneCoords.toPage(viewport, layout, x, y) },
+        currentPage = { currentPage }, goToPage = { goToPage(it) },
+        refresh = { deps.epd.refresh(canvasView, EpdMode.GU, null, EpdTiming.AFTER_DRAW) },
+    )
     private var addCard = false
     private var pageTurns = 0
     private var fullRefreshAfterTurn = false
@@ -308,6 +319,7 @@ class NotebookPane(
 
     private fun setViewport(vp: Viewport, delayTiles: Boolean) {
         viewport = vp
+        objects.onViewportChanged()
         publish()
         if (delayTiles) {
             main.removeCallbacks(requestTilesRunnable)
@@ -417,7 +429,7 @@ class NotebookPane(
                 setViewport(panned(g.dx, g.dy, viewport.zoomAround(g.scale, fx, fy)), delayTiles = true)
             }
             is FingerGesture.Tap -> onTap(g)
-            is FingerGesture.LongPress -> Unit
+            is FingerGesture.LongPress -> objects.onLongPress(localX(g.x), localY(g.y))
         }
     }
 
@@ -426,6 +438,8 @@ class NotebookPane(
             1 -> {
                 val x = localX(g.x)
                 val y = localY(g.y)
+                if (objects.editingText) { objects.finishTextEdit(); return }
+                if (objects.onTap(x, y)) return
                 if (canvasView.addCardRect()?.contains(x, y) == true || canvasView.addButtonRect()?.contains(x, y) == true) addPageAtEnd()
             }
             2 -> when (deps.settings.tap2.value) {
@@ -539,6 +553,7 @@ class NotebookPane(
 
     private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean, lasso: Boolean = false) {
         if (session != null) cancelPen()
+        if (objects.editingText) objects.finishTextEdit()      // the pen came down outside the text editor: that ends the edit
         if (inkSuspended) return
         if (fingerBusy && !viaDriver) {
             main.removeCallbacks(endFingerRunnable)
@@ -574,7 +589,9 @@ class NotebookPane(
             settings = ToolSettings(holdMs, (preset.eraserRadiusDp ?: 0f) * density),
             clock = deps.clock,
             background = info.background,
+            textMetrics = StaticLayoutMetrics,
         )
+        ctx.onEditText = { id, isNew -> objects.startTextEdit(hit.page, id, isNew) }
         activeCtx = ctx
         live.page = hit.page
         live.driverDraws = viaDriver && preset.kind.let { it == ToolKind.PEN || it == ToolKind.HIGHLIGHTER }
@@ -776,6 +793,7 @@ class NotebookPane(
 
     /** The shape tool draws a software ghost, so the driver stays off for it (like the Hand tool). */
     private val shapeMode: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
+    private val textMode: Boolean get() = deps.toolController.baseState().active == ToolKind.TEXT
     private var handing = false
     private var handX = 0f
     private var handY = 0f
@@ -783,7 +801,7 @@ class NotebookPane(
     private fun updateHandMode() {
         val on = handMode
         if (!on && handing) endHand()
-        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || adjustSoftware)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || textMode || adjustSoftware)
     }
 
     private fun panWithPen(ev: PenEvent) {
@@ -960,8 +978,26 @@ class NotebookPane(
         }
     }
 
+    override fun importImage(uri: android.net.Uri) = objects.importImage(uri)
+
+    override fun hitsOwnUi(x: Float, y: Float): Boolean = objects.hitsEditor(x, y)
+
+    /** Adds a link over [frame] of [page] (the selection's "Link…" action, R2-4). */
+    fun createLink(page: PageId, frame: Rect, target: app.notate.core.model.LinkTarget) = objects.createLink(page, frame, target)
+
+    /** Marks tiles that show [asset] stale once its bitmap has been decoded. */
+    private fun onImageLoaded(asset: app.notate.core.model.AssetId) {
+        if (released) return
+        for (info in editor.pages.value) {
+            val c = editor.content(info.id) ?: continue
+            for (item in c.all()) if (item is app.notate.core.model.ImageItem && item.asset == asset) scheduler.invalidate(info.id, item.bounds)
+        }
+        canvasView.invalidate()
+    }
+
     override fun release() {
         if (released) return
+        objects.release()
         cancelPen()
         released = true
         main.removeCallbacksAndMessages(null)
