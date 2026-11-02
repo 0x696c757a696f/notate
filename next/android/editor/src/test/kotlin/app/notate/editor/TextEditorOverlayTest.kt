@@ -75,7 +75,7 @@ class TextEditorOverlayTest {
         val edit = parent.getChildAt(0) as EditText
         assertThat(edit.textSize).isEqualTo(40f)
         assertThat(edit.currentTextColor).isEqualTo(Color.RED)
-        assertThat(edit.typeface.isBold).isTrue()
+        assertThat(edit.typeface).isSameInstanceAs(android.graphics.Typeface.DEFAULT_BOLD)
         assertThat(o.currentStyle().align).isEqualTo(TextAlign.CENTER)
     }
 
