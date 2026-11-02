@@ -64,6 +64,12 @@ interface PaneTarget {
     fun onFingerGesture(g: FingerGesture)
 
     fun onPen(ev: PenEvent)
+
+    /** True while the current tool takes a second finger as the constraint modifier (the shape tool). */
+    val takesConstraintFinger: Boolean get() = false
+
+    /** The constraint finger went down ([on]) or up while the pen draws here. */
+    fun onConstraint(on: Boolean) = Unit
 }
 
 /**
@@ -84,6 +90,7 @@ class InputDispatcher(
 
     private var gesturePane: PaneTarget? = null
     private var penPane: PaneTarget? = null
+    private var constraintFingerId: Int? = null
 
     fun onDriverStroke(
         begin: Boolean,
@@ -131,7 +138,19 @@ class InputDispatcher(
                 majorsPx = floatArrayOf(s.majorMm * palm.pxPerCm / 10f),
                 time = s.timeMs,
             )
-        when (palm.onTouch(touch)) {
+        val pen = penPane
+        val constraintPane = pen?.takeIf { it.takesConstraintFinger }
+        val decision = palm.onTouch(touch, shapeTool = constraintPane != null)
+        if (palm.constraintGesture || (constraintFingerId == s.id && (s.action == PointerAction.UP || s.action == PointerAction.CANCEL || s.action == PointerAction.POINTER_UP))) {
+            val target = constraintPane ?: pen
+            when (s.action) {
+                PointerAction.DOWN, PointerAction.POINTER_DOWN -> { constraintFingerId = s.id; target?.onConstraint(true) }
+                PointerAction.UP, PointerAction.CANCEL, PointerAction.POINTER_UP -> { constraintFingerId = null; target?.onConstraint(false) }
+                else -> Unit
+            }
+            return true
+        }
+        when (decision) {
             PalmRejector.Decision.REJECT -> return true
             PalmRejector.Decision.CANCEL_ONGOING -> {
                 gesturePane?.onFingerGesture(FingerGesture.Cancel)
@@ -178,6 +197,7 @@ class InputDispatcher(
             PointerAction.DOWN, PointerAction.POINTER_DOWN -> {
                 val pane = panes.firstOrNull { it.hitTest(s.x, s.y) } ?: return false
                 palm.onPenDown(s.timeMs)
+                palm.onPenMove(s.x, s.y)
                 when (pane.penMode) {
                     InputPenMode.INTERACT -> return false
                     InputPenMode.READ_ONLY -> return true
@@ -190,6 +210,7 @@ class InputDispatcher(
                 return true
             }
             PointerAction.MOVE -> {
+                palm.onPenMove(s.x, s.y)
                 val pane = penPane ?: return false
                 pane.onPen(PenEvent.Move(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs))
                 return true
@@ -198,6 +219,7 @@ class InputDispatcher(
                 palm.onPenUp(s.timeMs)
                 val pane = penPane ?: return false
                 penPane = null
+                if (constraintFingerId != null) { constraintFingerId = null; pane.onConstraint(false) }
                 pane.onPen(
                     if (s.action == PointerAction.CANCEL) PenEvent.Cancel(s.x, s.y, s.timeMs) else PenEvent.Up(s.x, s.y, s.timeMs),
                 )

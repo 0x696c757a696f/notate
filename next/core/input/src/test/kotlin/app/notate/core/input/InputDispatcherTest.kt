@@ -30,6 +30,14 @@ class InputDispatcherTest {
             log += "${id.value}:pen"
             pens += ev
         }
+
+        var constraintTool = false
+        val constraints = ArrayList<Boolean>()
+        override val takesConstraintFinger: Boolean get() = constraintTool
+
+        override fun onConstraint(on: Boolean) {
+            constraints += on
+        }
     }
 
     private val log = ArrayList<String>()
@@ -143,5 +151,37 @@ class InputDispatcherTest {
         assertEquals(FingerGesture.Cancel, a.gestures.last())
         d.onSample(finger(PointerAction.MOVE, 0, 250f, 100f, 10_050), panes)
         assertEquals(1, a.gestures.count { it == FingerGesture.Cancel })
+    }
+
+    @Test
+    fun `second hand finger becomes the constraint while the shape tool draws`() {
+        a.constraintTool = true
+        d.onSample(pen(PointerAction.DOWN, 100f, 100f, 100), panes)
+        d.onSample(pen(PointerAction.MOVE, 120f, 100f, 110), panes)
+        assertTrue(d.onSample(finger(PointerAction.POINTER_DOWN, 1, 900f, 100f, 120), panes))   // 7.8 cm away
+        assertEquals(listOf(true), a.constraints)
+        d.onSample(finger(PointerAction.MOVE, 1, 905f, 100f, 130), panes)
+        d.onSample(finger(PointerAction.POINTER_UP, 1, 905f, 100f, 140), panes)
+        assertEquals(listOf(true, false), a.constraints)
+        assertTrue(a.gestures.isEmpty() && b.gestures.isEmpty())
+        d.onSample(pen(PointerAction.UP, 120f, 100f, 150), panes)
+    }
+
+    @Test
+    fun `without the shape tool a finger during pen contact is rejected as before`() {
+        d.onSample(pen(PointerAction.DOWN, 100f, 100f, 100), panes)
+        assertTrue(d.onSample(finger(PointerAction.POINTER_DOWN, 1, 900f, 100f, 120), panes))
+        assertTrue(a.constraints.isEmpty())
+        d.onSample(finger(PointerAction.POINTER_UP, 1, 900f, 100f, 130), panes)
+        d.onSample(pen(PointerAction.UP, 120f, 100f, 150), panes)
+    }
+
+    @Test
+    fun `constraint is released when the pen lifts first`() {
+        a.constraintTool = true
+        d.onSample(pen(PointerAction.DOWN, 100f, 100f, 100), panes)
+        d.onSample(finger(PointerAction.POINTER_DOWN, 1, 900f, 100f, 120), panes)
+        d.onSample(pen(PointerAction.UP, 110f, 100f, 130), panes)
+        assertEquals(listOf(true, false), a.constraints)
     }
 }

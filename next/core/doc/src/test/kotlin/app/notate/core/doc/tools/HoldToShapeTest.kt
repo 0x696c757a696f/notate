@@ -40,10 +40,10 @@ class HoldToShapeTest {
         assertThat(r.preview.shown.last()).isInstanceOf(Preview.Ghost::class.java)
         val before = ((r.preview.shown.last() as Preview.Ghost).items.single() as Shape)
         assertThat(before.kind).isEqualTo(ShapeKind.RECT)
-        // Drag outward: shape grows around its centre.
-        s.move(listOf(ip(end.first - 60f, end.second - 60f, 2000)))
+        // Drag outward: the far corner follows, the shape grows around its first vertex.
+        s.move(listOf(ip(end.first + 60f, end.second + 60f, 2000)))
         val result = (r.preview.shown.last() as Preview.Ghost).items.single() as Shape
-        s.end(ip(end.first - 60f, end.second - 60f, 2010))
+        s.end(ip(end.first + 60f, end.second + 60f, 2010))
         val committed = r.items().single() as Shape
         assertThat(committed.kind).isEqualTo(ShapeKind.RECT)
         assertThat(committed.bounds.width).isGreaterThan(before.bounds.width * 1.3f)

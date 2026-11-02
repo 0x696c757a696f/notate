@@ -64,6 +64,14 @@ class ToolbarView(
     private val rulerDef: Def
     private var rulerOn = false
     private var caps: Set<Capability> = Capability.entries.toSet()
+
+    /** Whether the page in view has a grid that Snap to grid can use (plain paper greys the button). */
+    var gridAvailable: Boolean = true
+        set(v) {
+            if (field == v) return
+            field = v
+            render(controller.baseState(), force = true)
+        }
     private var capReason: String = context.getString(R.string.unavailable_here)
     private var last: ToolState? = null
 
@@ -154,7 +162,7 @@ class ToolbarView(
         last = state
         for (d in tools) d.button.isSelected = if (d.kind == null) rulerOn else d.kind == state.active
         middle.removeAllViews()
-        val o = ToolbarOptions(context, middle, controller, popups, xdpi)
+        val o = ToolbarOptions(context, middle, controller, popups, xdpi, gridAvailable)
         when (state.active) {
             ToolKind.PEN -> o.penOptions(state, ToolKind.PEN)
             ToolKind.HIGHLIGHTER -> o.penOptions(state, ToolKind.HIGHLIGHTER)
@@ -179,6 +187,7 @@ internal class ToolbarOptions(
     private val controller: ToolController,
     private val popups: PopupHost,
     private val xdpi: Float,
+    private val gridAvailable: Boolean = true,
 ) {
     private fun divider() {
         row.addView(View(context).apply { setBackgroundColor(Ink.GRAY) }, LinearLayout.LayoutParams(context.dp(1), context.dp(24)).apply {
@@ -252,7 +261,18 @@ internal class ToolbarOptions(
         kind(ShapeKind.ARROW, R.drawable.ic_north_east, R.string.shape_arrow, s.shapeKind == ShapeKind.ARROW)
         kind(ShapeKind.RECT, R.drawable.ic_crop_square, R.string.shape_rect, s.shapeKind == ShapeKind.RECT)
         kind(ShapeKind.ELLIPSE, R.drawable.ic_radio_button_unchecked, R.string.shape_ellipse, s.shapeKind == ShapeKind.ELLIPSE)
-        kind(ShapeKind.POLYGON, R.drawable.ic_pentagon, R.string.shape_polygon, s.shapeKind == ShapeKind.POLYGON)
+        lateinit var pb: ToolButton
+        pb = kind(ShapeKind.POLYGON, R.drawable.ic_pentagon, R.string.shape_polygon, s.shapeKind == ShapeKind.POLYGON)
+        pb.onLongClick {
+            MoreMenu(
+                popups, pb,
+                (3..8).map { n ->
+                    MenuEntry(context.getString(R.string.polygon_sides, n)) {
+                        controller.update { it.copy(shapeKind = ShapeKind.POLYGON, polygonSides = n) }
+                    }
+                },
+            ).show()
+        }
         val axes = s.shapeKind == ShapeKind.AXES_2D || s.shapeKind == ShapeKind.AXES_Q1
         lateinit var ab: ToolButton
         ab = ToolButton(context, R.drawable.ic_show_chart, context.getString(R.string.shape_axes)).onClick {
@@ -272,7 +292,10 @@ internal class ToolbarOptions(
         row.addView(
             ToolButton(context, R.drawable.ic_grid_on, context.getString(R.string.snap_to_grid)).onClick {
                 controller.update { it.copy(snapToGrid = !it.snapToGrid) }
-            }.also { it.isSelected = s.snapToGrid },
+            }.also {
+                it.isSelected = s.snapToGrid && gridAvailable
+                it.reason = if (gridAvailable) null else context.getString(R.string.snap_unavailable)
+            },
         )
     }
 

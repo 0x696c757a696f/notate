@@ -33,6 +33,8 @@ class EditorDeps(
     val onDocumentClosed: (DocId) -> Unit = {},
     /** Builds the pane for a document kind other than notebooks (the editor module cannot see `:next:web`). */
     val paneFactories: Map<DocKind, PaneFactory> = emptyMap(),
+    /** Directory for a document's cached page thumbnails; null disables the disk cache. */
+    val thumbsDir: ((DocId) -> java.io.File)? = null,
 )
 
 /** Creates the pane that shows a document of some kind. */

@@ -2,6 +2,7 @@ package app.notate.core.doc.tools
 
 import app.notate.core.doc.editor.DocumentEditor
 import app.notate.core.geometry.Rect
+import app.notate.core.model.Background
 import app.notate.core.model.Clock
 import app.notate.core.model.PageId
 
@@ -24,4 +25,9 @@ class ToolContext(
     val settings: ToolSettings,
     val clock: Clock,
     val guides: GuideState = GuideState.NONE,
-)
+    /** Background of [page]; shape tools read the grid spacing and snap to it. */
+    val background: Background? = null,
+) {
+    /** True while a second finger holds the constraint (square, circle, 15° angles); set by the pane. */
+    @Volatile var constraint: Boolean = false
+}

@@ -26,7 +26,22 @@ import app.notate.core.input.PointerSample
 import app.notate.core.model.DocId
 import app.notate.core.input.EpdMode
 import app.notate.core.input.EpdTiming
+import app.notate.core.model.Capability
 import app.notate.core.model.DocKind
+import app.notate.core.model.PageId
+import app.notate.core.model.PageLayoutMode
+import app.notate.editor.pages.PageActions
+import app.notate.editor.pages.PageGridHost
+import app.notate.editor.pages.PageGridOverlay
+import app.notate.editor.pages.PageIndicator
+import app.notate.editor.pages.TemplatePicker
+import app.notate.editor.pages.ThumbnailStore
+import app.notate.editor.ui.dp
+import app.notate.render.ink.GeometryCache
+import app.notate.render.ink.InkRenderer
+import app.notate.render.paper.BackgroundRendererSet
+import app.notate.render.thumb.ThumbnailRenderer
+import app.notate.core.input.BlockReason
 import app.notate.editor.debug.DebugHud
 import app.notate.editor.input.TouchAdapter
 import app.notate.editor.chrome.EditorChrome
@@ -57,6 +72,10 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private var handle: DocumentHandle? = null
     private var pane: DocumentPane? = null
     private var docId: DocId? = null
+    private var pageActions: PageActions? = null
+    private var indicator: PageIndicator? = null
+    private var gridOverlay: PageGridOverlay? = null
+    private var thumbs: ThumbnailStore? = null
     private var route = Route.NONE
 
     /** A touch sequence was handed on to the views because the pane leaves fingers to its own view (a web page). */
@@ -145,6 +164,16 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
             val area = chrome.paneArea
             area.addView(p.view, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             area.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            pageActions = PageActions(this@EditorActivity, h.editor, scope, deps.logger)
+            if (Capability.PAGES in p.capabilities) {
+                val ind = PageIndicator(this@EditorActivity) { openPageGrid() }
+                indicator = ind
+                area.addView(
+                    ind,
+                    android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.BOTTOM or android.view.Gravity.END)
+                        .apply { setMargins(0, 0, ind.dp(16), ind.dp(16)) },
+                )
+            }
             val reason = if (h.editor.meta.value.kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
             chrome.toolbar.bind(p.capabilities, getString(reason))
             arbiter.block(app.notate.core.input.BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
@@ -177,8 +206,13 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         chrome.popups.show(anchor, content, placement)
 
     override fun dismissPopup() = chrome.popups.dismiss()
+    override fun onPageGrid(hasGrid: Boolean) { chrome.toolbar.gridAvailable = hasGrid }
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
+
+    override fun onPageChanged(index: Int, count: Int) {
+        indicator?.setPage(index, count)
+    }
 
     // --- Toolbar --------------------------------------------------------------------------------------------
 
@@ -186,16 +220,88 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onRedo() { handle?.editor?.redo() }
 
-    override fun onPages() { pane?.showPageGrid() }
+    override fun onPages() = openPageGrid()
 
     override fun onSplit() = Unit
 
     override fun onMore(anchor: View) {
-        val items = listOf(
-            MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) },
-            MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() },
-        ) + (pane?.moreEntries() ?: emptyList())
+        val items = ArrayList<MenuEntry>()
+        val p = pane
+        val h = handle
+        if (p != null && h != null && Capability.PAGES in p.capabilities) {
+            val info = h.editor.pages.value.firstOrNull { it.id == p.currentPage }
+            items += MenuEntry(getString(R.string.more_add_page)) { pageActions?.addAfter(p.currentPage) { p.goToPage(it) } }
+            items += MenuEntry(getString(R.string.more_page_template)) { showTemplatePicker(p.currentPage) }
+            items += MenuEntry(getString(if (info?.bookmarked == true) R.string.more_remove_bookmark else R.string.more_bookmark_page)) {
+                p.currentPage?.let { pageActions?.toggleBookmark(it) }
+            }
+            val single = p.layoutMode == PageLayoutMode.SINGLE
+            items += MenuEntry((if (single) "" else "✓ ") + getString(R.string.more_continuous)) { p.setLayoutMode(PageLayoutMode.CONTINUOUS) }
+            items += MenuEntry((if (single) "✓ " else "") + getString(R.string.more_single_page)) { p.setLayoutMode(PageLayoutMode.SINGLE) }
+        }
+        items += MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) }
+        items += MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() }
+        items += pane?.moreEntries() ?: emptyList()
         MoreMenu(chrome.popups, anchor, items).show()
+    }
+
+    // --- Pages ----------------------------------------------------------------------------------------------
+
+    private fun showTemplatePicker(page: PageId?) {
+        val h = handle ?: return
+        val actions = pageActions ?: return
+        val target = page ?: return
+        val current = h.editor.pages.value.firstOrNull { it.id == target }?.background
+        TemplatePicker(chrome.popups, this, current) { bg, all -> actions.setTemplate(target, bg, all) }.show()
+    }
+
+    private fun thumbnails(h: DocumentHandle): ThumbnailStore = thumbs ?: ThumbnailStore(
+        h.editor,
+        ThumbnailRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), deps.dispatchers.render),
+        deps.thumbsDir?.invoke(h.id), scope, deps.dispatchers.io, deps.logger,
+    ).also { thumbs = it }
+
+    private fun openPageGrid() {
+        val h = handle ?: return
+        val actions = pageActions ?: return
+        if (gridOverlay != null) return
+        chrome.popups.dismiss()
+        val overlay = PageGridOverlay(
+            this, h.editor, thumbnails(h), actions, chrome.popups,
+            object : PageGridHost {
+                override fun onJump(page: PageId) {
+                    closePageGrid()
+                    pane?.goToPage(page)
+                }
+
+                override fun onClose() = closePageGrid()
+
+                override fun onChangeTemplate(page: PageId) = showTemplatePicker(page)
+            },
+            scope, pane?.currentPage,
+        )
+        gridOverlay = overlay
+        chrome.paneArea.addView(overlay, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        arbiter.block(BlockReason.PAGE_GRID, true)
+        deps.epd.refresh(chrome.paneArea, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+    }
+
+    private fun closePageGrid() {
+        val overlay = gridOverlay ?: return
+        gridOverlay = null
+        chrome.popups.dismiss()
+        overlay.release()
+        chrome.paneArea.removeView(overlay)
+        arbiter.block(BlockReason.PAGE_GRID, false)
+        deps.epd.refresh(chrome.paneArea, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+    }
+
+    private fun hitsPageUi(ev: MotionEvent): Boolean {
+        if (gridOverlay != null) return true
+        val v = indicator ?: return false
+        val loc = IntArray(2)
+        v.getLocationInWindow(loc)
+        return ev.x >= loc[0] && ev.x < loc[0] + v.width && ev.y >= loc[1] && ev.y < loc[1] + v.height
     }
 
     override fun onToolbarChanged() {
@@ -210,7 +316,11 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (chrome.popups.isShowing) chrome.popups.dismiss() else super.onBackPressed()
+        when {
+            chrome.popups.isShowing -> chrome.popups.dismiss()
+            gridOverlay != null -> closePageGrid()
+            else -> super.onBackPressed()
+        }
     }
 
     // --- Input ----------------------------------------------------------------------------------------------
@@ -228,6 +338,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 return true
             }
             if (popups.isShowing && popups.contains(ev)) route = Route.VIEWS
+            else if (hitsPageUi(ev)) route = Route.VIEWS
         }
         when (route) {
             Route.SWALLOW -> { if (end) route = Route.NONE; return true }
@@ -309,6 +420,9 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         ticking = false
         main.removeCallbacksAndMessages(null)
         saveViewState()
+        gridOverlay?.release()
+        gridOverlay = null
+        thumbs = null
         pane?.release()
         pane = null
         scope.cancel()

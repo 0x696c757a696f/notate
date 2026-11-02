@@ -6,6 +6,8 @@ import app.notate.core.input.InkArbiter
 import app.notate.core.input.InkSurface
 import app.notate.core.input.PaneTarget
 import app.notate.core.model.Capability
+import app.notate.core.model.PageId
+import app.notate.core.model.PageLayoutMode
 import app.notate.core.model.ToolPreset
 import app.notate.core.model.ViewState
 
@@ -22,8 +24,17 @@ interface DocumentPane : PaneTarget, InkSurface {
     fun restoreViewState(s: ViewState)
     fun release()
 
-    /** Pages button: shows the page grid (R2-3; nothing until then). */
-    fun showPageGrid() {}
+    /** Continuous scroll or single page. */
+    val layoutMode: PageLayoutMode get() = PageLayoutMode.CONTINUOUS
+
+    /** The page in view (nearest to the middle of the pane), or null before the first layout. */
+    val currentPage: PageId? get() = null
+
+    /** Scrolls (continuous) or flips (single page) to [page]. */
+    fun goToPage(page: PageId) {}
+
+    /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
+    fun setLayoutMode(mode: PageLayoutMode) {}
 
     /** Called by the window when the save queue went idle after a change (debug timings). */
     fun onSaveIdle(nowUptime: Long) {}
@@ -53,7 +64,12 @@ interface PaneHost {
 
     /** Closes the window's popup, if any. */
     fun dismissPopup() {}
+    /** The page in view changed: [index] (0-based) of [count]. Drives the page indicator. */
+    fun onPageChanged(index: Int, count: Int) {}
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
+    fun onPageGrid(hasGrid: Boolean) {}
 }

@@ -8,11 +8,14 @@ import android.os.SystemClock
 import android.view.View
 import app.notate.core.doc.content.PageContent
 import app.notate.core.doc.layout.DocumentLayout
+import app.notate.core.doc.layout.PageTurn
 import app.notate.core.doc.layout.Viewport
 import app.notate.core.doc.registry.DocumentHandle
 import app.notate.core.doc.settings.Tap2Action
 import app.notate.core.doc.settings.Tap3Action
+import app.notate.core.doc.tools.GridSnapper
 import app.notate.core.doc.tools.PenSession
+import app.notate.core.doc.tools.ShapeDragSession
 import app.notate.core.doc.tools.ToolContext
 import app.notate.core.doc.tools.ToolSession
 import app.notate.core.doc.tools.ToolSessionFactory
@@ -28,15 +31,20 @@ import app.notate.core.input.PaneId
 import app.notate.core.input.PenEvent
 import app.notate.core.model.Capabilities
 import app.notate.core.model.Capability
+import app.notate.core.model.DocKind
 import app.notate.core.model.InkPoint
 import app.notate.core.model.InkStyle
 import app.notate.core.model.PageId
 import app.notate.core.model.PageInfo
+import app.notate.core.model.PageLayoutMode
+import app.notate.core.model.edit.Edit
 import app.notate.core.model.PenType
 import app.notate.core.model.ToolKind
 import app.notate.core.model.ToolPreset
 import app.notate.core.model.ViewState
 import app.notate.editor.EditorDeps
+import app.notate.editor.R
+import app.notate.editor.pages.PageActions
 import app.notate.editor.view.LiveInkLayer
 import app.notate.editor.view.PageCanvasView
 import app.notate.platform.ink.ConfigurableDriverPort
@@ -98,6 +106,25 @@ class NotebookPane(
         if (deps.device.hasRawDrawing) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val penMode: InputPenMode = InputPenMode.WRITE
+    override val takesConstraintFinger: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
+
+    override fun onConstraint(on: Boolean) {
+        val ctx = activeCtx ?: return
+        if (ctx.constraint == on) return
+        ctx.constraint = on
+        (session as? ShapeDragSession)?.reapplyConstraint()
+    }
+
+    override var layoutMode: PageLayoutMode = editor.meta.value.view?.layout ?: deps.settings.pageLayout.value
+        private set
+    private val pageActions = PageActions(context, editor, scope, deps.logger)
+    private var addCard = false
+    private var panDx = 0f
+    private var panDy = 0f
+    private var edgeBack = false
+    private var edgeForward = false
+    private var notifiedIndex = -1
+    private var notifiedCount = -1
 
     var viewport: Viewport = Viewport(0f, 0f, 1f, pxPerPt, 0, 0)
         private set
@@ -128,11 +155,16 @@ class NotebookPane(
     private var lastLocalX = 0f
     private var lastLocalY = 0f
     private var lastPoint: InkPoint? = null
+    private var activeCtx: ToolContext? = null
+    private var adjustSoftware = false
     private var strokeBounds: android.graphics.Rect? = null
     private val pollRunnable = object : Runnable {
         override fun run() {
             val s = session ?: return
-            (s as? PenSession)?.poll()
+            (s as? PenSession)?.let {
+                it.poll()
+                if (it.isAdjusting && sessionViaDriver) enterAdjust()
+            }
             main.postDelayed(this, POLL_MS)
         }
     }
@@ -156,6 +188,10 @@ class NotebookPane(
         live.viewportProvider = { viewport }
         live.layoutProvider = { layout }
         canvasView.sizeListener = ::onViewSized
+        if (Capability.PAGES in capabilities && editor.meta.value.kind != DocKind.WEB) {
+            canvasView.addButtonLabel = context.getString(R.string.add_page_button)
+            canvasView.addCardHint = context.getString(R.string.add_page_hint)
+        }
         scope.launch {
             editor.changes.collect { c ->
                 scheduler.invalidate(c.page, c.dirty)
@@ -163,22 +199,78 @@ class NotebookPane(
             }
         }
         scope.launch {
-            editor.pages.collect {
-                layout = buildLayout()
-                publish()
-                requestTiles()
-            }
+            editor.pages.collect { onPagesChanged() }
         }
         scope.launch { deps.toolController.state.collect { onToolChanged(it.preset()) } }
         scope.launch { deps.settings.driverInk.collect { updateDriverInk() } }
     }
 
-    private fun buildLayout() = DocumentLayout(editor.pages.value, deps.settings.pageLayout.value)
+    private fun buildLayout() = DocumentLayout(editor.pages.value, layoutMode)
+
+    private var gridPage: PageId? = null
+
+    private fun reportGrid() {
+        val idx = layout.nearestIndex(viewport.scrollX + viewport.widthPx / viewport.scale / 2f, viewport.scrollY + viewport.heightPx / viewport.scale / 2f)
+        if (idx < 0) return
+        val id = layout.pageIdAt(idx)
+        if (id == gridPage) return
+        gridPage = id
+        val bg = editor.pages.value.firstOrNull { it.id == id }?.background
+        host.onPageGrid(GridSnapper(bg).available)
+    }
 
     private fun publish() {
+        reportGrid()
         canvasView.viewport = viewport
         canvasView.layout = layout
+        canvasView.addCard = addCard
         canvasView.invalidate()
+        notifyPage()
+    }
+
+    private fun currentIndex(): Int {
+        val v = viewport
+        if (layout.pageCount == 0 || v.widthPx == 0) return -1
+        return layout.nearestIndex(v.scrollX + v.widthPx / v.scale / 2f, v.scrollY + v.heightPx / v.scale / 2f)
+    }
+
+    private fun notifyPage() {
+        val i = currentIndex()
+        if (i == notifiedIndex && layout.pageCount == notifiedCount) return
+        notifiedIndex = i
+        notifiedCount = layout.pageCount
+        if (i >= 0) host.onPageChanged(i, layout.pageCount)
+    }
+
+    /** Pans by a finger drag, leaving room below the last page for the "Add page" button. */
+    private fun panned(dxPx: Float, dyPx: Float, vp: Viewport = viewport): Viewport {
+        val extra = if (canvasView.addButtonLabel != null && layoutMode == PageLayoutMode.CONTINUOUS) {
+            (PageCanvasView.BUTTON_GAP_DP + PageCanvasView.BUTTON_HEIGHT_DP) * density / vp.scale
+        } else {
+            0f
+        }
+        return vp.panBy(dxPx, dyPx, layout, extra)
+    }
+
+    /** The page list changed (insert, delete, move, template): rebuild the layout and keep the page in view where it was. */
+    private fun onPagesChanged() {
+        val old = layout
+        val vp = viewport
+        val idx = currentIndex()
+        val anchor = if (idx >= 0) old.pageIdAt(idx) else null
+        val oldFrame = if (idx >= 0) old.frameAt(idx) else null
+        layout = buildLayout()
+        if (anchor != null && oldFrame != null) {
+            if (layout.indexOf(anchor) >= 0) {
+                val f = layout.frameOf(anchor)
+                viewport = vp.copy(scrollX = f.l + (vp.scrollX - oldFrame.l), scrollY = f.t + (vp.scrollY - oldFrame.t))
+            } else if (layout.pageCount > 0) {
+                viewport = vp.fitWidth(layout, layout.pageIdAt(idx.coerceAtMost(layout.pageCount - 1)), FIT_MARGIN_DP * density)
+            }
+        }
+        if (addCard && layout.pageCount != notifiedCount) addCard = false
+        publish()
+        requestTiles()
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -301,21 +393,38 @@ class NotebookPane(
                 g is FingerGesture.PanStart || g is FingerGesture.PinchStart)
         ) return
         when (g) {
-            is FingerGesture.PanStart, is FingerGesture.PinchStart -> beginFinger()
-            is FingerGesture.Pan -> setViewport(viewport.panBy(g.dx, g.dy, layout), delayTiles = false)
-            is FingerGesture.PanEnd, FingerGesture.PinchEnd, FingerGesture.Cancel -> scheduleEndFinger()
+            is FingerGesture.PanStart -> {
+                panDx = 0f
+                panDy = 0f
+                edgeBack = addCard || PageTurn.atEdge(viewport, layout, -1)
+                edgeForward = addCard || PageTurn.atEdge(viewport, layout, 1)
+                beginFinger()
+            }
+            is FingerGesture.PinchStart -> beginFinger()
+            is FingerGesture.Pan -> {
+                panDx += g.dx
+                panDy += g.dy
+                if (!addCard) setViewport(panned(g.dx, g.dy), delayTiles = false)
+            }
+            is FingerGesture.PanEnd -> if (!(layoutMode == PageLayoutMode.SINGLE && swipeEnded(g.vx))) scheduleEndFinger()
+            FingerGesture.PinchEnd, FingerGesture.Cancel -> scheduleEndFinger()
             is FingerGesture.Pinch -> {
                 val fx = localX(g.fx)
                 val fy = localY(g.fy)
-                setViewport(viewport.zoomAround(g.scale, fx, fy).panBy(g.dx, g.dy, layout), delayTiles = true)
+                setViewport(panned(g.dx, g.dy, viewport.zoomAround(g.scale, fx, fy)), delayTiles = true)
             }
-            is FingerGesture.Tap -> onTap(g.fingers)
+            is FingerGesture.Tap -> onTap(g)
             is FingerGesture.LongPress -> Unit
         }
     }
 
-    private fun onTap(fingers: Int) {
-        when (fingers) {
+    private fun onTap(g: FingerGesture.Tap) {
+        when (g.fingers) {
+            1 -> {
+                val x = localX(g.x)
+                val y = localY(g.y)
+                if (canvasView.addCardRect()?.contains(x, y) == true || canvasView.addButtonRect()?.contains(x, y) == true) addPageAtEnd()
+            }
             2 -> when (deps.settings.tap2.value) {
                 Tap2Action.UNDO -> editor.undo()
                 Tap2Action.REDO -> editor.redo()
@@ -338,9 +447,9 @@ class NotebookPane(
         deps.epd.acquireFast(FAST_OWNER)
     }
 
-    private fun scheduleEndFinger() {
+    private fun scheduleEndFinger(settleMs: Long = FINGER_SETTLE_MS) {
         main.removeCallbacks(endFingerRunnable)
-        main.postDelayed(endFingerRunnable, FINGER_SETTLE_MS)
+        main.postDelayed(endFingerRunnable, settleMs)
         main.removeCallbacks(requestTilesRunnable)
         main.postDelayed(requestTilesRunnable, ZOOM_RENDER_DELAY_MS)
     }
@@ -451,7 +560,9 @@ class NotebookPane(
             preview = live,
             settings = ToolSettings(holdMs, (preset.eraserRadiusDp ?: 0f) * density),
             clock = deps.clock,
+            background = info.background,
         )
+        activeCtx = ctx
         live.page = hit.page
         live.driverDraws = viaDriver && preset.kind.let { it == ToolKind.PEN || it == ToolKind.HIGHLIGHTER }
         val s = factory.create(preset, ctx)
@@ -484,6 +595,31 @@ class NotebookPane(
         s.move(out)
     }
 
+    /**
+     * A held shape replaced the stroke while the e-ink driver was inking it: hand the rest of the gesture to the software
+     * preview. The driver is blocked (its ink is cleared by one partial refresh) and the touch events carry the pen from here;
+     * the block lifts after pen-up.
+     */
+    private fun enterAdjust() {
+        sessionViaDriver = false
+        adjustSoftware = true
+        live.driverDraws = false
+        deps.epd.acquireFast(INK_OWNER)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, true)
+        strokeBounds?.let { r ->
+            val pending = refreshRect
+            if (pending == null) refreshRect = android.graphics.Rect(r) else pending.union(r)
+            if (refreshFirstAt == 0L) refreshFirstAt = SystemClock.uptimeMillis()
+            armRefresh(0L)
+        }
+    }
+
+    private fun leaveAdjust() {
+        if (!adjustSoftware) return
+        adjustSoftware = false
+        updateHandMode()
+    }
+
     private fun endPen(x: Float, y: Float, tMs: Long, pressure: Float) {
         val s = session ?: return
         session = null
@@ -496,10 +632,12 @@ class NotebookPane(
         lastUpAt = t0
         val viaDriver = sessionViaDriver
         if (!viaDriver) deps.epd.releaseFast(INK_OWNER)
+        activeCtx?.constraint = false
         restoreEraser()
         val page = strokePage
         val rect = strokeBounds
         if (page != null && rect != null) afterCommit(page, rect, viaDriver)
+        leaveAdjust()
     }
 
     private fun cancelPen() {
@@ -508,7 +646,9 @@ class NotebookPane(
         main.removeCallbacks(pollRunnable)
         s.cancel()
         live.discardCurrent()
+        leaveAdjust()
         if (!sessionViaDriver) deps.epd.releaseFast(INK_OWNER)
+        activeCtx?.constraint = false
         restoreEraser()
     }
 
@@ -620,6 +760,9 @@ class NotebookPane(
     // --- Hand tool: the pen pans instead of writing; the driver stays off so that the pen arrives as touch events ---
 
     private val handMode: Boolean get() = deps.toolController.baseState().active == ToolKind.HAND
+
+    /** The shape tool draws a software ghost, so the driver stays off for it (like the Hand tool). */
+    private val shapeMode: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
     private var handing = false
     private var handX = 0f
     private var handY = 0f
@@ -627,7 +770,7 @@ class NotebookPane(
     private fun updateHandMode() {
         val on = handMode
         if (!on && handing) endHand()
-        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || adjustSoftware)
     }
 
     private fun panWithPen(ev: PenEvent) {
@@ -639,7 +782,7 @@ class NotebookPane(
                 beginFinger()
             }
             is PenEvent.Move -> if (handing) {
-                setViewport(viewport.panBy(ev.x - handX, ev.y - handY, layout), delayTiles = false)
+                setViewport(panned(ev.x - handX, ev.y - handY), delayTiles = false)
                 handX = ev.x
                 handY = ev.y
             }
@@ -666,6 +809,84 @@ class NotebookPane(
             null    // erasers and other tools: the driver draws nothing
         }
         driver.setInk(ink)
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Pages: jump, single-page turns, layout mode, "Add page"
+    // ---------------------------------------------------------------------------------------------------------
+
+    override val currentPage: PageId?
+        get() = currentIndex().takeIf { it >= 0 }?.let { layout.pageIdAt(it) }
+
+    override fun goToPage(page: PageId) {
+        if (layout.indexOf(page) < 0) layout = buildLayout()
+        if (layout.indexOf(page) < 0 || viewport.widthPx == 0 || released) return
+        addCard = false
+        val vp = if (layoutMode == PageLayoutMode.SINGLE) {
+            viewport.fitWidth(layout, page, FIT_MARGIN_DP * density)
+        } else {
+            panned(0f, 0f, viewport.copy(scrollY = layout.frameOf(page).t - GO_TO_MARGIN_DP * density / viewport.scale))
+        }
+        beginFinger()
+        setViewport(vp, delayTiles = false)
+        scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+    }
+
+    override fun setLayoutMode(mode: PageLayoutMode) {
+        if (mode == layoutMode || released) return
+        val page = currentPage
+        layoutMode = mode
+        addCard = false
+        layout = buildLayout()
+        if (page != null && viewport.widthPx > 0) {
+            beginFinger()
+            setViewport(viewport.fitWidth(layout, page, FIT_MARGIN_DP * density), delayTiles = false)
+            scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+        } else {
+            publish()
+        }
+        val state = saveViewState() ?: return
+        val meta = editor.meta.value
+        if (meta.view != state) editor.apply(Edit.SetMeta(meta, meta.copy(view = state)), undoable = false)
+    }
+
+    /** A one-finger drag ended in single-page mode: turns the page when it was far or fast enough and started at the page edge. */
+    private fun swipeEnded(vx: Float): Boolean {
+        val dir = PageTurn.direction(panDx, panDy, vx, viewport.widthPx, density)
+        if (dir == 0 || !(if (dir > 0) edgeForward else edgeBack)) return false
+        val i = currentIndex()
+        if (i < 0) return false
+        if (addCard) {
+            if (dir < 0) {
+                addCard = false
+                beginFinger()
+                publish()
+                scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+                return true
+            }
+            return false
+        }
+        val target = i + dir
+        return when {
+            target < 0 -> false
+            target >= layout.pageCount -> {
+                if (canvasView.addButtonLabel == null) return false
+                addCard = true
+                beginFinger()
+                publish()
+                scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+                true
+            }
+            else -> {
+                goToPage(layout.pageIdAt(target))
+                true
+            }
+        }
+    }
+
+    private fun addPageAtEnd() {
+        val last = layout.pageCount.takeIf { it > 0 }?.let { layout.pageIdAt(it - 1) }
+        pageActions.addAfter(last) { goToPage(it) }
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -735,6 +956,8 @@ class NotebookPane(
         const val OVERLAY_MAX_MS = 700L
         const val BOUNDS_PAD_DP = 6f
         const val EVICT_DISTANCE = 5
+        const val GO_TO_MARGIN_DP = 8f
+        const val PAGE_TURN_SETTLE_MS = 250L
         const val DEFAULT_WIDTH_PT = 1.134f
         const val FAST_OWNER = "pane-finger"
         const val INK_OWNER = "pane-ink"

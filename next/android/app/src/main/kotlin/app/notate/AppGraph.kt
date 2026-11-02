@@ -100,6 +100,7 @@ class AppGraph(
             logger = logger,
             onDocumentClosed = { id -> appScope.launch { documents.touch(id) } },
             paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
+            thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
         )
     }
 }
