@@ -80,6 +80,13 @@ dependencies {
     implementation(project(":next:library"))
     implementation("app.notate.core:workspace")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("app.notate.core:model")
+    implementation("app.notate.core:store")
+    implementation("app.notate.core:doc")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     testImplementation("junit:junit:4.13.2")
 }

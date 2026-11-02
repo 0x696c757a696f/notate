@@ -36,6 +36,14 @@ class SqliteLibraryStoreTest {
         assertThat(s.get(DocId("missing"))).isNull()
     }
 
+    @Test fun updateCoverChangesOnlyCoverAndPageCount() = runBlocking<Unit> {
+        val s = store()
+        s.upsert(doc("A", "First", pinned = true))
+        s.updateCover(DocId("A"), 4, 9)
+        assertThat(s.get(DocId("A"))).isEqualTo(doc("A", "First", pinned = true).copy(coverRev = 4, pageCount = 9))
+        s.updateCover(DocId("missing"), 1, 1)
+    }
+
     @Test fun observeEmitsAgainAfterWrites() = runBlocking<Unit> {
         val s = store()
         val emissions = java.util.concurrent.CopyOnWriteArrayList<List<String>>()

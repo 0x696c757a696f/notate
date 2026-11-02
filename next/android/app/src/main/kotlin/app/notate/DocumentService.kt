@@ -35,6 +35,10 @@ class DocumentService(
 
     /** Creates a notebook of [pageCount] pages of [template], registers it in the library and returns its id. */
     suspend fun createNotebook(title: String, template: PageTemplate = PageTemplate.DEFAULT, pageCount: Int = 1): DocId =
+        writeNotebook(title, template, pageCount).also { library().upsert(it) }.id
+
+    /** Creates the files of a notebook and returns its library row without inserting it (callers add it to the index). */
+    suspend fun writeNotebook(title: String, template: PageTemplate, pageCount: Int = 1): DocumentEntry =
         withContext(dispatchers.io) {
             require(pageCount >= 1) { "A notebook needs at least one page" }
             val id = DocId.new(clock, random)
@@ -42,13 +46,10 @@ class DocumentService(
             val meta = DocumentMeta(id, title, DocKind.NOTEBOOK, createdAt = now, modifiedAt = now, newPageTemplate = template)
             val pages = (1..pageCount).map { n -> pageOf(n, template, now) }
             docStores.create(paths.docDir(id), meta, pages).close()
-            library().upsert(
-                DocumentEntry(
-                    id = id, title = title, kind = DocKind.NOTEBOOK, folderId = null, created = now, modified = now, opened = null,
-                    pageCount = pageCount, coverRev = 0, pinned = false, trashed = null, tagIds = emptySet(),
-                ),
+            DocumentEntry(
+                id = id, title = title, kind = DocKind.NOTEBOOK, folderId = null, created = now, modified = now, opened = null,
+                pageCount = pageCount, coverRev = 0, pinned = false, trashed = null, tagIds = emptySet(),
             )
-            id
         }
 
     /** All documents that are not in the trash, most recently modified first. */
