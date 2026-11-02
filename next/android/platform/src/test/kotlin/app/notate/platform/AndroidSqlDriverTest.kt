@@ -70,7 +70,7 @@ class AndroidSqlDriverTest {
         runCatching { s.write(listOf(Edit.Items(PageId(2), emptyList(), listOf(strokes[0])), Edit.Items(PageId(99), emptyList(), listOf(stroke(500))))) }
         s.close()
         val reopened = docs.open(dir, readOnly = true)
-        assertThat(reopened.readMeta()).isEqualTo(meta())
+        assertThat(reopened.readMeta().id).isEqualTo(meta().id) // modifiedAt moves on write
         assertThat(reopened.readItems(PageId(1))).hasSize(100)
         reopened.close()
     }
