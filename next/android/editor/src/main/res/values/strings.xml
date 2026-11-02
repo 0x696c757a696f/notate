@@ -1,10 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="tool_lasso">Lasso</string>
     <string name="tool_pen">Pen</string>
+    <string name="tool_highlighter">Highlighter</string>
     <string name="tool_eraser">Eraser</string>
+    <string name="tool_shapes">Shapes</string>
+    <string name="tool_text">Text</string>
+    <string name="tool_image">Image</string>
+    <string name="tool_ruler">Ruler</string>
+    <string name="tool_zoom">Zoom window</string>
+    <string name="tool_hand">Hand</string>
+
     <string name="action_undo">Undo</string>
     <string name="action_redo">Redo</string>
+    <string name="action_pages">Pages</string>
+    <string name="action_split">Split view</string>
+    <string name="action_more">More</string>
     <string name="action_back">Back</string>
+    <string name="action_select">Select</string>
+
+    <string name="unavailable_books">Not available on books</string>
+    <string name="unavailable_here">Not available here</string>
+    <string name="coming_soon">Not available yet</string>
+    <string name="nothing_to_undo">Nothing to undo</string>
+    <string name="nothing_to_redo">Nothing to redo</string>
+
+    <string name="pen_settings">Pen settings</string>
+    <string name="pen_thickness">Thickness</string>
+    <string name="pen_pressure">Pressure sensitivity</string>
+    <string name="pen_color">Color</string>
+    <string name="pen_ballpoint">Ballpoint</string>
+    <string name="pen_fountain">Fountain pen</string>
+    <string name="pen_fineliner">Fineliner</string>
+    <string name="pen_pencil">Pencil</string>
+    <string name="pen_dashed">Dashed</string>
+    <string name="pen_dotted">Dotted</string>
+    <string name="color_custom">Custom…</string>
+    <string name="color_slot">Color %1$d</string>
+    <string name="width_slot">Thickness %1$d</string>
+
+    <string name="eraser_partial">Partial eraser</string>
+    <string name="eraser_stroke">Stroke eraser</string>
+    <string name="eraser_lasso">Lasso eraser</string>
+    <string name="eraser_size">Eraser size %1$d</string>
+    <string name="eraser_highlighter_only">Highlighter only</string>
+
+    <string name="shape_line">Line</string>
+    <string name="shape_arrow">Arrow</string>
+    <string name="shape_rect">Rectangle</string>
+    <string name="shape_ellipse">Ellipse</string>
+    <string name="shape_polygon">Polygon</string>
+    <string name="shape_axes">Axes</string>
+    <string name="axes_2d">2D</string>
+    <string name="axes_q1">First quadrant</string>
+    <string name="snap_to_grid">Snap to grid</string>
+    <string name="lasso_freeform">Freeform</string>
+    <string name="lasso_rectangle">Rectangle</string>
+    <string name="text_smaller">Smaller text</string>
+    <string name="text_larger">Larger text</string>
+    <string name="text_bold">Bold</string>
+    <string name="text_color">Text color</string>
+
+    <string name="tab_home">Library</string>
+    <string name="tab_close">Close</string>
+    <string name="tab_new">New tab</string>
+    <string name="more_focus_mode">Focus mode</string>
+    <string name="more_refresh_screen">Refresh screen</string>
+    <string name="exit_focus_mode">Show toolbar</string>
+
     <string name="open_failed">Could not open this note.</string>
     <string name="save_failed">Not saved</string>
 </resources>

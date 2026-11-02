@@ -61,4 +61,15 @@ class ToolStateTest {
         c.temporaryEraser(false)
         assertThat(c.state.value.active).isEqualTo(ToolKind.HIGHLIGHTER)
     }
+
+    @Test fun pressureDefaultsAndOldJsonStillLoads() {
+        assertThat(ToolState.defaults().pen.pressure).isEqualTo(0.7f)
+        assertThat(ToolState.defaults().preset().pressure).isEqualTo(0.7f)
+        val old = """{"pen":{"pen":"FOUNTAIN","colors":[-16777216],"widthsPt":[1.0]},""" +
+            """"highlighter":{"pen":"HIGHLIGHTER","colors":[-1],"widthsPt":[8.0]},"eraserSizesDp":[10.0]}"""
+        val kv = InMemoryKeyValueStore().also { it.putString("tool_state", old) }
+        val s = ToolController(Settings(kv)).state.value
+        assertThat(s.pen.pen).isEqualTo(PenType.FOUNTAIN)
+        assertThat(s.pen.pressure).isEqualTo(0.7f)
+    }
 }

@@ -26,6 +26,8 @@ import app.notate.core.input.FingerGesture
 import app.notate.core.input.InputPenMode
 import app.notate.core.input.PaneId
 import app.notate.core.input.PenEvent
+import app.notate.core.model.Capabilities
+import app.notate.core.model.Capability
 import app.notate.core.model.InkPoint
 import app.notate.core.model.InkStyle
 import app.notate.core.model.PageId
@@ -76,6 +78,7 @@ class NotebookPane(
 
     private val canvasView = PageCanvasView(context)
     override val view: View get() = canvasView
+    override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
     private val live = LiveInkLayer(canvasView, density) { editor.content(it) }
 
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
@@ -204,6 +207,7 @@ class NotebookPane(
             attached = true
             host.arbiter.attach(this)
             host.arbiter.setOwner(this)
+            updateHandMode()
         }
     }
 
@@ -320,7 +324,8 @@ class NotebookPane(
             3 -> when (deps.settings.tap3.value) {
                 Tap3Action.REDO -> editor.redo()
                 Tap3Action.REFRESH -> deps.epd.refresh(canvasView, EpdMode.GC, null, EpdTiming.AFTER_DRAW)
-                Tap3Action.FOCUS_MODE, Tap3Action.OFF -> Unit
+                Tap3Action.FOCUS_MODE -> host.onFocusModeRequested()
+                Tap3Action.OFF -> Unit
             }
         }
     }
@@ -361,6 +366,10 @@ class NotebookPane(
         if (released) return
         if (ev is PenEvent.Hover) {
             onHover(ev)
+            return
+        }
+        if (handMode) {
+            panWithPen(ev)
             return
         }
         if (driverActive) return    // the driver reports its own points; touch events only feed palm rejection
@@ -599,7 +608,49 @@ class NotebookPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onToolChanged(tool: ToolPreset) {
+        updateHandMode()
         updateDriverInk()
+    }
+
+    override fun refreshExcludes() {
+        if (viewport.widthPx == 0) return
+        driver.setLimits(android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx), host.excludeRects())
+    }
+
+    // --- Hand tool: the pen pans instead of writing; the driver stays off so that the pen arrives as touch events ---
+
+    private val handMode: Boolean get() = deps.toolController.baseState().active == ToolKind.HAND
+    private var handing = false
+    private var handX = 0f
+    private var handY = 0f
+
+    private fun updateHandMode() {
+        val on = handMode
+        if (!on && handing) endHand()
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on)
+    }
+
+    private fun panWithPen(ev: PenEvent) {
+        when (ev) {
+            is PenEvent.Down -> {
+                handing = true
+                handX = ev.x
+                handY = ev.y
+                beginFinger()
+            }
+            is PenEvent.Move -> if (handing) {
+                setViewport(viewport.panBy(ev.x - handX, ev.y - handY, layout), delayTiles = false)
+                handX = ev.x
+                handY = ev.y
+            }
+            is PenEvent.Up, is PenEvent.Cancel -> if (handing) endHand()
+            is PenEvent.Hover -> Unit
+        }
+    }
+
+    private fun endHand() {
+        handing = false
+        scheduleEndFinger()
     }
 
     override fun onFocusChanged(focused: Boolean) = Unit
