@@ -16,6 +16,7 @@ import app.notate.core.model.Stroke
 import app.notate.core.model.ToolKind
 import app.notate.core.model.ToolPreset
 import app.notate.core.model.edit.Edit
+import kotlin.math.atan2
 import kotlin.math.hypot
 
 /**
@@ -36,6 +37,12 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     private var anchor = Vec2(0f, 0f)       // shape centre (line kinds: the fixed start point)
     private var holdDist = 1f               // pen distance from the centre when the shape was recognised
     private var recognised: Shape? = null   // shape as recognised, before any resizing
+    private var fixed = Vec2(0f, 0f)        // polygon kinds: the vertex that stays put (the first one)
+    private var holdVec = Vec2(1f, 0f)      // polygon kinds: fixed → the vertex that follows the pen, as recognised
+    private var holdPen = Vec2(0f, 0f)      // pen position when the shape was recognised
+
+    /** True once a held shape replaced the stroke: the pen now only resizes it (hosts swap the driver ink for the software ghost). */
+    val isAdjusting: Boolean get() = recognised != null
 
     override fun begin(p: InkPoint) {
         started = true
@@ -98,6 +105,17 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
         val last = sampler.points().let { Vec2(it.xy[it.xy.size - 2], it.xy[it.xy.size - 1]) }
         anchor = if (isLineKind(shape.kind)) Vec2(params[0], params[1]) else bounds.center
         holdDist = hypot(last.x - anchor.x, last.y - anchor.y).coerceAtLeast(MIN_DIST)
+        holdPen = last
+        if (usesVertexAnchor(shape.kind)) {
+            // Pivot on the first vertex; the vertex farthest from it follows the pen, so the shape scales and rotates around the pivot.
+            fixed = Vec2(params[0], params[1])
+            var far = Vec2(params[0], params[1]); var best = -1f
+            for (i in 1 until params.size / 2) {
+                val d = hypot(params[2 * i] - fixed.x, params[2 * i + 1] - fixed.y)
+                if (d > best) { best = d; far = Vec2(params[2 * i], params[2 * i + 1]) }
+            }
+            holdVec = Vec2(far.x - fixed.x, far.y - fixed.y).let { if (hypot(it.x, it.y) < MIN_DIST) Vec2(MIN_DIST, 0f) else it }
+        }
         ctx.preview.show(Preview.Ghost(listOf(shape)))
     }
 
@@ -106,13 +124,24 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
         val next: Shape = if (isLineKind(base.kind)) {
             val params = base.params.copyOf().also { it[2] = p.x; it[3] = p.y }
             base.copy(params = params, bounds = ItemBounds.shapeBounds(base.kind, params, base.style))
+        } else if (usesVertexAnchor(base.kind)) {
+            val v1x = holdVec.x + (p.x - holdPen.x)
+            val v1y = holdVec.y + (p.y - holdPen.y)
+            val len0 = hypot(holdVec.x, holdVec.y)
+            val s = (hypot(v1x, v1y) / len0).coerceIn(MIN_SCALE, MAX_SCALE)
+            val rot = Math.toDegrees((atan2(v1y, v1x) - atan2(holdVec.y, holdVec.x)).toDouble()).toFloat()
+            base.transformed(Affine.rotate(rot, fixed.x, fixed.y) * Affine.scale(s, s, fixed.x, fixed.y)) as Shape
         } else {
             val s = (hypot(p.x - anchor.x, p.y - anchor.y) / holdDist).coerceIn(MIN_SCALE, MAX_SCALE)
             base.transformed(Affine.scale(s, s, anchor.x, anchor.y)) as Shape
         }
-        ghost = next
-        ctx.preview.show(Preview.Ghost(listOf(next)))
+        // Resizing must not thicken the line: keep the pen width.
+        val fixedNext = if (next.style == base.style) next else next.copy(style = base.style, bounds = ItemBounds.shapeBounds(next.kind, next.params, base.style))
+        ghost = fixedNext
+        ctx.preview.show(Preview.Ghost(listOf(fixedNext)))
     }
+
+    private fun usesVertexAnchor(k: ShapeKind) = k == ShapeKind.RECT || k == ShapeKind.TRIANGLE || k == ShapeKind.POLYGON || k == ShapeKind.POLYLINE
 
     private fun isLineKind(k: ShapeKind) = k == ShapeKind.LINE || k == ShapeKind.ARROW || k == ShapeKind.DOUBLE_ARROW
 

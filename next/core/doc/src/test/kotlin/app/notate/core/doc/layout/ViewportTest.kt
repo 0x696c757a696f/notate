@@ -88,4 +88,11 @@ class ViewportTest {
         assertThat(Viewport.levelFor(2f)).isEqualTo(2)
         assertThat(Viewport.scaleOf(2)).isWithin(1e-5f).of(2f)
     }
+
+    @Test fun extraBottomPtExtendsContinuousScrollRange() {
+        val v = vp(sx = 0f, sy = 100f, zoom = 1f)
+        val plain = v.panBy(0f, -1_000_000f, layout).scrollY
+        val extra = v.panBy(0f, -1_000_000f, layout, extraBottomPt = 80f).scrollY
+        assertThat(extra - plain).isEqualTo(80f)
+    }
 }

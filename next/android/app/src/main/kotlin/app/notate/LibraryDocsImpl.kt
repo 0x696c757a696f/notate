@@ -14,6 +14,7 @@ import app.notate.core.store.library.LibraryStore
 import app.notate.core.store.sql.SqlDriverFactory
 import app.notate.platform.fs.AppPaths
 import app.notate.platform.thread.DispatcherSet
+import app.notate.web.sandbox.WebDocCleanup
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Random
@@ -78,5 +79,7 @@ class LibraryDocsImpl(
 
     override suspend fun deleteFiles(id: DocId) {
         withContext(dispatchers.io) { paths.docDir(id).deleteRecursively() }
+        // WebView storage (localStorage, IndexedDB) of book documents; WebStorage must be used on the main thread.
+        withContext(dispatchers.main) { WebDocCleanup.clear(id) }
     }
 }

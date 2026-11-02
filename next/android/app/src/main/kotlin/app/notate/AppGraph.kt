@@ -8,7 +8,9 @@ import app.notate.core.doc.settings.Settings
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.input.EpdScheduler
 import app.notate.editor.EditorDeps
+import app.notate.core.model.DocKind
 import app.notate.editor.EditorEnv
+import app.notate.web.pane.WebPaneFactory
 import app.notate.platform.epd.NoEpdPort
 import app.notate.platform.epd.OnyxEpdPort
 import app.notate.core.model.DocId
@@ -119,6 +121,8 @@ class AppGraph(
                 appScope.launch { documents.touch(id) }
                 covers.onClosed(id)
             },
+            paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
+            thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
         )
     }
 }

@@ -14,6 +14,7 @@ import app.notate.core.model.DocId
 import app.notate.core.model.SystemClock
 import app.notate.core.model.log.Logger
 import app.notate.core.store.doc.SqliteDocStoreFactory
+import app.notate.core.testing.FakeClock
 import app.notate.core.testing.InMemoryKeyValueStore
 import app.notate.core.testing.meta
 import app.notate.core.testing.page
@@ -41,10 +42,13 @@ class EditorFlowTest {
     private val dir = Files.createTempDirectory("editorflow").toFile()
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private var openedStore: app.notate.core.store.DocStore? = null
+
     private fun registry(factory: SqliteDocStoreFactory) = DocumentRegistry(
         opener = object : DocumentOpener {
             override suspend fun open(id: DocId): Opened {
                 val store = factory.open(dir)
+                openedStore = store
                 return Opened(store, store.readMeta(), store.readPages(), store.maxIds())
             }
         },
@@ -59,12 +63,12 @@ class EditorFlowTest {
 
         val registry = registry(factory)
         val handle = registry.acquire(meta.id)
-        val settings = Settings(InMemoryKeyValueStore())
+        val settings = Settings(InMemoryKeyValueStore()).also { it.holdShapeMs.set(0) }   // no timing-dependent shape recognition
         val deps = EditorDeps(
             registry = registry, settings = settings, toolController = ToolController(settings),
             dispatchers = DispatcherSet(Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.IO),
             device = DeviceInfo(isOnyx = false, model = "test", xdpi = 227f, maxPressure = 4096f, hasRawDrawing = false),
-            epd = EpdScheduler(NoEpdPort), clock = SystemClock, appScope = appScope, logger = Logger.NONE,
+            epd = EpdScheduler(NoEpdPort), clock = FakeClock(), appScope = appScope, logger = Logger.NONE,
         )
         val host = object : PaneHost {
             override val arbiter = InkArbiter()
@@ -85,11 +89,17 @@ class EditorFlowTest {
 
         pane.release()
         handle.save.flush()
-        registry.flushAll()
+        // Close the first connection before the second one opens: two live connections to one file are not what
+        // this test is about and make the Robolectric SQLite shadow racy.
+        handle.save.close()
+        openedStore!!.close()
 
-        val reopened = registry(factory).acquire(meta.id)
-        val content = withTimeout(10_000) { reopened.editor.ensureLoaded(pageId) }
-        assertThat(content.all().toList()).hasSize(1)
+        val reopened = factory.open(dir)
+        try {
+            assertThat(withTimeout(10_000) { reopened.readItems(pageId) }).hasSize(1)
+        } finally {
+            reopened.close()
+        }
     }
 
     @Test fun undoRemovesTheStroke() = runBlocking {
@@ -99,11 +109,11 @@ class EditorFlowTest {
         factory.create(dir, meta, listOf(page(1))).close()
         val registry = registry(factory)
         val handle = registry.acquire(meta.id)
-        val settings = Settings(InMemoryKeyValueStore())
+        val settings = Settings(InMemoryKeyValueStore()).also { it.holdShapeMs.set(0) }   // no timing-dependent shape recognition
         val deps = EditorDeps(
             registry, settings, ToolController(settings),
             DispatcherSet(Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.Unconfined, Dispatchers.IO),
-            DeviceInfo(false, "test", 227f, 4096f, false), EpdScheduler(NoEpdPort), SystemClock, appScope, Logger.NONE,
+            DeviceInfo(false, "test", 227f, 4096f, false), EpdScheduler(NoEpdPort), FakeClock(), appScope, Logger.NONE,
         )
         val host = object : PaneHost {
             override val arbiter = InkArbiter()

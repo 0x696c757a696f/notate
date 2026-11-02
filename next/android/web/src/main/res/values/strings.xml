@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="web_write">Write</string>
+    <string name="web_interact">Interact</string>
+    <string name="web_previous">Previous chapter</string>
+    <string name="web_no_previous">This is the first chapter.</string>
+    <string name="web_no_next">This is the last chapter.</string>
+    <string name="web_next">Next chapter</string>
+    <string name="web_contents">Contents</string>
+    <string name="web_no_contents">This book has no contents list.</string>
+    <string name="web_chapter_fmt">Ch.%1$d · %2$s</string>
+    <string name="web_untitled_chapter">Chapter %1$d</string>
+    <string name="web_layout_changed">Layout changed since you wrote here. Handwriting may be misaligned.</string>
+    <string name="web_open_link">Open link in browser?</string>
+    <string name="web_open">Open</string>
+    <string name="web_cancel">Cancel</string>
+    <string name="web_continue">Continue</string>
+    <string name="web_reading_options">Reading options…</string>
+    <string name="web_opt_javascript">JavaScript</string>
+    <string name="web_opt_network">Network access</string>
+    <string name="web_opt_reduce_motion">Reduce motion</string>
+    <string name="web_opt_text_size">Text size %1$d%%</string>
+    <string name="web_opt_reflow">Reflow to fit</string>
+    <string name="web_network_confirm">This book will be able to load content from the internet. Continue?</string>
+    <string name="web_reflow_confirm">Text will reflow. Existing handwriting may no longer line up. Continue?</string>
+    <string name="web_clear_page">Clear notes on this page</string>
+    <string name="web_clear_confirm">Erase all handwriting on this page?</string>
+    <string name="web_clear">Erase</string>
+    <string name="web_page_crashed">The page stopped working. Use More → Refresh screen to try again.</string>
+</resources>
