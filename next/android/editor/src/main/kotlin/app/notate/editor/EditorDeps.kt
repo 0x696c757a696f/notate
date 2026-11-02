@@ -2,6 +2,7 @@ package app.notate.editor
 
 import android.view.View
 import app.notate.core.doc.registry.DocumentRegistry
+import app.notate.core.doc.select.InkClipboard
 import app.notate.core.doc.settings.Settings
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.input.EpdScheduler
@@ -28,6 +29,8 @@ class EditorDeps(
     val onDocumentClosed: (DocId) -> Unit = {},
     /** Directory for a document's cached page thumbnails; null disables the disk cache. */
     val thumbsDir: ((DocId) -> java.io.File)? = null,
+    /** Ink clipboard shared by every pane and document of the process (one [EditorDeps] per process). */
+    val clipboard: InkClipboard = InkClipboard(),
 )
 
 /** Holder filled by the application at startup. */

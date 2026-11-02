@@ -107,4 +107,14 @@
     <string name="template_engineering">Engineering</string>
     <string name="template_cornell">Cornell</string>
     <string name="template_isometric">Isometric</string>
+
+    <string name="sel_cut">Cut</string>
+    <string name="sel_copy">Copy</string>
+    <string name="sel_duplicate">Duplicate</string>
+    <string name="sel_delete">Delete</string>
+    <string name="sel_color">Color</string>
+    <string name="sel_thickness">Thickness</string>
+    <string name="sel_front">Front</string>
+    <string name="sel_back">Back</string>
+    <string name="menu_paste">Paste</string>
 </resources>

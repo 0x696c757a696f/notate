@@ -38,11 +38,17 @@ interface DocumentPane : PaneTarget, InkSurface {
 
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
+
+    /** Drops the selection, if any (tab switch, page grid). */
+    fun clearSelection() {}
 }
 
 /** What a pane needs from the window that hosts it. */
 interface PaneHost {
     val arbiter: InkArbiter
+
+    /** Popup host of the window (selection bar, long-press menu); null in hosts without one. */
+    val popups: app.notate.editor.popup.PopupHost? get() = null
 
     /** Areas of the pane's view (view-local px) where the pen must be ignored, e.g. floating toolbars. */
     fun excludeRects(): List<android.graphics.Rect>

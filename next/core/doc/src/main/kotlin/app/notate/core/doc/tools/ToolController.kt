@@ -12,7 +12,7 @@ import kotlinx.serialization.json.Json
  */
 class ToolController(private val settings: Settings) {
     private var base: ToolState = load()
-    private var tempEraser = false
+    private var temp: ToolKind? = null
     private val _state = MutableStateFlow(effective())
     val state: StateFlow<ToolState> get() = _state
 
@@ -28,12 +28,15 @@ class ToolController(private val settings: Settings) {
     }
 
     /** Pen side button: down switches to the eraser, up restores the previous tool. Not persisted. */
-    fun temporaryEraser(on: Boolean) {
-        tempEraser = on
+    fun temporaryEraser(on: Boolean) = temporaryTool(if (on) ToolKind.ERASER else null)
+
+    /** Switches to [kind] until called with null (side button set to Lasso). Not persisted. */
+    fun temporaryTool(kind: ToolKind?) {
+        temp = kind
         _state.value = effective()
     }
 
-    private fun effective(): ToolState = if (tempEraser) base.copy(active = ToolKind.ERASER) else base
+    private fun effective(): ToolState = temp?.let { base.copy(active = it) } ?: base
 
     private fun load(): ToolState {
         val s = settings.toolStateJson.value ?: return ToolState.defaults()

@@ -11,6 +11,9 @@ import app.notate.core.doc.layout.DocumentLayout
 import app.notate.core.doc.layout.PageTurn
 import app.notate.core.doc.layout.Viewport
 import app.notate.core.doc.registry.DocumentHandle
+import app.notate.core.doc.select.PageGeometry
+import app.notate.core.doc.select.SelectionController
+import app.notate.core.doc.settings.PenButton
 import app.notate.core.doc.settings.Tap2Action
 import app.notate.core.doc.settings.Tap3Action
 import app.notate.core.doc.tools.GridSnapper
@@ -21,6 +24,7 @@ import app.notate.core.doc.tools.ToolSession
 import app.notate.core.doc.tools.ToolSessionFactory
 import app.notate.core.doc.tools.ToolSettings
 import app.notate.core.geometry.Rect
+import app.notate.core.geometry.Vec2
 import app.notate.core.ink.driver.DriverInkPolicy
 import app.notate.core.input.BlockReason
 import app.notate.core.input.EpdMode
@@ -45,6 +49,8 @@ import app.notate.core.model.ViewState
 import app.notate.editor.EditorDeps
 import app.notate.editor.R
 import app.notate.editor.pages.PageActions
+import app.notate.editor.select.SelectionLayer
+import app.notate.editor.select.SelectionUi
 import app.notate.editor.view.LiveInkLayer
 import app.notate.editor.view.PageCanvasView
 import app.notate.platform.ink.ConfigurableDriverPort
@@ -88,6 +94,18 @@ class NotebookPane(
     override val view: View get() = canvasView
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
     private val live = LiveInkLayer(canvasView, density) { editor.content(it) }
+
+    /** Page offsets on the document plane for cross-page selection moves. */
+    private val geometry = object : PageGeometry {
+        override fun origin(page: PageId): Vec2 = layout.frameOf(page).let { Vec2(it.l, it.t) }
+        override fun pageAt(docX: Float, docY: Float): PageId? = layout.pageAt(docX, docY)
+    }
+    private val selectionUi = SelectionUi(
+        canvasView, editor, SelectionController(editor, geometry, live), deps.clipboard, host.popups, scope, { viewport }, { layout },
+    )
+    private val selection: SelectionController get() = selectionUi.controller
+    private var baseKind: ToolKind = deps.toolController.baseState().active
+    private var hadSelection = false
 
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
     private val scheduler = TileScheduler(
@@ -185,6 +203,7 @@ class NotebookPane(
     init {
         canvasView.compositor = TileCompositor(cache, density) { p -> editor.pages.value.firstOrNull { it.id == p } }
         canvasView.live = live
+        canvasView.overlay = { selectionUi.draw(it) }
         live.viewportProvider = { viewport }
         live.layoutProvider = { layout }
         canvasView.sizeListener = ::onViewSized
@@ -196,8 +215,10 @@ class NotebookPane(
             editor.changes.collect { c ->
                 scheduler.invalidate(c.page, c.dirty)
                 canvasView.invalidate()
+                selection.refresh()     // undo / redo may have removed the selected items
             }
         }
+        scope.launch { selection.selection.collect { onSelectionChanged() } }
         scope.launch {
             editor.pages.collect { onPagesChanged() }
         }
@@ -225,6 +246,7 @@ class NotebookPane(
         canvasView.layout = layout
         canvasView.addCard = addCard
         canvasView.invalidate()
+        if (selection.selection.value != null) selectionUi.update()    // bar follows scrolling and zooming
         notifyPage()
     }
 
@@ -414,7 +436,7 @@ class NotebookPane(
                 setViewport(panned(g.dx, g.dy, viewport.zoomAround(g.scale, fx, fy)), delayTiles = true)
             }
             is FingerGesture.Tap -> onTap(g)
-            is FingerGesture.LongPress -> Unit
+            is FingerGesture.LongPress -> onLongPress(g)
         }
     }
 
@@ -423,6 +445,7 @@ class NotebookPane(
             1 -> {
                 val x = localX(g.x)
                 val y = localY(g.y)
+                if (selection.selection.value != null) selection.clear()
                 if (canvasView.addCardRect()?.contains(x, y) == true || canvasView.addButtonRect()?.contains(x, y) == true) addPageAtEnd()
             }
             2 -> when (deps.settings.tap2.value) {
@@ -535,8 +558,11 @@ class NotebookPane(
             endFinger()
         }
         if (eraser) {
-            tempEraser = true
-            deps.toolController.temporaryEraser(true)
+            when (deps.settings.penButton.value) {
+                PenButton.ERASER -> { tempEraser = true; deps.toolController.temporaryTool(ToolKind.ERASER) }
+                PenButton.LASSO -> { tempEraser = true; deps.toolController.temporaryTool(ToolKind.LASSO) }
+                PenButton.NONE -> Unit
+            }
         }
         val vp = viewport
         val hit = PaneCoords.toPage(vp, layout, x, y)
@@ -550,7 +576,15 @@ class NotebookPane(
         strokeFrame = layout.frameOf(hit.page)
         strokePage = hit.page
         sessionViaDriver = viaDriver
-        val preset = deps.toolController.state.value.preset()
+        var preset = deps.toolController.state.value.preset()
+        // A pen-down on the selection's box or a handle drags the selection whatever the tool is; elsewhere it ends the selection.
+        if (selection.selection.value != null) {
+            if (selectionUi.hits(hit.page, x, y)) {
+                preset = ToolPreset(ToolKind.LASSO, lassoMode = deps.toolController.baseState().lassoMode)
+            } else if (preset.kind != ToolKind.LASSO) {
+                selection.clear()
+            }
+        }
         val holdMs = deps.settings.holdShapeMs.value.takeIf { it > 0 }?.toLong()
         val ctx = ToolContext(
             editor = editor,
@@ -558,12 +592,18 @@ class NotebookPane(
             pageBounds = info.height?.let { Rect(0f, 0f, info.width, it) },
             pxPerPt = vp.scale,
             preview = live,
-            settings = ToolSettings(holdMs, (preset.eraserRadiusDp ?: 0f) * density),
+            settings = ToolSettings(
+                holdMs, (preset.eraserRadiusDp ?: 0f) * density,
+                handleHitPx = selectionUi.layer.hitHalfPx(), rotateOffsetPx = SelectionLayer.ROTATE_DP * density,
+            ),
             clock = deps.clock,
             background = info.background,
+            selection = selection,
         )
         activeCtx = ctx
         live.page = hit.page
+        live.unclippedGhost = preset.kind == ToolKind.LASSO
+        selStartDirty = selectionDirty()
         live.driverDraws = viaDriver && preset.kind.let { it == ToolKind.PEN || it == ToolKind.HIGHLIGHTER }
         val s = factory.create(preset, ctx)
         session = s
@@ -636,6 +676,12 @@ class NotebookPane(
         restoreEraser()
         val page = strokePage
         val rect = strokeBounds
+        if (rect != null) {
+            // A moved / scaled selection leaves a ghost at its old and new place: repaint both.
+            selStartDirty?.let { rect.union(it) }
+            selectionDirty()?.let { rect.union(it) }
+        }
+        selStartDirty = null
         if (page != null && rect != null) afterCommit(page, rect, viaDriver)
         leaveAdjust()
     }
@@ -655,7 +701,7 @@ class NotebookPane(
     private fun restoreEraser() {
         if (tempEraser) {
             tempEraser = false
-            deps.toolController.temporaryEraser(false)
+            deps.toolController.temporaryTool(null)
         }
     }
 
@@ -747,7 +793,54 @@ class NotebookPane(
     // Tool / driver configuration
     // ---------------------------------------------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------------------------------------------
+    // Selection
+    // ---------------------------------------------------------------------------------------------------------
+
+    private var selStartDirty: android.graphics.Rect? = null
+
+    override fun clearSelection() = selection.clear()
+
+    /** Screen rectangle (view-local px) to repaint for the current selection, or null. */
+    private fun selectionDirty(): android.graphics.Rect? =
+        selection.selection.value?.let { selectionUi.layer.dirtyRect(it, viewport, layout) }
+
+    private fun onSelectionChanged() {
+        if (released) return
+        val has = selection.selection.value != null
+        val dirty = selectionUi.update()
+        if (has != hadSelection) {
+            hadSelection = has
+            updateHandMode()
+        }
+        if (dirty != null && session == null) {
+            // Nothing is drawing: show the box (or its absence) with one partial refresh.
+            dirty.intersect(0, 0, canvasView.width, canvasView.height)
+            if (!dirty.isEmpty) {
+                val pending = refreshRect
+                if (pending == null) refreshRect = android.graphics.Rect(dirty) else pending.union(dirty)
+                if (refreshFirstAt == 0L) refreshFirstAt = SystemClock.uptimeMillis()
+                armRefresh(0L)
+            }
+        }
+    }
+
+    /** Finger long-press on empty paper opens the Paste menu at that point. */
+    private fun onLongPress(g: FingerGesture.LongPress) {
+        if (session != null || handMode) return
+        val x = localX(g.x)
+        val y = localY(g.y)
+        val hit = PaneCoords.toPage(viewport, layout, x, y) ?: return
+        if (editor.content(hit.page) == null || selectionUi.hits(hit.page, x, y)) return
+        selectionUi.showPasteMenu(hit.page, hit.x, hit.y, g.x.toInt(), g.y.toInt())
+    }
+
     override fun onToolChanged(tool: ToolPreset) {
+        val kind = deps.toolController.baseState().active
+        if (kind != baseKind) {
+            baseKind = kind
+            selection.clear()
+        }
         updateHandMode()
         updateDriverInk()
     }
@@ -763,6 +856,8 @@ class NotebookPane(
 
     /** The shape tool draws a software ghost, so the driver stays off for it (like the Hand tool). */
     private val shapeMode: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
+    /** The lasso draws a dashed software path and a ghost, so the driver stays off for it as well. */
+    private val lassoMode: Boolean get() = deps.toolController.baseState().active == ToolKind.LASSO
     private var handing = false
     private var handX = 0f
     private var handY = 0f
@@ -770,7 +865,7 @@ class NotebookPane(
     private fun updateHandMode() {
         val on = handMode
         if (!on && handing) endHand()
-        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || adjustSoftware)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || lassoMode || adjustSoftware || selection.selection.value != null)
     }
 
     private fun panWithPen(ev: PenEvent) {
@@ -936,6 +1031,7 @@ class NotebookPane(
     override fun release() {
         if (released) return
         cancelPen()
+        selectionUi.release()
         released = true
         main.removeCallbacksAndMessages(null)
         deps.epd.releaseFast(FAST_OWNER)

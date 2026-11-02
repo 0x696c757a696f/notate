@@ -116,6 +116,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
             onHome = { finish() }, onClose = { finish() },
         )
         chrome.popups.onRectChanged = { pane?.refreshExcludes() }
+        chrome.popups.onBarChanged = { pane?.refreshExcludes() }
         chrome.onFocusChanged = { pane?.refreshExcludes() }
         hud = DebugHud(this) { hudLines() }
         setContentView(chrome)
@@ -192,6 +193,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     // --- PaneHost -------------------------------------------------------------------------------------------
 
+    override val popups: app.notate.editor.popup.PopupHost get() = chrome.popups
+
     override fun excludeRects(): List<android.graphics.Rect> = pane?.let { chrome.excludeRectsFor(it.view) } ?: emptyList()
 
     override fun onFocusModeRequested() = chrome.setFocusMode(!chrome.focusMode)
@@ -255,6 +258,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val actions = pageActions ?: return
         if (gridOverlay != null) return
         chrome.popups.dismiss()
+        pane?.clearSelection()
         val overlay = PageGridOverlay(
             this, h.editor, thumbnails(h), actions, chrome.popups,
             object : PageGridHost {
@@ -327,6 +331,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 return true
             }
             if (popups.isShowing && popups.contains(ev)) route = Route.VIEWS
+            else if (popups.barContains(ev)) route = Route.VIEWS
             else if (hitsPageUi(ev)) route = Route.VIEWS
         }
         when (route) {

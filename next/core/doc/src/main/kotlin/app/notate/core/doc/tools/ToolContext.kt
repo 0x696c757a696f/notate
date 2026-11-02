@@ -1,13 +1,21 @@
 package app.notate.core.doc.tools
 
 import app.notate.core.doc.editor.DocumentEditor
+import app.notate.core.doc.select.SelectionController
 import app.notate.core.geometry.Rect
 import app.notate.core.model.Background
 import app.notate.core.model.Clock
 import app.notate.core.model.PageId
 
 /** Per-gesture tool configuration. [holdShapeMs] null = hold-to-shape off. */
-data class ToolSettings(val holdShapeMs: Long?, val eraserRadiusPx: Float)
+data class ToolSettings(
+    val holdShapeMs: Long?,
+    val eraserRadiusPx: Float,
+    /** Half-size of a selection handle's touch target in screen px (visual 6 dp + 8 dp slop). */
+    val handleHitPx: Float = 20f,
+    /** Distance of the rotation handle above the selection box in screen px (24 dp). */
+    val rotateOffsetPx: Float = 34f,
+)
 
 /** Ruler / protractor position (filled in by R2-6). */
 interface GuideState {
@@ -27,6 +35,8 @@ class ToolContext(
     val guides: GuideState = GuideState.NONE,
     /** Background of [page]; shape tools read the grid spacing and snap to it. */
     val background: Background? = null,
+    /** Selection owner of the pane; lasso select needs it, other tools ignore it. */
+    val selection: SelectionController? = null,
 ) {
     /** True while a second finger holds the constraint (square, circle, 15° angles); set by the pane. */
     @Volatile var constraint: Boolean = false
