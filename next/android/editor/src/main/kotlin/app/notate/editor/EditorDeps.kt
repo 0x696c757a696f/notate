@@ -26,6 +26,8 @@ class EditorDeps(
     val logger: Logger,
     /** Called on the main thread when an editor screen closes a document. */
     val onDocumentClosed: (DocId) -> Unit = {},
+    /** Directory for a document's cached page thumbnails; null disables the disk cache. */
+    val thumbsDir: ((DocId) -> java.io.File)? = null,
 )
 
 /** Holder filled by the application at startup. */

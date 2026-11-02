@@ -97,6 +97,7 @@ class AppGraph(
             appScope = appScope,
             logger = logger,
             onDocumentClosed = { id -> appScope.launch { documents.touch(id) } },
+            thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
         )
     }
 }
