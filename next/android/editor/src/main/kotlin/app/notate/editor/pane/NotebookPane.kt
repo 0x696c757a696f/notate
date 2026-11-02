@@ -200,6 +200,15 @@ class NotebookPane(
     // --- pen state ---
     private var session: ToolSession? = null
     private var sessionViaDriver = false
+    private var rawBegins = 0
+    private var penNote = "-"
+
+    /** Last reason a pen-down did or did not start a stroke (debug HUD + log), so "nothing happens" can be diagnosed. */
+    private fun note(text: String) {
+        penNote = text
+        deps.logger.i(TAG, text)
+    }
+    private var touchDowns = 0
     private var strokeViewport: Viewport = viewport
     private var strokeFrame: Rect = Rect.EMPTY
     private var strokePage: PageId? = null
@@ -368,7 +377,16 @@ class NotebookPane(
             host.arbiter.attach(this)
             host.claimPen(this)
             updateHandMode()
+            // The first config is sent while the window is still laying out; the Onyx service drops it. Re-sending
+            // once the view is drawn is what switching "low-latency pen" off and on does by hand.
+            for (delay in REAPPLY_DRIVER_MS) main.postDelayed({ reapplyDriver() }, delay)
         }
+    }
+
+    private fun reapplyDriver() {
+        if (released || viewport.widthPx == 0) return
+        driver.setLimits(android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx), host.excludeRects())
+        updateDriverInk()
     }
 
     private fun setViewport(vp: Viewport, delayTiles: Boolean) {
@@ -572,13 +590,19 @@ class NotebookPane(
             return
         }
         if (handMode) {
+            if (ev is PenEvent.Down) note("hand tool: pen pans")
             panWithPen(ev)
             return
         }
         // The driver reports its own points; touch events only feed palm rejection. Two exceptions: a stroke that began from touch
         // events goes on that way, and a pen that came down on an unfocused pane has opened the driver just now, too late for this stroke.
         val touchStroke = session != null && !sessionViaDriver
-        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
+        // A driver that has never delivered a stroke is not trusted: until it does, touch events ink (nothing may swallow a pen).
+        if (ev is PenEvent.Down) {
+            touchDowns++
+            if (touchDowns <= LOG_FIRST) deps.logger.i(TAG, "pen down (touch) driverActive=$driverActive rawBegins=$rawBegins")
+        }
+        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive && rawBegins > 0, touchStroke, ev)) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -595,6 +619,8 @@ class NotebookPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
+        rawBegins++
+        if (rawBegins <= LOG_FIRST) deps.logger.i(TAG, "pen down (driver) eraser=$eraser")
         if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
@@ -629,7 +655,10 @@ class NotebookPane(
     private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean, lasso: Boolean = false) {
         if (session != null) cancelPen()
         if (objects.editingText) objects.finishTextEdit()      // the pen came down outside the text editor: that ends the edit
-        if (inkSuspended) return
+        if (inkSuspended) {
+            note("ignored: ink suspended by ${host.arbiter.let { a -> BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) } }}")
+            return
+        }
         if (fingerBusy && !viaDriver) {
             main.removeCallbacks(endFingerRunnable)
             endFinger()
@@ -654,9 +683,11 @@ class NotebookPane(
         val content = hit?.let { editor.content(it.page) }
         val info = hit?.let { h -> editor.pages.value.firstOrNull { it.id == h.page } }
         if (hit == null || content == null || info == null) {
+            note("ignored: page=${hit?.page?.value} loaded=${content != null} xy=${x.toInt()},${y.toInt()} view=${vp.widthPx}x${vp.heightPx}")
             restoreEraser()
             return
         }
+        note("stroke started (${if (viaDriver) "driver" else "touch"})")
         strokeViewport = vp
         strokeFrame = layout.frameOf(hit.page)
         strokePage = hit.page
@@ -1361,6 +1392,8 @@ class NotebookPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "level=${Viewport.levelFor(viewport.scale)} zoom=${"%.2f".format(viewport.zoom)}",
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
+            "pen strokes: driver=$rawBegins touch=$touchDowns",
+            "last pen: $penNote",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",
         )
     }
@@ -1407,8 +1440,10 @@ class NotebookPane(
 
     private companion object {
         const val TAG = "NotebookPane"
+        const val LOG_FIRST = 5
         const val FIT_MARGIN_DP = 12f
         const val ZOOM_RENDER_DELAY_MS = 150L
+        val REAPPLY_DRIVER_MS = longArrayOf(400L, 1500L)
         const val FINGER_SETTLE_MS = 700L
         const val POLL_MS = 50L
         const val HOVER_QUIET_MS = 400L

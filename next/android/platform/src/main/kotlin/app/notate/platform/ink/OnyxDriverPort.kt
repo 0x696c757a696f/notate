@@ -139,13 +139,13 @@ class OnyxDriverPort(
     override fun open() {
         if (helper != null) return
         try {
-            // Mode 2 (SFTouchRender), as the legacy note canvas: better ink quality and panning support.
-            val h = TouchHelper.create(view, true, callback)
+            // The editor surface is a plain View, so use the plain form that the legacy web overlay (also a plain View)
+            // has always used. The SurfaceView-only "SFTouchRender" mode (create(view, true, ...)) delivered no points here.
+            val h = TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
             h.setLimitRect(currentLimit(), exclude)
             h.openRawDrawing()
-            h.setSingleRegionMode()
             EpdController.enterScribbleMode(view)
         } catch (t: Throwable) {
             Log.e(TAG, "open failed", t)
@@ -206,7 +206,6 @@ class OnyxDriverPort(
             h.closeRawDrawing()
             h.setLimitRect(currentLimit(), this.exclude)
             h.openRawDrawing()
-            h.setSingleRegionMode()
             if (wasActive) {
                 h.setRawDrawingEnabled(true)
                 applyInk()

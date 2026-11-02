@@ -21,7 +21,9 @@ object DeviceProbe {
 
     /** Reads the device once at startup; never throws. Any thread. */
     fun probe(ctx: Context): DeviceInfo {
-        val isOnyx = Build.MANUFACTURER.equals("ONYX", ignoreCase = true)
+        val isOnyx = listOf(Build.MANUFACTURER, Build.BRAND, Build.DEVICE, Build.MODEL).any {
+            it != null && (it.contains("onyx", ignoreCase = true) || it.contains("boox", ignoreCase = true))
+        }
         val hasRaw = isOnyx && runCatching { Class.forName("com.onyx.android.sdk.pen.TouchHelper"); true }.getOrDefault(false)
         val maxPressure = if (isOnyx) {
             runCatching { EpdController.getMaxTouchPressure() }.getOrNull()?.takeIf { it > 0f } ?: DEFAULT_MAX_PRESSURE
