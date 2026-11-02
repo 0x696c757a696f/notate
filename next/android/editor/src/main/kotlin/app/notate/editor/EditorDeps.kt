@@ -9,6 +9,7 @@ import app.notate.core.model.DocKind
 import app.notate.editor.pane.DocumentPane
 import app.notate.editor.pane.PaneHost
 import app.notate.core.doc.registry.DocumentRegistry
+import app.notate.core.doc.select.InkClipboard
 import app.notate.core.doc.settings.Settings
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.input.EpdScheduler
@@ -41,6 +42,8 @@ class EditorDeps(
     /** Opens the Settings screen (a separate activity of the app); Back returns to the editor. */
     val openSettings: (Context) -> Unit = {},
     val thumbsDir: ((DocId) -> java.io.File)? = null,
+    /** Ink clipboard shared by every pane and document of the process (one [EditorDeps] per process). */
+    val clipboard: InkClipboard = InkClipboard(),
     /** Saves and restores the open tabs; null keeps them in memory only. Resolved off the main thread (it opens `library.db`). */
     val workspaceStore: (() -> WorkspaceStore)? = null,
     /** The library index, for the document picker behind "+"; null disables the picker. */
