@@ -2,12 +2,16 @@ package app.notate
 
 import android.app.Application
 import android.content.pm.ApplicationInfo
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import app.notate.platform.device.DeviceProbe
 import app.notate.platform.device.OnyxRuntime
 import app.notate.platform.fs.AppPaths
 import app.notate.platform.log.AndroidLogger
 import app.notate.platform.log.CrashHandler
 import app.notate.platform.thread.ThreadChecks
+import kotlinx.coroutines.launch
 
 /** Process entry point. Builds [AppGraph] once; main thread only. */
 class NotateApp : Application() {
@@ -21,6 +25,12 @@ class NotateApp : Application() {
         if (device.isOnyx) OnyxRuntime.init(this)
         logger.i("NotateApp", "Started on ${device.model}; isOnyx=${device.isOnyx} hasRawDrawing=${device.hasRawDrawing}")
         graph = AppGraph(this, paths, logger, device)
+        // Everything the app has queued reaches the disk when the last screen goes away.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) graph.appScope.launch { graph.registry.flushAll() }
+            },
+        )
     }
 
     companion object {

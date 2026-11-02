@@ -5,6 +5,12 @@ import app.notate.core.doc.registry.DocumentOpener
 import app.notate.core.doc.registry.DocumentRegistry
 import app.notate.core.doc.registry.Opened
 import app.notate.core.doc.settings.Settings
+import app.notate.core.doc.tools.ToolController
+import app.notate.core.input.EpdScheduler
+import app.notate.editor.EditorDeps
+import app.notate.editor.EditorEnv
+import app.notate.platform.epd.NoEpdPort
+import app.notate.platform.epd.OnyxEpdPort
 import app.notate.core.model.DocId
 import app.notate.core.model.SystemClock
 import app.notate.core.store.DocStoreFactory
@@ -20,6 +26,7 @@ import app.notate.platform.thread.DispatcherSet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** Hand-written dependency graph (no DI framework). Built once in [NotateApp.onCreate]; main thread only. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -34,6 +41,11 @@ class AppGraph(
     val settings = Settings(PrefsKeyValueStore(app))
     val sqlDrivers = AndroidSqlDriverFactory()
     private val scope = CoroutineScope(SupervisorJob() + dispatchers.io)
+
+    /** Outlives every screen; flushing and other background work run here. */
+    val appScope: CoroutineScope get() = scope
+    val toolController = ToolController(settings)
+    val epd = EpdScheduler<android.view.View>(if (device.isOnyx) OnyxEpdPort else NoEpdPort)
 
     /** One single-threaded IO lane per document, as the stores require. */
     val docStoreFactory: DocStoreFactory = SqliteDocStoreFactory(sqlDrivers, { dispatchers.io.limitedParallelism(1) }, clock)
@@ -55,4 +67,21 @@ class AppGraph(
         main = dispatchers.main,
         io = dispatchers.io,
     )
+
+    val documents = DocumentService(paths, docStoreFactory, { libraryStore }, dispatchers, clock)
+
+    init {
+        EditorEnv.deps = EditorDeps(
+            registry = registry,
+            settings = settings,
+            toolController = toolController,
+            dispatchers = dispatchers,
+            device = device,
+            epd = epd,
+            clock = clock,
+            appScope = appScope,
+            logger = logger,
+            onDocumentClosed = { id -> appScope.launch { documents.touch(id) } },
+        )
+    }
 }
