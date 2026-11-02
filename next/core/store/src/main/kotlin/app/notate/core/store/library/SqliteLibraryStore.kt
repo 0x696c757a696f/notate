@@ -98,6 +98,9 @@ class SqliteLibraryStore private constructor(
         d.copy(tagIds = tags)
     }
 
+    override suspend fun updateCover(id: DocId, coverRev: Long, pageCount: Int) =
+        write { driver.execute("UPDATE document SET cover_rev = ?, page_count = ? WHERE id = ?", coverRev, pageCount, id.value) }
+
     override suspend fun markOpened(id: DocId, at: Long) = write { driver.execute("UPDATE document SET opened = ? WHERE id = ?", at, id.value) }
 
     override suspend fun trash(ids: List<DocId>, at: Long) = write { forIds(ids) { ph, a -> driver.execute("UPDATE document SET trashed = ? WHERE id IN ($ph)", at, *a) } }

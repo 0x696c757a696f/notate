@@ -1,11 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Notate Next</string>
-    <string name="new_notebook">New notebook</string>
     <string name="create_test_notebook">Create 50-page test notebook</string>
-    <string name="create_failed">Could not create the notebook.</string>
-    <plurals name="pages">
-        <item quantity="one">%d page</item>
-        <item quantity="other">%d pages</item>
-    </plurals>
 </resources>

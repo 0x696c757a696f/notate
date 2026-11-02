@@ -15,4 +15,7 @@ class AppPaths(ctx: Context) {
 
     /** `docs/<docId>/` holding `doc.db`, `assets/` and `thumbs/`; not created here (the store creates it). */
     fun docDir(id: DocId): File = File(File(root, "docs"), id.value)
+
+    /** `docs/<docId>/thumbs/cover.webp`, the bookshelf cover. */
+    fun coverFile(id: DocId): File = File(File(docDir(id), "thumbs"), "cover.webp")
 }
