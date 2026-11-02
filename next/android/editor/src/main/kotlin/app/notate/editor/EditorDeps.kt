@@ -1,6 +1,7 @@
 package app.notate.editor
 
 import android.content.Context
+import android.content.Intent
 import android.view.View
 import app.notate.core.doc.registry.DocumentHandle
 import app.notate.core.model.DocKind
@@ -13,6 +14,8 @@ import app.notate.core.input.EpdScheduler
 import app.notate.core.model.Clock
 import app.notate.core.model.DocId
 import app.notate.core.model.log.Logger
+import app.notate.core.store.library.LibraryStore
+import app.notate.core.workspace.WorkspaceStore
 import app.notate.platform.device.DeviceInfo
 import app.notate.platform.thread.DispatcherSet
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +40,12 @@ class EditorDeps(
     /** Opens the Settings screen (a separate activity of the app); Back returns to the editor. */
     val openSettings: (Context) -> Unit = {},
     val thumbsDir: ((DocId) -> java.io.File)? = null,
+    /** Saves and restores the open tabs; null keeps them in memory only. Resolved off the main thread (it opens `library.db`). */
+    val workspaceStore: (() -> WorkspaceStore)? = null,
+    /** The library index, for the document picker behind "+"; null disables the picker. */
+    val libraryStore: (() -> LibraryStore)? = null,
+    /** An intent that brings the bookshelf to the front (the editor module cannot see `:next:app`). */
+    val libraryIntent: ((Context) -> Intent)? = null,
 )
 
 /** Creates the pane that shows a document of some kind. */

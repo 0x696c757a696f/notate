@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -20,7 +21,6 @@ import app.notate.platform.log.CrashHandler
 import app.notate.platform.log.ShareLogs
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.sp
@@ -33,6 +33,9 @@ import kotlinx.coroutines.withContext
  */
 class LibraryActivity : ComponentActivity() {
     private val graph get() = NotateApp.graph
+
+    /** Title of the tab that had the focus when the editor last ran; null when no tabs are stored. */
+    private val continueTitle = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,7 +53,9 @@ class LibraryActivity : ComponentActivity() {
                         onOpenDocument = { id -> open(vm, id) },
                         onSettings = { startActivity(SettingsActivity.intent(this@LibraryActivity)) },
                         onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
-                        extraAdd = listOf(
+                        extraAdd = listOfNotNull(
+                            continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
+                        ) + listOf(
                             getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
                             getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },
                         ) + if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),
@@ -77,6 +82,21 @@ class LibraryActivity : ComponentActivity() {
                 }
             },
         ) { Text(stringResource(R.string.crash_dialog_message), fontSize = 16.sp) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Offers to go back to the tabs the editor had open (04 §6), labelled with the tab that had the focus.
+        lifecycleScope.launch {
+            continueTitle.value = withContext(graph.dispatchers.io) {
+                try {
+                    graph.workspaceStore.load().focusedTab?.title
+                } catch (e: Exception) {
+                    graph.logger.e("LibraryActivity", "Reading the workspace failed", e)
+                    null
+                }
+            }
+        }
     }
 
     private fun open(vm: LibraryViewModel, id: DocId) {

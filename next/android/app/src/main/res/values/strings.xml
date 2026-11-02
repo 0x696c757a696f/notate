@@ -5,6 +5,7 @@
     <string name="import_unsupported">This file isn\'t a supported book or web page.</string>
     <string name="import_too_large">This book is too large (over 1 GB).</string>
     <string name="import_ok">OK</string>
+    <string name="continue_with">Continue: %s</string>
     <string name="import_book">Import EPUB or HTML</string>
     <string name="import_folder">Import HTML folder</string>
     <string name="create_test_notebook">Create 50-page test notebook</string>

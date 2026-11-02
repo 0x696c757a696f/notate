@@ -31,11 +31,10 @@ class EditorChrome(
     private val epd: EpdScheduler<View>,
     xdpi: Float,
     actions: ToolbarActions,
-    onHome: () -> Unit,
-    onClose: () -> Unit,
+    tabCallbacks: TabStripView.Callbacks,
 ) : FrameLayout(context) {
     val popups = PopupHost(this, arbiter, epd)
-    val tabs = TabStripView(context, onHome, onClose)
+    val tabs = TabStripView(context, tabCallbacks)
     val toolbar = ToolbarView(context, controller, popups, xdpi, actions)
 
     /** Where the document pane goes. */

@@ -19,6 +19,7 @@ import app.notate.core.store.DocStoreFactory
 import app.notate.core.store.doc.SqliteDocStoreFactory
 import app.notate.core.store.library.LibraryStore
 import app.notate.core.store.library.SqliteLibraryStore
+import app.notate.core.workspace.WorkspaceStore
 import app.notate.library.LibraryDeps
 import app.notate.platform.device.DeviceInfo
 import app.notate.platform.fs.AppPaths
@@ -62,6 +63,9 @@ class AppGraph(
     val libraryStore: LibraryStore by lazy {
         SqliteLibraryStore.open(sqlDrivers.open(paths.libraryDb, readOnly = false), dispatchers.io.limitedParallelism(1), clock)
     }
+
+    /** The open tabs, saved in the library index; first use must be off the main thread. */
+    val workspaceStore: WorkspaceStore by lazy { WorkspaceStore(libraryStore, logger) }
 
     /** Imports EPUB / HTML books as web documents. */
     val webImporter = WebImporter(
@@ -124,6 +128,11 @@ class AppGraph(
             paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
             openSettings = { ctx -> ctx.startActivity(SettingsActivity.intent(ctx)) },
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
+            workspaceStore = { workspaceStore },
+            libraryStore = { libraryStore },
+            libraryIntent = { ctx ->
+                android.content.Intent(ctx, LibraryActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            },
         )
     }
 }
