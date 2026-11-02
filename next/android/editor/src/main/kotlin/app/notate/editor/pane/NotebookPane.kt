@@ -87,10 +87,13 @@ class NotebookPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
     private val live = LiveInkLayer(canvasView, density) { editor.content(it) }
 
+    /** PDF background of this document (null for other kinds or when the app gave none). */
+    private val pdf = if (handle.editor.meta.value.kind == DocKind.PDF) deps.pdfBackgrounds?.create(handle::assetFile) else null
+
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
     private val scheduler = TileScheduler(
         cache = cache,
-        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache())),
+        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), pdf?.tiles),
         source = object : TileSource {
             override fun pageInfo(page: PageId): PageInfo? = editor.pages.value.firstOrNull { it.id == page }
             override fun content(page: PageId): PageContent? = editor.content(page)
@@ -770,6 +773,17 @@ class NotebookPane(
         scheduleEndFinger(PAGE_TURN_SETTLE_MS)
     }
 
+    override fun goToPage(page: PageId, yPt: Float?) {
+        if (yPt == null || layoutMode == PageLayoutMode.SINGLE) return goToPage(page)
+        if (layout.indexOf(page) < 0) layout = buildLayout()
+        if (layout.indexOf(page) < 0 || viewport.widthPx == 0 || released) return
+        addCard = false
+        beginFinger()
+        val top = layout.frameOf(page).t + yPt - GO_TO_MARGIN_DP * density / viewport.scale
+        setViewport(panned(0f, 0f, viewport.copy(scrollY = top)), delayTiles = false)
+        scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+    }
+
     override fun setLayoutMode(mode: PageLayoutMode) {
         if (mode == layoutMode || released) return
         val page = currentPage
@@ -881,6 +895,7 @@ class NotebookPane(
         scheduler.cancelAll()
         host.arbiter.detach(this)
         cache.clear()
+        pdf?.tiles?.cache?.clear()
     }
 
     private companion object {

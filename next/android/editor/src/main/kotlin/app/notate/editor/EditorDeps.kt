@@ -10,6 +10,7 @@ import app.notate.core.model.DocId
 import app.notate.core.model.log.Logger
 import app.notate.platform.device.DeviceInfo
 import app.notate.platform.thread.DispatcherSet
+import app.notate.render.tile.PdfBackgroundFactory
 import kotlinx.coroutines.CoroutineScope
 
 /** Everything the editor needs from the app's dependency graph (the editor module cannot see `:next:app`). */
@@ -28,6 +29,8 @@ class EditorDeps(
     val onDocumentClosed: (DocId) -> Unit = {},
     /** Directory for a document's cached page thumbnails; null disables the disk cache. */
     val thumbsDir: ((DocId) -> java.io.File)? = null,
+    /** Draws PDF page backgrounds (implemented by `:next:pdf`); null = PDF pages show white. */
+    val pdfBackgrounds: PdfBackgroundFactory? = null,
 )
 
 /** Holder filled by the application at startup. */

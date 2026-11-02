@@ -105,4 +105,10 @@
     <string name="template_engineering">Engineering</string>
     <string name="template_cornell">Cornell</string>
     <string name="template_isometric">Isometric</string>
+    <string name="more_outline">Outline</string>
+    <string name="outline_title">Outline</string>
+    <string name="outline_bookmarks">Bookmarks</string>
+    <string name="outline_done">Done</string>
+    <string name="outline_page">Page %d</string>
+    <string name="outline_empty">This document has no outline or bookmarks.</string>
 </resources>

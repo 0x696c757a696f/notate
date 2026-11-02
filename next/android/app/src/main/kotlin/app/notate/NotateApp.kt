@@ -5,6 +5,8 @@ import android.content.pm.ApplicationInfo
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import android.content.ComponentCallbacks2
+import app.notate.pdf.PdfSupport
 import app.notate.platform.device.DeviceProbe
 import app.notate.platform.device.OnyxRuntime
 import app.notate.platform.fs.AppPaths
@@ -18,6 +20,7 @@ class NotateApp : Application() {
     override fun onCreate() {
         super.onCreate()
         ThreadChecks.enabled = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        PdfSupport.init(this)
         val paths = AppPaths(this)
         val logger = AndroidLogger(paths.logDir)
         val device = DeviceProbe.probe(this)
@@ -31,6 +34,12 @@ class NotateApp : Application() {
                 if (event == Lifecycle.Event.ON_STOP) graph.appScope.launch { graph.registry.flushAll() }
             },
         )
+    }
+
+    /** Low memory: drop the PDF background tiles (they are re-rendered when scrolled to). */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && ::graph.isInitialized) graph.pdfBackgrounds.trimMemory()
     }
 
     companion object {
