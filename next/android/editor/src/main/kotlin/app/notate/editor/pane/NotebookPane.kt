@@ -385,7 +385,6 @@ class NotebookPane(
 
     private fun reapplyDriver() {
         if (released || viewport.widthPx == 0) return
-        driver.setLimits(android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx), host.excludeRects())
         updateDriverInk()
     }
 

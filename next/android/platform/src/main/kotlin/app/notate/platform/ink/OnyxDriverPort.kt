@@ -203,12 +203,12 @@ class OnyxDriverPort(
         this.exclude = exclude.map { Rect(it) }
         val h = helper ?: return
         try {
-            // The driver only picks up a new limit/exclude set when raw drawing restarts.
+            // The driver only picks up a new limit/exclude set when raw drawing restarts. Restart it the way the legacy
+            // arbiter does (switch off, set the rect, switch on). closeRawDrawing/openRawDrawing is avoided: it can leave
+            // the session deaf, which is what the first device test saw (driver=0 strokes).
             val wasActive = active
             if (wasActive) h.setRawDrawingEnabled(false)
-            h.closeRawDrawing()
             h.setLimitRect(currentLimit(), this.exclude)
-            h.openRawDrawing()
             if (wasActive) {
                 h.setRawDrawingEnabled(true)
                 applyInk()
