@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_pen">Pen</string>
+    <string name="tool_eraser">Eraser</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_redo">Redo</string>
+    <string name="action_back">Back</string>
+    <string name="open_failed">Could not open this note.</string>
+    <string name="save_failed">Not saved</string>
+</resources>
