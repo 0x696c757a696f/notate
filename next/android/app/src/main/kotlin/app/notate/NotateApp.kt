@@ -39,7 +39,7 @@ class NotateApp : Application() {
     /** Low memory: drop the PDF background tiles (they are re-rendered when scrolled to). */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && ::graph.isInitialized) graph.pdfBackgrounds.trimMemory()
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) runCatching { graph }.getOrNull()?.pdfBackgrounds?.trimMemory()
     }
 
     companion object {
