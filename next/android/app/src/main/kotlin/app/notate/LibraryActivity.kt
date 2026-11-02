@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,6 +25,9 @@ import kotlinx.coroutines.withContext
 class LibraryActivity : ComponentActivity() {
     private val graph get() = NotateApp.graph
 
+    /** Title of the tab that had the focus when the editor last ran; null when no tabs are stored. */
+    private val continueTitle = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lifecycleScope.launch {
@@ -38,11 +42,28 @@ class LibraryActivity : ComponentActivity() {
                         covers = covers,
                         onOpenDocument = { id -> open(vm, id) },
                         onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
-                        extraAdd = listOf(
+                        extraAdd = listOfNotNull(
+                            continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
+                        ) + listOf(
                             getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
                             getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },
                         ) + if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),
                     )
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Offers to go back to the tabs the editor had open (04 §6), labelled with the tab that had the focus.
+        lifecycleScope.launch {
+            continueTitle.value = withContext(graph.dispatchers.io) {
+                try {
+                    graph.workspaceStore.load().focusedTab?.title
+                } catch (e: Exception) {
+                    graph.logger.e("LibraryActivity", "Reading the workspace failed", e)
+                    null
                 }
             }
         }
