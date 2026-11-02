@@ -55,6 +55,12 @@ interface PaneTarget {
 
     val penMode: InputPenMode
 
+    /**
+     * False for panes whose view handles fingers itself (a web page scrolls and zooms on its own): the dispatcher still
+     * applies palm rejection but passes the touches on instead of turning them into gestures.
+     */
+    val consumesFingers: Boolean get() = true
+
     fun onFingerGesture(g: FingerGesture)
 
     fun onPen(ev: PenEvent)
@@ -136,7 +142,7 @@ class InputDispatcher(
             PalmRejector.Decision.ACCEPT -> Unit
         }
         if (s.action == PointerAction.DOWN) {
-            gesturePane = panes.firstOrNull { it.hitTest(s.x, s.y) }
+            gesturePane = panes.firstOrNull { it.hitTest(s.x, s.y) }?.takeIf { it.consumesFingers }
         }
         val pane = gesturePane ?: return false
         for (g in gestures.onSample(s)) {

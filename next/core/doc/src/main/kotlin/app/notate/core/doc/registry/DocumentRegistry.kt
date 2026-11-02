@@ -29,7 +29,12 @@ class DocumentHandle internal constructor(
     val editor: DocumentEditor,
     val save: SaveQueue,
     internal val store: DocStore,
-)
+) {
+    /** The document's directory on disk (web documents keep their files in `assets/web`). */
+    val dir: java.io.File get() = store.dir
+
+    suspend fun readOutline(): List<app.notate.core.store.OutlineEntry> = store.readOutline()
+}
 
 class FlushFailure(val id: DocId, val error: Throwable)
 

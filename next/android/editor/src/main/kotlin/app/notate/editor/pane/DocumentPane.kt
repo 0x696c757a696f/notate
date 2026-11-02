@@ -25,6 +25,15 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Pages button: shows the page grid (R2-3; nothing until then). */
     fun showPageGrid() {}
 
+    /** Called by the window when the save queue went idle after a change (debug timings). */
+    fun onSaveIdle(nowUptime: Long) {}
+
+    /** Lines for the debug HUD. */
+    fun debugLines(): List<String> = emptyList()
+
+    /** Extra rows of the More menu that only this kind of pane has. */
+    fun moreEntries(): List<app.notate.editor.popup.MenuEntry> = emptyList()
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
 }
@@ -38,6 +47,12 @@ interface PaneHost {
 
     /** The e-ink driver reported a stroke start/end; feeds palm rejection. [timeMs] is `SystemClock.uptimeMillis()`. */
     fun onDriverStroke(begin: Boolean, timeMs: Long)
+
+    /** Shows [content] as the window's popup near [anchor] (the pen is kept off the page while it is up); null if unsupported. */
+    fun showPopup(anchor: View?, content: View, placement: app.notate.editor.popup.Placement = app.notate.editor.popup.Placement.BELOW_ANCHOR): app.notate.editor.popup.PopupHandle? = null
+
+    /** Closes the window's popup, if any. */
+    fun dismissPopup() {}
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
