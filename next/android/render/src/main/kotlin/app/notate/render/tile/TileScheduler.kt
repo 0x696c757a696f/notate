@@ -113,7 +113,7 @@ class TileScheduler(
         return dx * dx + dy * dy
     }
 
-    private fun needsRender(k: TileKey) = !cache.isFresh(k) && k !in failed && k !in running
+    private fun needsRender(k: TileKey) = !cache.isFresh(k) && k !in failed && !running.containsKey(k)
 
     private fun pump() {
         if (running.size >= maxInFlight) return
