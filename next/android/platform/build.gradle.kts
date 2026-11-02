@@ -12,6 +12,7 @@ dependencies {
     api("app.notate.core:store")
     api("app.notate.core:doc")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("androidx.core:core:1.16.0")   // FileProvider for sharing logs and crash reports
 
     // Onyx SDK: this module is the only one allowed to depend on it.
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.4")

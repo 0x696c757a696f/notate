@@ -76,6 +76,7 @@
     <string name="picker_empty">No documents</string>
     <string name="picker_open_failed">Could not open this document.</string>
     <string name="more_focus_mode">Focus mode</string>
+    <string name="more_settings">Settings</string>
     <string name="more_refresh_screen">Refresh screen</string>
     <string name="exit_focus_mode">Show toolbar</string>
 

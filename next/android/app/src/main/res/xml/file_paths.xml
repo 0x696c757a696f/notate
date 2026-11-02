@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="logs" path="notate/logs/" />
+    <files-path name="crash" path="notate/crash/" />
+    <files-path name="exports" path="notate/exports/" />
+</paths>

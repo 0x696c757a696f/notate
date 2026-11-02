@@ -37,6 +37,8 @@ class EditorDeps(
     /** Builds the pane for a document kind other than notebooks (the editor module cannot see `:next:web`). */
     val paneFactories: Map<DocKind, PaneFactory> = emptyMap(),
     /** Directory for a document's cached page thumbnails; null disables the disk cache. */
+    /** Opens the Settings screen (a separate activity of the app); Back returns to the editor. */
+    val openSettings: (Context) -> Unit = {},
     val thumbsDir: ((DocId) -> java.io.File)? = null,
     /** Saves and restores the open tabs; null keeps them in memory only. Resolved off the main thread (it opens `library.db`). */
     val workspaceStore: (() -> WorkspaceStore)? = null,
