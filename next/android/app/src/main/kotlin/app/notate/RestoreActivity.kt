@@ -111,7 +111,7 @@ class RestoreActivity : ComponentActivity() {
 
     @Composable
     private fun ColumnScope.Choose(c: Phase.Choose) {
-        val dateFormat = remember { android.text.format.DateFormat.getMediumDateFormat(this) }
+        val dateFormat = remember { android.text.format.DateFormat.getMediumDateFormat(this@RestoreActivity) }
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
             items(c.items, key = { it.info.docId + it.file.uri }) { item ->
                 val on = item.info.docId !in unchecked
