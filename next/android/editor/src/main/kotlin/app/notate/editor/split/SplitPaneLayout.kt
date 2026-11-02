@@ -86,6 +86,8 @@ class SplitPaneLayout(context: Context, private val listener: Listener) : ViewGr
         return x >= loc[0] && x < loc[0] + divider.width && y >= loc[1] && y < loc[1] + divider.height
     }
 
+    private fun exactly(px: Int) = MeasureSpec.makeMeasureSpec(px.coerceAtLeast(0), MeasureSpec.EXACTLY)
+
     /** Size in px of the first pane along the split axis for a total of [total] px. */
     internal fun firstSize(total: Int): Int = ((total - dividerThickness) * ratio).toInt()
 
