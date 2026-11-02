@@ -32,6 +32,9 @@ import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.thumb.ThumbnailRenderer
 import app.notate.export.legacy.LegacyImporter
+import app.notate.export.pkg.BackupEngine
+import app.notate.export.pkg.PackageExporter
+import app.notate.export.pkg.PackageImporter
 import app.notate.export.legacy.LegacyLocalMigrator
 import app.notate.web.WebImporter
 import kotlinx.coroutines.CoroutineScope
@@ -106,6 +109,24 @@ class AppGraph(
         dispatchers, scope, logger,
     )
 
+    /** Writes documents as `.notate` packages (Export…, backups). */
+    val packageExporter = PackageExporter(docStoreFactory, { libraryStore }, paths::docDir, { registry.flushAll() }, dispatchers.io, clock::now)
+
+    /** Reads `.notate` packages (Import Notate file, restore). */
+    val packageImporter = PackageImporter(
+        docs = docStoreFactory, library = { libraryStore }, docDir = paths::docDir,
+        stagingRoot = java.io.File(paths.cacheDir, "package-import"), drivers = sqlDrivers, clock = clock, io = dispatchers.io,
+        exporter = packageExporter, isOpen = registry::isOpen, logger = logger, onImported = { id -> covers.generateNow(id) },
+    )
+
+    val backupEngine = BackupEngine(
+        app.contentResolver, packageExporter, packageImporter, { libraryStore }, sqlDrivers,
+        java.io.File(paths.cacheDir, "backup"), clock, dispatchers.io, logger,
+    )
+
+    /** Settings → Backup: folder, schedule and status. */
+    val backup = BackupController(app, backupEngine, settings, { libraryStore }, scope, clock, logger)
+
     /** Copies old Notate notes into the library (Settings → Import from old Notate…, and the in-place migration). */
     val legacyImporter = LegacyImporter(
         docs = docStoreFactory,
@@ -147,6 +168,7 @@ class AppGraph(
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
             workspaceStore = { workspaceStore },
             libraryStore = { libraryStore },
+            onOpenFailed = OpenFailedDialog::show,
             libraryIntent = { ctx ->
                 android.content.Intent(ctx, LibraryActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             },

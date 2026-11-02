@@ -14,6 +14,7 @@ import app.notate.platform.thread.ThreadChecks
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
@@ -35,6 +36,10 @@ class NotateApp : Application() {
                 if (event == Lifecycle.Event.ON_STOP) graph.appScope.launch { graph.registry.flushAll() }
             },
         )
+        graph.appScope.launch {
+            combine(graph.settings.backupFreq, graph.settings.backupUri) { f, u -> f to (u != null) }
+                .collect { (freq, hasFolder) -> BackupWorker.schedule(this@NotateApp, freq, hasFolder) }
+        }
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             TrashPurgeWorker.UNIQUE_NAME, ExistingPeriodicWorkPolicy.KEEP, PeriodicWorkRequestBuilder<TrashPurgeWorker>(1, TimeUnit.DAYS).build(),
         )
