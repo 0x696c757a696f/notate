@@ -141,7 +141,7 @@ class OnyxDriverPort(
         try {
             // The editor surface is a plain View, so use the plain form that the legacy web overlay (also a plain View)
             // has always used. The SurfaceView-only "SFTouchRender" mode (create(view, true, ...)) delivered no points here.
-            val h = TouchHelper.create(view, callback)
+            val h = if (sfRender) TouchHelper.create(view, true, callback) else TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
             h.setLimitRect(currentLimit(), exclude)
@@ -170,6 +170,20 @@ class OnyxDriverPort(
         synchronized(lock) { queue.clear() }
     }
 
+    /** Which TouchHelper form the session uses; [reopen] alternates it so a deaf session tries the other one. */
+    var sfRender = false
+        private set
+
+    override fun reopen() {
+        if (helper == null) return
+        val wasActive = active
+        sfRender = !sfRender
+        Log.i(TAG, "reopen: sfRender=$sfRender")
+        close()
+        open()
+        if (wasActive) setActive(true)
+    }
+
     override fun setActive(on: Boolean) {
         val h = helper ?: return
         active = on
@@ -177,6 +191,9 @@ class OnyxDriverPort(
             if (on) {
                 h.setRawDrawingEnabled(true)
                 h.setRawDrawingRenderEnabled(ink != null && !erasing)
+                // Legacy WebDriverPort does this on every switch-on: another pane may have left the pen out of scribble
+                // mode, and the call made in open() can come before the view is attached.
+                runCatching { EpdController.enterScribbleMode(view) }
                 EpdController.setScreenHandWritingPenState(view, EpdPenManager.PEN_DRAWING)
                 applyInk()
             } else {
@@ -200,12 +217,12 @@ class OnyxDriverPort(
         this.exclude = exclude.map { Rect(it) }
         val h = helper ?: return
         try {
-            // The driver only picks up a new limit/exclude set when raw drawing restarts.
+            // The driver only picks up a new limit/exclude set when raw drawing restarts. Restart it the way the legacy
+            // arbiter does (switch off, set the rect, switch on). closeRawDrawing/openRawDrawing is avoided: it can leave
+            // the session deaf, which is what the first device test saw (driver=0 strokes).
             val wasActive = active
             if (wasActive) h.setRawDrawingEnabled(false)
-            h.closeRawDrawing()
             h.setLimitRect(currentLimit(), this.exclude)
-            h.openRawDrawing()
             if (wasActive) {
                 h.setRawDrawingEnabled(true)
                 applyInk()

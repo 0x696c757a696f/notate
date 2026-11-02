@@ -201,6 +201,7 @@ class NotebookPane(
     private var session: ToolSession? = null
     private var sessionViaDriver = false
     private var rawBegins = 0
+    private var healTries = 0
     private var penNote = "-"
 
     /** Last reason a pen-down did or did not start a stroke (debug HUD + log), so "nothing happens" can be diagnosed. */
@@ -383,9 +384,23 @@ class NotebookPane(
         }
     }
 
+    /**
+     * A touch stroke finished while the driver has never delivered one: its session is deaf (device test: driver=0).
+     * Rebuild it, as the manual settings toggle does; the stroke itself was already inked from touch events.
+     */
+    private fun healDeafDriver() {
+        if (driver === NoDriverPort || rawBegins > 0 || sessionViaDriver || healTries >= MAX_HEAL_TRIES) return
+        healTries++
+        note("driver deaf: reopening ($healTries, sf=${(driver as? app.notate.platform.ink.OnyxDriverPort)?.sfRender?.not()})")
+        main.post {
+            if (released) return@post
+            driver.reopen()
+            reapplyDriver()
+        }
+    }
+
     private fun reapplyDriver() {
         if (released || viewport.widthPx == 0) return
-        driver.setLimits(android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx), host.excludeRects())
         updateDriverInk()
     }
 
@@ -786,6 +801,7 @@ class NotebookPane(
     private fun endPen(x: Float, y: Float, tMs: Long, pressure: Float) {
         val s = session ?: return
         session = null
+        healDeafDriver()
         main.removeCallbacks(pollRunnable)
         growBounds(x, y)
         val pt = strokePoint(x, y)
@@ -1443,6 +1459,7 @@ class NotebookPane(
         const val LOG_FIRST = 5
         const val FIT_MARGIN_DP = 12f
         const val ZOOM_RENDER_DELAY_MS = 150L
+        const val MAX_HEAL_TRIES = 4
         val REAPPLY_DRIVER_MS = longArrayOf(400L, 1500L)
         const val FINGER_SETTLE_MS = 700L
         const val POLL_MS = 50L
