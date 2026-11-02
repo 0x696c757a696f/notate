@@ -3,10 +3,13 @@ package app.notate.core.doc.tools
 import app.notate.core.doc.editor.DocumentEditor
 import app.notate.core.doc.select.SelectionController
 import app.notate.core.geometry.Rect
+import app.notate.core.ink.guide.ProtractorState
+import app.notate.core.ink.guide.RulerState
 import app.notate.core.model.Background
 import app.notate.core.model.Clock
 import app.notate.core.model.ItemId
 import app.notate.core.model.PageId
+import app.notate.core.model.Units
 
 /** Per-gesture tool configuration. [holdShapeMs] null = hold-to-shape off. */
 data class ToolSettings(
@@ -18,8 +21,17 @@ data class ToolSettings(
     val rotateOffsetPx: Float = 34f,
 )
 
-/** Ruler / protractor position (filled in by R2-6). */
+/** Ruler / protractor on the page of the gesture (page coordinates), as far as the pane shows one. Main thread only. */
 interface GuideState {
+    val ruler: RulerState? get() = null
+    val protractor: ProtractorState? get() = null
+
+    /** How far from a guide edge a stroke may start and still follow it (6 mm on screen at the current zoom). */
+    val snapTolPt: Float get() = Units.mm(6f)
+
+    /** A stroke was drawn along a protractor ray at [absAngleDeg]; the pane keeps the last two to show the angle between them. */
+    fun onRay(absAngleDeg: Float) {}
+
     companion object { val NONE: GuideState = object : GuideState {} }
 }
 

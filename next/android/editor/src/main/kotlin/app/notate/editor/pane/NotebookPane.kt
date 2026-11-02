@@ -52,6 +52,7 @@ import app.notate.core.model.ToolPreset
 import app.notate.core.model.ViewState
 import app.notate.editor.EditorDeps
 import app.notate.editor.R
+import app.notate.editor.guide.GuideController
 import app.notate.editor.pages.PageActions
 import app.notate.editor.select.SelectionLayer
 import app.notate.editor.select.SelectionUi
@@ -152,6 +153,20 @@ class NotebookPane(
         currentPage = { currentPage }, goToPage = { goToPage(it) },
         refresh = { deps.epd.refresh(canvasView, EpdMode.GU, null, EpdTiming.AFTER_DRAW) },
     )
+    private val guides = GuideController(
+        density, deps.device.xdpi,
+        viewport = { viewport }, layout = { layout }, currentPage = { currentPage },
+        invalidate = { canvasView.invalidate() },
+        onActiveChanged = { updateHandMode() },
+        onDrag = { start -> if (start) beginFinger() else scheduleEndFinger() },
+    )
+    override val guideKind: app.notate.core.ink.guide.GuideKind? get() = guides.kind
+
+    override fun setGuide(kind: app.notate.core.ink.guide.GuideKind?) {
+        if (kind != null && Capability.RULER !in capabilities) return
+        guides.show(kind)
+    }
+
     private var addCard = false
     private var pageTurns = 0
     private var fullRefreshAfterTurn = false
@@ -227,7 +242,7 @@ class NotebookPane(
         canvasView.live = live
         canvasView.zoom = zoomView
         live.projectionProvider = { zoomView.projection() }
-        canvasView.overlay = { selectionUi.draw(it) }
+        canvasView.overlay = { selectionUi.draw(it); guides.draw(it) }
         live.viewportProvider = { viewport }
         live.layoutProvider = { layout }
         canvasView.sizeListener = ::onViewSized
@@ -448,6 +463,7 @@ class NotebookPane(
         if (session != null && (g is FingerGesture.Pan || g is FingerGesture.Pinch || g is FingerGesture.Tap ||
                 g is FingerGesture.PanStart || g is FingerGesture.PinchStart)
         ) return
+        if (guides.onGesture(g, ::localX, ::localY)) return
         when (g) {
             is FingerGesture.PanStart -> {
                 panDx = 0f
@@ -672,6 +688,7 @@ class NotebookPane(
             background = info.background,
             selection = selection,
             textMetrics = StaticLayoutMetrics,
+            guides = guides.stateFor(hit.page, vp),
         )
         ctx.onEditText = { id, isNew -> objects.startTextEdit(hit.page, id, isNew) }
         activeCtx = ctx
@@ -969,7 +986,7 @@ class NotebookPane(
     private fun updateHandMode() {
         val on = handMode
         if (!on && handing) endHand()
-        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || lassoMode || textMode || adjustSoftware || selection.selection.value != null)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || lassoMode || textMode || adjustSoftware || guides.active || selection.selection.value != null)
     }
 
     private fun panWithPen(ev: PenEvent) {

@@ -14,6 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.doc.tools.ToolState
+import app.notate.core.ink.guide.GuideKind
 import app.notate.core.model.Capability
 import app.notate.core.model.EraserMode
 import app.notate.core.model.LassoMode
@@ -37,7 +38,9 @@ interface ToolbarActions {
     fun onPages()
     fun onSplit(anchor: android.view.View)
     fun onMore(anchor: View)
-    fun onRulerToggled(on: Boolean) {}
+
+    /** The ruler / protractor button changed what the focused pane shows: [kind] null = hidden. */
+    fun onGuideChanged(kind: GuideKind?) {}
 
     /** The Zoom button was pressed: open ([on]) or close the zoom window of the focused pane. Returns why it cannot be opened, or null. */
     fun onZoomToggled(on: Boolean): String? = null
@@ -84,9 +87,10 @@ class ToolbarView(
     private val more: ToolButton
     private val rulerDef: Def
     private val zoomDef: Def
-    private var rulerOn = false
     private var zoomOn = false
     private var zoomReason: String? = null
+    private var guide: GuideKind? = null
+    private var lastGuide = GuideKind.RULER
     private var caps: Set<Capability> = Capability.entries.toSet()
 
     /** Whether the page in view has a grid that Snap to grid can use (plain paper greys the button). */
@@ -108,9 +112,7 @@ class ToolbarView(
                 if (toggle != null) {
                     toggle()
                 } else if (kind == null) {
-                    rulerOn = !rulerOn
-                    actions.onRulerToggled(rulerOn)
-                    last?.let { render(it, force = true) }
+                    setGuide(if (guide == null) lastGuide else null, notify = true)
                 } else if (kind == ToolKind.IMAGE) {
                     actions.onInsertImage()          // a one-shot action, not a mode
                 } else {
@@ -127,6 +129,15 @@ class ToolbarView(
         tool(ToolKind.TEXT, Capability.TEXT, R.drawable.ic_text_fields, R.string.tool_text)
         tool(ToolKind.IMAGE, Capability.IMAGE, R.drawable.ic_image, R.string.tool_image)
         rulerDef = tool(null, Capability.RULER, R.drawable.ic_straighten, R.string.tool_ruler)
+        rulerDef.button.onLongClick {
+            MoreMenu(
+                popups, rulerDef.button,
+                listOf(
+                    MenuEntry(context.getString(R.string.tool_ruler)) { setGuide(GuideKind.RULER, notify = true) },
+                    MenuEntry(context.getString(R.string.tool_protractor)) { setGuide(GuideKind.PROTRACTOR, notify = true) },
+                ),
+            ).show()
+        }
         zoomDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom) { toggleZoom() }
         tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand)
         hScroll = HorizontalScrollView(context).apply {
@@ -200,10 +211,6 @@ class ToolbarView(
         if (def != null && def.cap !in caps && Capability.PEN in caps) controller.select(ToolKind.PEN)
         if (zoomOn && Capability.ZOOM_WINDOW !in caps) zoomOn = false
         applyZoomReason()
-        if (rulerOn && Capability.RULER !in caps) {
-            rulerOn = false
-            actions.onRulerToggled(false)
-        }
         render(controller.baseState(), force = true)
     }
 
@@ -234,6 +241,19 @@ class ToolbarView(
         zoomDef.button.reason = if (zoomDef.cap !in caps) capReason else zoomReason
     }
 
+    /** Shows which guide the focused pane has up ([kind] null = none) without telling the window. */
+    fun showGuide(kind: GuideKind?) = setGuide(kind, notify = false)
+
+    private fun setGuide(kind: GuideKind?, notify: Boolean) {
+        if (kind != null) lastGuide = kind
+        val changed = guide != kind
+        guide = kind
+        rulerDef.button.setImageResource(if (lastGuide == GuideKind.PROTRACTOR) R.drawable.ic_protractor else R.drawable.ic_straighten)
+        rulerDef.button.contentDescription = context.getString(if (lastGuide == GuideKind.PROTRACTOR) R.string.tool_protractor else R.string.tool_ruler)
+        if (notify && changed) actions.onGuideChanged(kind)
+        last?.let { render(it, force = true) }
+    }
+
     /** Undo / Redo follow the focused pane's history. */
     fun setUndoRedo(canUndo: Boolean, canRedo: Boolean) {
         undo.reason = if (canUndo) null else context.getString(R.string.nothing_to_undo)
@@ -246,7 +266,7 @@ class ToolbarView(
     fun render(state: ToolState, force: Boolean = false) {
         if (!force && state == last) return
         last = state
-        for (d in tools) d.button.isSelected = if (d === zoomDef) zoomOn else if (d.kind == null) rulerOn else d.kind == state.active
+        for (d in tools) d.button.isSelected = if (d === zoomDef) zoomOn else if (d.kind == null) guide != null else d.kind == state.active
         middle.removeAllViews()
         val o = ToolbarOptions(context, middle, controller, popups, xdpi, gridAvailable)
         when (state.active) {

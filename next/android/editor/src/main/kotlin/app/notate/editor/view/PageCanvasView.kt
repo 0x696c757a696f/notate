@@ -16,7 +16,7 @@ class PageCanvasView(context: Context) : View(context) {
     var layout: DocumentLayout? = null
     var compositor: TileCompositor? = null
     var live: LiveInkLayer? = null
-    /** Draws the selection box above everything else. */
+    /** Draws the selection box and the ruler / protractor above everything else. */
     var overlay: ((Canvas) -> Unit)? = null
     var sizeListener: ((Int, Int) -> Unit)? = null
 

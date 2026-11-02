@@ -278,6 +278,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val kind = new.handle.editor.meta.value.kind
         val reason = if (kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
         chrome.toolbar.bind(new.pane.capabilities, getString(reason))
+        chrome.toolbar.showGuide(new.pane.guideKind)
         refreshZoomButton()
         arbiter.block(BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
         val h = new.handle
@@ -413,6 +414,10 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 MenuEntry(getString(if (horizontal) R.string.split_close_right else R.string.split_close_bottom)) { controller.closePane(right = true) },
             ),
         ).show()
+    }
+
+    override fun onGuideChanged(kind: app.notate.core.ink.guide.GuideKind?) {
+        controller.current?.pane?.setGuide(kind)
     }
 
     override fun onMore(anchor: View) {
