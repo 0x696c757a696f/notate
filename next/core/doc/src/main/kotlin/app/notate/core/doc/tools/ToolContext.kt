@@ -5,6 +5,7 @@ import app.notate.core.doc.select.SelectionController
 import app.notate.core.geometry.Rect
 import app.notate.core.model.Background
 import app.notate.core.model.Clock
+import app.notate.core.model.ItemId
 import app.notate.core.model.PageId
 
 /** Per-gesture tool configuration. [holdShapeMs] null = hold-to-shape off. */
@@ -37,7 +38,15 @@ class ToolContext(
     val background: Background? = null,
     /** Selection owner of the pane; lasso select needs it, other tools ignore it. */
     val selection: SelectionController? = null,
+    /** Text measurement for the TEXT tool; the Android layer passes a `StaticLayout` implementation. */
+    val textMetrics: TextLayoutMetrics = TextLayoutMetrics.Estimate,
 ) {
+    /**
+     * TEXT tool: a text box should be edited ([isNew] = it was just created empty and is not yet in the undo history).
+     * Set by the pane; called on the main thread.
+     */
+    var onEditText: (id: ItemId, isNew: Boolean) -> Unit = { _, _ -> }
+
     /** True while a second finger holds the constraint (square, circle, 15° angles); set by the pane. */
     @Volatile var constraint: Boolean = false
 }

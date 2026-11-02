@@ -8,6 +8,10 @@ android {
 dependencies {
     implementation(project(":next:render"))
     implementation(project(":next:platform"))
+    implementation(project(":next:editor"))
+    implementation("app.notate.core:geometry")
+    implementation("app.notate.core:input")
+    implementation("app.notate.core:ink")
     implementation("app.notate.core:model")
     implementation("app.notate.core:store")
     implementation("app.notate.core:doc")

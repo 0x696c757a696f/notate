@@ -269,6 +269,15 @@ class SelectionController(
         refresh()
     }
 
+    /** Locks the selected images (they become part of the page, like imported PDF pages) and ends the selection. */
+    fun lockImages() {
+        val (s, items) = current() ?: return
+        val images = items.filterIsInstance<ImageItem>().filter { !it.locked }
+        if (images.isEmpty()) return
+        editor.apply(Edit.Items(s.page, images, images.map { it.copy(locked = true) }))
+        _selection.value = null
+    }
+
     fun copy(clipboard: InkClipboard) {
         val (_, items) = current() ?: return
         clipboard.put(items, unionBounds(items), editor)

@@ -31,16 +31,40 @@ class EditorChrome(
     private val epd: EpdScheduler<View>,
     xdpi: Float,
     actions: ToolbarActions,
-    onHome: () -> Unit,
-    onClose: () -> Unit,
+    tabCallbacks: TabStripView.Callbacks,
 ) : FrameLayout(context) {
     val popups = PopupHost(this, arbiter, epd)
-    val tabs = TabStripView(context, onHome, onClose)
+    val tabs = TabStripView(context, tabCallbacks)
     val toolbar = ToolbarView(context, controller, popups, xdpi, actions)
 
     /** Where the document pane goes. */
     val paneArea = FrameLayout(context)
     private val floating: ToolButton
+    private val body = LinearLayout(context)
+
+    /** Toolbar on the left as a vertical column (landscape only); otherwise the usual top row. */
+    var toolbarLeft: Boolean = false
+        set(v) {
+            if (field == v) return
+            field = v
+            layoutToolbar()
+        }
+
+    private fun layoutToolbar() {
+        val left = toolbarLeft
+        popups.dismiss()
+        body.removeAllViews()
+        body.orientation = if (left) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        toolbar.vertical = left
+        if (left) {
+            body.addView(toolbar, LinearLayout.LayoutParams(dp(ToolbarView.WIDTH_DP), LinearLayout.LayoutParams.MATCH_PARENT))
+            body.addView(paneArea, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        } else {
+            body.addView(toolbar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(ToolbarView.HEIGHT_DP)))
+            body.addView(paneArea, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        onFocusChanged?.invoke(focusMode)
+    }
 
     var focusMode: Boolean = false
         private set
@@ -53,10 +77,10 @@ class EditorChrome(
         val column = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             addView(tabs, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(TabStripView.HEIGHT_DP)))
-            addView(toolbar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(ToolbarView.HEIGHT_DP)))
-            addView(paneArea, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         addView(column, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        layoutToolbar()
         floating = ToolButton(context, R.drawable.ic_pen, context.getString(R.string.exit_focus_mode)).onClick { setFocusMode(false) }
         floating.background = popupBackground(context)
         floating.visibility = View.GONE

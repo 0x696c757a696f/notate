@@ -28,14 +28,12 @@ class MoreMenu(
         val list = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         for (e in entries) {
             val row = PopupUi.button(ctx, e.label) {
-                if (e.enabled) {
-                    host.dismiss()
-                    e.action()
-                }
+                host.dismiss()
+                e.action()
             }.apply {
                 gravity = Gravity.CENTER_VERTICAL or Gravity.START
                 minWidth = ctx.dp(220)
-                if (!e.enabled) setTextColor(app.notate.editor.ui.Ink.DISABLED)
+                if (!e.enabled) { isEnabled = false; setTextColor(app.notate.editor.ui.Ink.DISABLED) }
             }
             list.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, ctx.dp(52)))
         }

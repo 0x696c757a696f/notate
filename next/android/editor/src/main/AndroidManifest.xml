@@ -4,6 +4,7 @@
         <activity
             android:name="app.notate.editor.EditorActivity"
             android:exported="false"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|density|uiMode"
             android:windowSoftInputMode="stateHidden" />
     </application>

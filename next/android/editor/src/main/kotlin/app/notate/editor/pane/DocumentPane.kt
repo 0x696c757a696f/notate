@@ -36,6 +36,30 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
     fun setLayoutMode(mode: PageLayoutMode) {}
 
+    /** Called by the window when the save queue went idle after a change (debug timings). */
+    fun onSaveIdle(nowUptime: Long) {}
+
+    /** Lines for the debug HUD. */
+    fun debugLines(): List<String> = emptyList()
+
+    /** Extra rows of the More menu that only this kind of pane has. */
+    fun moreEntries(): List<app.notate.editor.popup.MenuEntry> = emptyList()
+
+    /** Where the reader should start when the pane is first laid out (a restored split pane); null keeps the document's own position. */
+    fun setInitialView(s: ViewState?) {}
+
+    /** True when the pane draws its own 32 dp bar (a web page); otherwise a split window puts a bar with title and page above it. */
+    val ownsPaneBar: Boolean get() = false
+
+    /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
+    fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
+
+    /** Imports a picked image (a content Uri) and places it on the page in view; panes without images ignore it. */
+    fun importImage(uri: android.net.Uri) {}
+
+    /** True when ([x], [y]) in window coordinates is on a view of the pane that takes touches itself (the text editor). */
+    fun hitsOwnUi(x: Float, y: Float): Boolean = false
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
 
@@ -56,11 +80,22 @@ interface PaneHost {
     /** The e-ink driver reported a stroke start/end; feeds palm rejection. [timeMs] is `SystemClock.uptimeMillis()`. */
     fun onDriverStroke(begin: Boolean, timeMs: Long)
 
+    /** Shows [content] as the window's popup near [anchor] (the pen is kept off the page while it is up); null if unsupported. */
+    fun showPopup(anchor: View?, content: View, placement: app.notate.editor.popup.Placement = app.notate.editor.popup.Placement.BELOW_ANCHOR): app.notate.editor.popup.PopupHandle? = null
+
+    /** The pane has a size and is attached to the arbiter: take the pen if this pane has the focus (default: always). */
+    fun claimPen(pane: DocumentPane) { arbiter.setOwner(pane) }
+
+    /** Closes the window's popup, if any. */
+    fun dismissPopup() {}
     /** The page in view changed: [index] (0-based) of [count]. Drives the page indicator. */
     fun onPageChanged(index: Int, count: Int) {}
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** A link in the pane points at [page] of another document: open it (a tab) and show that page. */
+    fun openDocumentAt(doc: app.notate.core.model.DocId, page: PageId) {}
 
     /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
     fun onPageGrid(hasGrid: Boolean) {}

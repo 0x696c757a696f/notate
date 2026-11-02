@@ -43,6 +43,14 @@ class LiveInkLayer(
     /** True while the e-ink driver draws the stroke itself: the live stroke is then not drawn here. */
     var driverDraws: Boolean = false
 
+    /**
+     * Items an eraser gesture currently hides. Panes whose content is transparent (web chapters) must leave these out of their
+     * own drawing and set [paintHiddenWhite] to false: white paint would blot out the text underneath.
+     */
+    val hiddenIds: Set<ItemId> get() = hidden.keys
+
+    var paintHiddenWhite: Boolean = true
+
     var viewportProvider: () -> Viewport = { Viewport(0f, 0f, 1f, 1f, 0, 0) }
     var layoutProvider: () -> DocumentLayout? = { null }
 
@@ -157,7 +165,7 @@ class LiveInkLayer(
         if (clip) canvas.clipRect((f.l - vp.scrollX) * s, (f.t - vp.scrollY) * s, (f.r - vp.scrollX) * s, (f.b - vp.scrollY) * s)
         canvas.scale(s, s)
         canvas.translate(f.l - vp.scrollX, f.t - vp.scrollY)
-        if (hide) drawWhite(canvas, item, s) else renderer.draw(canvas, item, paints)
+        if (hide) { if (paintHiddenWhite) drawWhite(canvas, item, s) } else renderer.draw(canvas, item, paints)
         canvas.restore()
     }
 

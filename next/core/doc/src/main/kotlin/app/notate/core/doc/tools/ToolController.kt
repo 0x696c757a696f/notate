@@ -2,7 +2,10 @@ package app.notate.core.doc.tools
 
 import app.notate.core.doc.settings.Settings
 import app.notate.core.model.ToolKind
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 
@@ -12,14 +15,22 @@ import kotlinx.serialization.json.Json
  */
 class ToolController(private val settings: Settings) {
     private var base: ToolState = load()
-    private var temp: ToolKind? = null
+    private var tempTool: ToolKind? = null
     private val _state = MutableStateFlow(effective())
     val state: StateFlow<ToolState> get() = _state
 
     /** The saved state, without the temporary eraser (what the toolbar shows, so it does not flicker while the pen button is held). */
     fun baseState(): ToolState = base
 
-    fun select(kind: ToolKind) = update { it.copy(active = kind) }
+    private val _selections = MutableSharedFlow<ToolKind>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Every tool the user picked, including picking the tool that is already active (which leaves [state] unchanged). */
+    val selections: SharedFlow<ToolKind> get() = _selections
+
+    fun select(kind: ToolKind) {
+        update { it.copy(active = kind) }
+        _selections.tryEmit(kind)
+    }
 
     fun update(transform: (ToolState) -> ToolState) {
         base = transform(base)
@@ -30,13 +41,13 @@ class ToolController(private val settings: Settings) {
     /** Pen side button: down switches to the eraser, up restores the previous tool. Not persisted. */
     fun temporaryEraser(on: Boolean) = temporaryTool(if (on) ToolKind.ERASER else null)
 
-    /** Switches to [kind] until called with null (side button set to Lasso). Not persisted. */
+    /** Pen side button set to another tool (Settings → Pen button): [kind] is active while it is held, null restores. Not persisted. */
     fun temporaryTool(kind: ToolKind?) {
-        temp = kind
+        tempTool = kind
         _state.value = effective()
     }
 
-    private fun effective(): ToolState = temp?.let { base.copy(active = it) } ?: base
+    private fun effective(): ToolState = tempTool?.let { base.copy(active = it) } ?: base
 
     private fun load(): ToolState {
         val s = settings.toolStateJson.value ?: return ToolState.defaults()

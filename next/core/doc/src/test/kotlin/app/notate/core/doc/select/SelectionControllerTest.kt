@@ -198,6 +198,16 @@ class SelectionControllerTest {
         assertThat(rig.controller.selection.value).isNull()
     }
 
+    @Test fun lockImagesLocksSelectedImagesAndEndsSelection() = runTest {
+        val rig = SelectRig(this, listOf(image(1, locked = false), bar(2, y = 500f)))
+        rig.controller.selectByRect(rig.p1, Rect(90f, 290f, 210f, 410f))
+        rig.controller.lockImages()
+        assertThat((rig.items().first { it.id == ItemId(1) } as ImageItem).locked).isTrue()
+        assertThat(rig.controller.selection.value).isNull()
+        rig.editor.undo()
+        assertThat((rig.items().first { it.id == ItemId(1) } as ImageItem).locked).isFalse()
+    }
+
     @Test fun cutPutsItemsOnClipboardAndDeletes() = runTest {
         val rig = SelectRig(this, listOf(bar(1)))
         val clip = InkClipboard()

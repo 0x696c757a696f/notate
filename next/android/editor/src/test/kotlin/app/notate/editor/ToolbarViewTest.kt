@@ -34,7 +34,7 @@ class ToolbarViewTest {
         override fun onUndo() = Unit
         override fun onRedo() = Unit
         override fun onPages() = Unit
-        override fun onSplit() = Unit
+        override fun onSplit(anchor: android.view.View) = Unit
         override fun onMore(anchor: View) = Unit
     }
     private val toolbar = ToolbarView(context, controller, popups, 227f, actions)

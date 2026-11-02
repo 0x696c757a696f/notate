@@ -13,7 +13,6 @@ import app.notate.core.doc.layout.Viewport
 import app.notate.core.doc.registry.DocumentHandle
 import app.notate.core.doc.select.PageGeometry
 import app.notate.core.doc.select.SelectionController
-import app.notate.core.doc.settings.PenButton
 import app.notate.core.doc.settings.Tap2Action
 import app.notate.core.doc.settings.Tap3Action
 import app.notate.core.doc.tools.GridSnapper
@@ -59,6 +58,9 @@ import app.notate.platform.ink.OnyxDriverPort
 import app.notate.platform.ink.RawPenSink
 import app.notate.platform.ink.RawPoint
 import app.notate.render.ink.GeometryCache
+import app.notate.render.image.AssetFiles
+import app.notate.render.image.ImageCache
+import app.notate.render.image.StaticLayoutMetrics
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.tile.TileCache
@@ -101,16 +103,17 @@ class NotebookPane(
         override fun pageAt(docX: Float, docY: Float): PageId? = layout.pageAt(docX, docY)
     }
     private val selectionUi = SelectionUi(
-        canvasView, editor, SelectionController(editor, geometry, live), deps.clipboard, host.popups, scope, { viewport }, { layout },
+        canvasView, editor, SelectionController(editor, geometry, live), deps.clipboard, { host.popups }, scope, { viewport }, { layout }, ::askLink,
     )
     private val selection: SelectionController get() = selectionUi.controller
     private var baseKind: ToolKind = deps.toolController.baseState().active
     private var hadSelection = false
 
+    private val images = ImageCache(AssetFiles { handle.assetFile(it) }, onLoaded = { a -> main.post { onImageLoaded(a) } })
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
     private val scheduler = TileScheduler(
         cache = cache,
-        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache())),
+        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache(), images)),
         source = object : TileSource {
             override fun pageInfo(page: PageId): PageInfo? = editor.pages.value.firstOrNull { it.id == page }
             override fun content(page: PageId): PageContent? = editor.content(page)
@@ -120,8 +123,9 @@ class NotebookPane(
         onTileReady = { onTileReady() },
     )
 
+    // "Low-latency pen" off (Settings): no driver at all, the pen arrives as touch events; takes effect when the document is reopened.
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val penMode: InputPenMode = InputPenMode.WRITE
     override val takesConstraintFinger: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
@@ -136,7 +140,16 @@ class NotebookPane(
     override var layoutMode: PageLayoutMode = editor.meta.value.view?.layout ?: deps.settings.pageLayout.value
         private set
     private val pageActions = PageActions(context, editor, scope, deps.logger)
+    private val objects = ObjectsController(
+        context, handle, scope, deps, host, this, canvasView,
+        viewport = { viewport }, frameOf = { layout.frameOf(it) },
+        pointAt = { x, y -> PaneCoords.toPage(viewport, layout, x, y) },
+        currentPage = { currentPage }, goToPage = { goToPage(it) },
+        refresh = { deps.epd.refresh(canvasView, EpdMode.GU, null, EpdTiming.AFTER_DRAW) },
+    )
     private var addCard = false
+    private var pageTurns = 0
+    private var fullRefreshAfterTurn = false
     private var panDx = 0f
     private var panDy = 0f
     private var edgeBack = false
@@ -150,6 +163,7 @@ class NotebookPane(
         private set
 
     private var placed = false
+    private var initialView: ViewState? = null
     private var attached = false
     private var released = false
     private var inkSuspended = false
@@ -223,7 +237,6 @@ class NotebookPane(
             editor.pages.collect { onPagesChanged() }
         }
         scope.launch { deps.toolController.state.collect { onToolChanged(it.preset()) } }
-        scope.launch { deps.settings.driverInk.collect { updateDriverInk() } }
     }
 
     private fun buildLayout() = DocumentLayout(editor.pages.value, layoutMode)
@@ -304,7 +317,7 @@ class NotebookPane(
         var vp = viewport.copy(widthPx = w, heightPx = h)
         if (!placed && layout.pageCount > 0) {
             placed = true
-            val saved = editor.meta.value.view
+            val saved = initialView ?: editor.meta.value.view
             vp = if (saved != null && layout.indexOf(saved.page) >= 0) {
                 val f = layout.frameOf(saved.page)
                 vp.copy(zoom = saved.zoom.coerceIn(Viewport.MIN_ZOOM, Viewport.MAX_ZOOM), scrollX = f.l + saved.scrollXPt, scrollY = f.t + saved.scrollYPt)
@@ -320,13 +333,14 @@ class NotebookPane(
         if (!attached) {
             attached = true
             host.arbiter.attach(this)
-            host.arbiter.setOwner(this)
+            host.claimPen(this)
             updateHandMode()
         }
     }
 
     private fun setViewport(vp: Viewport, delayTiles: Boolean) {
         viewport = vp
+        objects.onViewportChanged()
         publish()
         if (delayTiles) {
             main.removeCallbacks(requestTilesRunnable)
@@ -436,7 +450,7 @@ class NotebookPane(
                 setViewport(panned(g.dx, g.dy, viewport.zoomAround(g.scale, fx, fy)), delayTiles = true)
             }
             is FingerGesture.Tap -> onTap(g)
-            is FingerGesture.LongPress -> onLongPress(g)
+            is FingerGesture.LongPress -> if (!objects.onLongPress(localX(g.x), localY(g.y))) onLongPress(g)
         }
     }
 
@@ -445,6 +459,8 @@ class NotebookPane(
             1 -> {
                 val x = localX(g.x)
                 val y = localY(g.y)
+                if (objects.editingText) { objects.finishTextEdit(); return }
+                if (objects.onTap(x, y)) return
                 if (selection.selection.value != null) selection.clear()
                 if (canvasView.addCardRect()?.contains(x, y) == true || canvasView.addButtonRect()?.contains(x, y) == true) addPageAtEnd()
             }
@@ -484,7 +500,9 @@ class NotebookPane(
         host.arbiter.block(this, BlockReason.FINGER_GESTURE, false)
         updateDriverInk()
         requestTiles()
-        deps.epd.refresh(canvasView, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+        val full = fullRefreshAfterTurn
+        fullRefreshAfterTurn = false
+        deps.epd.refresh(canvasView, if (full) EpdMode.GC else EpdMode.GU, null, EpdTiming.AFTER_DRAW)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -504,11 +522,14 @@ class NotebookPane(
             panWithPen(ev)
             return
         }
-        if (driverActive) return    // the driver reports its own points; touch events only feed palm rejection
+        // The driver reports its own points; touch events only feed palm rejection. Two exceptions: a stroke that began from touch
+        // events goes on that way, and a pen that came down on an unfocused pane has opened the driver just now, too late for this stroke.
+        val touchStroke = session != null && !sessionViaDriver
+        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
-            is PenEvent.Down -> beginPen(x, y, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs, ev.eraser, viaDriver = false)
+            is PenEvent.Down -> beginPen(x, y, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs, ev.eraser, viaDriver = false, lasso = ev.lasso)
             is PenEvent.Move -> movePen(listOf(InkPoint(0f, 0f, ev.pressure, ev.tiltX, ev.tiltY, ev.tMs)), x, y)
             is PenEvent.Up -> endPen(x, y, ev.tMs, 0f)
             is PenEvent.Cancel -> cancelPen()
@@ -521,17 +542,19 @@ class NotebookPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
+        if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
 
     override fun onRawMove(batch: List<RawPoint>) {
-        if (session == null || batch.isEmpty()) return
+        if (session == null || !sessionViaDriver || batch.isEmpty()) return
         val last = batch.last()
         movePen(batch.map { InkPoint(0f, 0f, it.pressure, it.tiltX, it.tiltY, it.tMs) }, last.x, last.y, batch.map { it.x to it.y })
     }
 
     override fun onRawEnd(p: RawPoint, eraser: Boolean) {
+        if (session != null && !sessionViaDriver) return
         endPen(p.x, p.y, p.tMs, p.pressure)
         host.onDriverStroke(false, SystemClock.uptimeMillis())
     }
@@ -550,19 +573,20 @@ class NotebookPane(
     // Pen: common
     // ---------------------------------------------------------------------------------------------------------
 
-    private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean) {
+    private fun beginPen(x: Float, y: Float, pressure: Float, tiltX: Float, tiltY: Float, tMs: Long, eraser: Boolean, viaDriver: Boolean, lasso: Boolean = false) {
         if (session != null) cancelPen()
+        if (objects.editingText) objects.finishTextEdit()      // the pen came down outside the text editor: that ends the edit
         if (inkSuspended) return
         if (fingerBusy && !viaDriver) {
             main.removeCallbacks(endFingerRunnable)
             endFinger()
         }
         if (eraser) {
-            when (deps.settings.penButton.value) {
-                PenButton.ERASER -> { tempEraser = true; deps.toolController.temporaryTool(ToolKind.ERASER) }
-                PenButton.LASSO -> { tempEraser = true; deps.toolController.temporaryTool(ToolKind.LASSO) }
-                PenButton.NONE -> Unit
-            }
+            tempEraser = true
+            deps.toolController.temporaryEraser(true)
+        } else if (lasso) {
+            tempEraser = true
+            deps.toolController.temporaryTool(ToolKind.LASSO)
         }
         val vp = viewport
         val hit = PaneCoords.toPage(vp, layout, x, y)
@@ -599,7 +623,9 @@ class NotebookPane(
             clock = deps.clock,
             background = info.background,
             selection = selection,
+            textMetrics = StaticLayoutMetrics,
         )
+        ctx.onEditText = { id, isNew -> objects.startTextEdit(hit.page, id, isNew) }
         activeCtx = ctx
         live.page = hit.page
         live.unclippedGhost = preset.kind == ToolKind.LASSO
@@ -799,6 +825,14 @@ class NotebookPane(
 
     private var selStartDirty: android.graphics.Rect? = null
 
+    /** Selection action "Link…": choose a target, then add a link over the selection (other documents need the picker: not offered here). */
+    private fun askLink(page: PageId, bounds: Rect) {
+        LinkDialog(host, handle.id, editor.pages.value.map { it.id }, null, { _, _, done -> done(null) }) { target ->
+            objects.createLink(page, bounds, target)
+            selection.clear()
+        }.show(canvasView.context)
+    }
+
     override fun clearSelection() = selection.clear()
 
     /** Screen rectangle (view-local px) to repaint for the current selection, or null. */
@@ -858,6 +892,7 @@ class NotebookPane(
     private val shapeMode: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
     /** The lasso draws a dashed software path and a ghost, so the driver stays off for it as well. */
     private val lassoMode: Boolean get() = deps.toolController.baseState().active == ToolKind.LASSO
+    private val textMode: Boolean get() = deps.toolController.baseState().active == ToolKind.TEXT
     private var handing = false
     private var handX = 0f
     private var handY = 0f
@@ -865,7 +900,7 @@ class NotebookPane(
     private fun updateHandMode() {
         val on = handMode
         if (!on && handing) endHand()
-        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || lassoMode || adjustSoftware || selection.selection.value != null)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || lassoMode || textMode || adjustSoftware || selection.selection.value != null)
     }
 
     private fun panWithPen(ev: PenEvent) {
@@ -891,7 +926,7 @@ class NotebookPane(
         scheduleEndFinger()
     }
 
-    override fun onFocusChanged(focused: Boolean) = Unit
+    override fun onFocusChanged(focused: Boolean) { if (!focused) selection.clear() }
 
     private fun updateDriverInk() {
         val preset = deps.toolController.state.value.preset()
@@ -922,9 +957,21 @@ class NotebookPane(
         } else {
             panned(0f, 0f, viewport.copy(scrollY = layout.frameOf(page).t - GO_TO_MARGIN_DP * density / viewport.scale))
         }
+        if (layoutMode == PageLayoutMode.SINGLE) countPageTurn()
         beginFinger()
         setViewport(vp, delayTiles = false)
         scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+    }
+
+    /** Settings → Full refresh every N page turns (single-page mode): every Nth turn ends with a full refresh. */
+    private fun countPageTurn() {
+        val n = deps.settings.gcEvery.value
+        if (n <= 0) { pageTurns = 0; return }
+        pageTurns++
+        if (pageTurns >= n) {
+            pageTurns = 0
+            fullRefreshAfterTurn = true
+        }
     }
 
     override fun setLayoutMode(mode: PageLayoutMode) {
@@ -988,6 +1035,8 @@ class NotebookPane(
     // View state, lifecycle
     // ---------------------------------------------------------------------------------------------------------
 
+    override fun setInitialView(s: ViewState?) { initialView = s }
+
     override fun saveViewState(): ViewState? {
         if (layout.pageCount == 0 || viewport.widthPx == 0) return null
         val vp = viewport
@@ -1007,7 +1056,7 @@ class NotebookPane(
     }
 
     /** Debug lines for the HUD. */
-    fun debugLines(): List<String> {
+    override fun debugLines(): List<String> {
         val (cov, inFlight) = tileStats()
         val a = host.arbiter
         val reasons = BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) }
@@ -1021,15 +1070,33 @@ class NotebookPane(
     }
 
     /** Called by the HUD when the save queue went idle after a stroke. */
-    fun onSaveIdle(nowUptime: Long) {
+    override fun onSaveIdle(nowUptime: Long) {
         if (lastUpAt != 0L) {
             lastUpToDiskMs = nowUptime - lastUpAt
             lastUpAt = 0L
         }
     }
 
+    override fun importImage(uri: android.net.Uri) = objects.importImage(uri)
+
+    override fun hitsOwnUi(x: Float, y: Float): Boolean = objects.hitsEditor(x, y)
+
+    /** Adds a link over [frame] of [page] (the selection's "Link…" action, R2-4). */
+    fun createLink(page: PageId, frame: Rect, target: app.notate.core.model.LinkTarget) = objects.createLink(page, frame, target)
+
+    /** Marks tiles that show [asset] stale once its bitmap has been decoded. */
+    private fun onImageLoaded(asset: app.notate.core.model.AssetId) {
+        if (released) return
+        for (info in editor.pages.value) {
+            val c = editor.content(info.id) ?: continue
+            for (item in c.all()) if (item is app.notate.core.model.ImageItem && item.asset == asset) scheduler.invalidate(info.id, item.bounds)
+        }
+        canvasView.invalidate()
+    }
+
     override fun release() {
         if (released) return
+        objects.release()
         cancelPen()
         selectionUi.release()
         released = true

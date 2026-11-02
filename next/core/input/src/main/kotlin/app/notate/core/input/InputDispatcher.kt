@@ -2,6 +2,9 @@ package app.notate.core.input
 
 enum class InputPenMode { WRITE, INTERACT, READ_ONLY }
 
+/** What the pen's barrel button does (Settings → Pen button). */
+enum class PenButtonAction { ERASER, LASSO, NONE }
+
 sealed interface PenEvent {
     val x: Float
     val y: Float
@@ -14,6 +17,13 @@ sealed interface PenEvent {
         val tiltY: Float,
         val tMs: Long,
         val eraser: Boolean,
+        /**
+         * True when this very touch moved the focus to the pane (the pen came down on a pane that was not focused). The
+         * driver was only just opened for it and has not seen this stroke, so the pane must ink it from the touch events.
+         */
+        val focusSwitched: Boolean = false,
+        /** The barrel button is held and Settings maps it to the lasso. */
+        val lasso: Boolean = false,
     ) : PenEvent
 
     data class Move(
@@ -55,6 +65,12 @@ interface PaneTarget {
 
     val penMode: InputPenMode
 
+    /**
+     * False for panes whose view handles fingers itself (a web page scrolls and zooms on its own): the dispatcher still
+     * applies palm rejection but passes the touches on instead of turning them into gestures.
+     */
+    val consumesFingers: Boolean get() = true
+
     fun onFingerGesture(g: FingerGesture)
 
     fun onPen(ev: PenEvent)
@@ -81,6 +97,9 @@ class InputDispatcher(
 
     /** False when the finger mode is Off: finger samples are left to ordinary views. */
     var fingersEnabled: Boolean = true
+
+    /** What the pen's barrel button does; the eraser end of the pen always erases. */
+    var penButton: PenButtonAction = PenButtonAction.ERASER
 
     private var gesturePane: PaneTarget? = null
     private var penPane: PaneTarget? = null
@@ -155,7 +174,7 @@ class InputDispatcher(
             PalmRejector.Decision.ACCEPT -> Unit
         }
         if (s.action == PointerAction.DOWN) {
-            gesturePane = panes.firstOrNull { it.hitTest(s.x, s.y) }
+            gesturePane = panes.firstOrNull { it.hitTest(s.x, s.y) }?.takeIf { it.consumesFingers }
         }
         val pane = gesturePane ?: return false
         for (g in gestures.onSample(s)) {
@@ -197,10 +216,13 @@ class InputDispatcher(
                     InputPenMode.READ_ONLY -> return true
                     InputPenMode.WRITE -> Unit
                 }
-                if (focusedPane != pane.id) focusPane(pane)
+                val switched = focusedPane != pane.id
+                if (switched) focusPane(pane)
                 penPane = pane
-                val eraser = s.kind == PointerKind.ERASER_END || s.buttons and PointerSample.BUTTON_STYLUS_PRIMARY != 0
-                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser))
+                val button = s.buttons and PointerSample.BUTTON_STYLUS_PRIMARY != 0
+                val eraser = s.kind == PointerKind.ERASER_END || (button && penButton == PenButtonAction.ERASER)
+                val lasso = !eraser && button && penButton == PenButtonAction.LASSO
+                pane.onPen(PenEvent.Down(s.x, s.y, s.pressure, s.tiltX, s.tiltY, s.timeMs, eraser, lasso = lasso, focusSwitched = switched))
                 return true
             }
             PointerAction.MOVE -> {

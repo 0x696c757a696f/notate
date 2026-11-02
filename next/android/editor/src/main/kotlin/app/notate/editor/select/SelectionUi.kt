@@ -33,15 +33,18 @@ class SelectionUi(
     private val editor: DocumentEditor,
     val controller: SelectionController,
     private val clipboard: InkClipboard,
-    private val popups: PopupHost?,
+    private val popupHost: () -> PopupHost?,
     private val scope: CoroutineScope,
     private val viewport: () -> Viewport,
     private val layout: () -> DocumentLayout,
+    /** "Link…": the pane opens its link dialog for a link over [bounds] of [page]. */
+    private val onLink: (PageId, app.notate.core.geometry.Rect) -> Unit,
 ) : SelectionActions {
     private val density = view.resources.displayMetrics.density
     val layer = SelectionLayer(density)
     private val bar = SelectionActionBar(view.context, this)
     private var lastDirty: Rect? = null
+    private val popups: PopupHost? get() = popupHost()
 
     val selection: Selection? get() = controller.selection.value
 
@@ -70,6 +73,7 @@ class SelectionUi(
         } else {
             val r = layer.screenRect(sel, viewport(), layout())
             val local = Rect(r.left.toInt(), (r.top - SelectionLayer.ROTATE_DP * density - SelectionLayer.HANDLE_DP * density).toInt(), r.right.toInt(), r.bottom.toInt())
+            bar.showLock(controller.items().any { it is app.notate.core.model.ImageItem && !it.locked })
             popups?.showBar(bar, view, local)
         }
         view.invalidate()
@@ -93,6 +97,8 @@ class SelectionUi(
     override fun delete() = controller.delete()
     override fun front() = controller.bringToFront()
     override fun back() = controller.sendToBack()
+    override fun lock() = controller.lockImages()
+    override fun link() { selection?.let { onLink(it.page, it.bounds) } }
 
     override fun color(anchor: View) {
         val host = popups ?: return

@@ -66,6 +66,9 @@ class InkArbiter {
 
     fun isOwner(surface: InkSurface) = owner === surface
 
+    /** The surface is registered, i.e. it has been laid out and may be given the pen. */
+    fun isAttached(surface: InkSurface) = states.containsKey(surface)
+
     /** Window-wide reason (popups, sidebar, divider...). */
     fun block(
         reason: BlockReason,

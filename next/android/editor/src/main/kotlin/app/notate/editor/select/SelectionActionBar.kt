@@ -17,6 +17,8 @@ interface SelectionActions {
     fun thickness(anchor: View)
     fun front()
     fun back()
+    fun lock()
+    fun link()
 }
 
 /**
@@ -24,6 +26,8 @@ interface SelectionActions {
  * R2-7 and stays hidden until then.
  */
 class SelectionActionBar(context: Context, private val actions: SelectionActions) : LinearLayout(context) {
+    private val lockButton: View
+
     init {
         orientation = HORIZONTAL
         add(R.string.sel_cut) { actions.cut() }
@@ -34,11 +38,15 @@ class SelectionActionBar(context: Context, private val actions: SelectionActions
         addAnchored(R.string.sel_thickness) { actions.thickness(it) }
         add(R.string.sel_front) { actions.front() }
         add(R.string.sel_back) { actions.back() }
+        lockButton = add(R.string.sel_lock) { actions.lock() }
+        add(R.string.sel_link) { actions.link() }
     }
 
-    private fun add(label: Int, onClick: () -> Unit) {
-        addView(PopupUi.button(context, context.getString(label), onClick).apply { minWidth = 0 })
-    }
+    /** "Lock" only makes sense when the selection holds images. */
+    fun showLock(on: Boolean) { lockButton.visibility = if (on) VISIBLE else GONE }
+
+    private fun add(label: Int, onClick: () -> Unit): View =
+        PopupUi.button(context, context.getString(label), onClick).apply { minWidth = 0 }.also { addView(it) }
 
     private fun addAnchored(label: Int, onClick: (View) -> Unit) {
         lateinit var b: View
