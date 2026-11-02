@@ -34,6 +34,8 @@ interface DocStore : java.io.Closeable {
     fun assetFile(id: AssetId): File?
     suspend fun readOutline(): List<OutlineEntry>
     suspend fun writeOutline(entries: List<OutlineEntry>)
+    /** Deletes assets that no page or item refers to; call when the document closes. Default: nothing to clean. */
+    suspend fun vacuumAssets() {}
 }
 
 interface DocStoreFactory {
@@ -43,6 +45,3 @@ interface DocStoreFactory {
 
 /** Adapter used by renderers: loads page items without exposing the whole store. */
 interface PageLoader { suspend fun load(page: PageId, region: Rect?): List<Item> }
-
-/** Library index store; methods are defined in R0-3. */
-interface LibraryStore
