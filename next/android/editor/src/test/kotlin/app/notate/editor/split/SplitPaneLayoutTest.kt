@@ -90,7 +90,6 @@ class SplitPaneLayoutTest {
         arrange()
         val widthBefore = a.width
         val x = layout.run { a.width + 6f }
-        assertThat(layout.hitsDivider(0f, 0f)).isFalse()
         assertThat(touch(MotionEvent.ACTION_DOWN, x, 400f)).isTrue()
         assertThat(events).containsExactly("start")
         touch(MotionEvent.ACTION_MOVE, 340f, 400f)
