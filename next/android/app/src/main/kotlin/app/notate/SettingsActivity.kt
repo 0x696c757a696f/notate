@@ -23,6 +23,10 @@ class SettingsActivity : ComponentActivity() {
                 startActivity(ShareLogs.logsIntent(this@SettingsActivity, graph.paths, graph.logger, getString(R.string.share_logs_subject)))
             }
 
+            override fun importFromOldNotate() {
+                startActivity(LegacyImportActivity.intent(this@SettingsActivity))
+            }
+
             override fun diagnosticLines(): List<String> = buildList {
                 add("device=${graph.device}")
                 add("--- recent log ---")
