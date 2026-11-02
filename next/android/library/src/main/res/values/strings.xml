@@ -42,6 +42,7 @@
     <string name="menu_move">Move to…</string>
     <string name="menu_tags">Tags…</string>
     <string name="menu_duplicate">Duplicate</string>
+    <string name="menu_export_notate">Export as Notate file…</string>
     <string name="menu_pin">Pin</string>
     <string name="menu_unpin">Unpin</string>
     <string name="menu_trash">Move to Trash</string>
@@ -158,4 +159,16 @@
     <string name="settings_debug_hud">Show debug HUD</string>
     <string name="settings_ink_diagnostics">Ink diagnostics</string>
     <string name="settings_diag_empty">No log lines yet.</string>
+    <string name="settings_group_backup">Backup</string>
+    <string name="settings_backup_folder">Backup folder</string>
+    <string name="settings_backup_not_set">Not set</string>
+    <string name="settings_backup_auto">Back up automatically</string>
+    <string name="settings_backup_daily">Daily</string>
+    <string name="settings_backup_weekly">Weekly</string>
+    <string name="settings_backup_now">Back up now</string>
+    <string name="settings_backup_running">Backing up… %1$d / %2$d</string>
+    <string name="settings_backup_failed">Last backup failed: %1$s</string>
+    <string name="settings_backup_last">Last backup: %1$s</string>
+    <string name="settings_backup_never">Not backed up yet</string>
+    <string name="settings_backup_restore">Restore from backup…</string>
 </resources>

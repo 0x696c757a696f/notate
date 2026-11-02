@@ -94,6 +94,9 @@ class DocumentRegistry(
         }
     }
 
+    /** True while some screen holds [id] open (its files must not be replaced then). */
+    suspend fun isOpen(id: DocId): Boolean = mutex.withLock { open.containsKey(id) }
+
     /** Flushes every open document concurrently; one failure does not stop the others. */
     suspend fun flushAll(): List<FlushFailure> {
         val handles = mutex.withLock { open.values.map { it.handle } }
