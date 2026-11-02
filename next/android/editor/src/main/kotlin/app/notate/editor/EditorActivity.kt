@@ -279,6 +279,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val reason = if (kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
         chrome.toolbar.bind(new.pane.capabilities, getString(reason))
         chrome.toolbar.showGuide(new.pane.guideKind)
+        refreshZoomButton()
         arbiter.block(BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
         val h = new.handle
         bindJob = scope.launch {
@@ -351,7 +352,27 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
-    override fun onPageChanged(index: Int, count: Int) = Unit      // each pane's own indicator follows it (GatedHost)
+    override fun onPageChanged(index: Int, count: Int) = refreshZoomButton()      // each pane's own indicator follows it (GatedHost)
+
+    override fun onZoomWindowChanged(open: Boolean) = refreshZoomButton()
+
+    /** The Zoom button follows the focused pane: lit while its window is open, grey on a whiteboard page. */
+    private fun refreshZoomButton() {
+        if (!::chrome.isInitialized || !::controller.isInitialized) return
+        val p = pane ?: return
+        chrome.toolbar.setZoomOn(p.zoomWindowOpen)
+        chrome.toolbar.setZoomBlocked(p.zoomUnavailableReason())
+    }
+
+    override fun onZoomToggled(on: Boolean): String? {
+        val p = pane ?: return null
+        if (!on) {
+            p.setZoomWindowOpen(false)
+            return null
+        }
+        p.zoomUnavailableReason()?.let { return it }
+        return if (p.setZoomWindowOpen(true)) null else getString(R.string.unavailable_here)
+    }
 
     // --- Toolbar --------------------------------------------------------------------------------------------
 

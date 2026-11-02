@@ -20,6 +20,9 @@ class PageCanvasView(context: Context) : View(context) {
     var overlay: ((Canvas) -> Unit)? = null
     var sizeListener: ((Int, Int) -> Unit)? = null
 
+    /** The zoom writing window drawn over the lower third while it is open. */
+    var zoom: app.notate.editor.zoom.ZoomWindowView? = null
+
     /** Label of the "Add page" button below the last page (continuous mode); null = no button. */
     var addButtonLabel: String? = null
 
@@ -81,6 +84,7 @@ class PageCanvasView(context: Context) : View(context) {
         }
         live?.draw(canvas, viewport, l)
         overlay?.invoke(canvas)
+        zoom?.takeIf { it.isOpen }?.draw(canvas)
     }
 
     companion object {

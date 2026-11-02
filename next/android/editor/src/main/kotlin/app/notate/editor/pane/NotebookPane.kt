@@ -21,9 +21,14 @@ import app.notate.core.doc.tools.ShapeDragSession
 import app.notate.core.doc.tools.ToolContext
 import app.notate.core.doc.tools.ToolSession
 import app.notate.core.doc.tools.ToolSessionFactory
+import app.notate.core.doc.zoom.ZoomWindowState
+import app.notate.core.geometry.Affine
+import app.notate.core.geometry.Vec2
+import app.notate.core.model.Background
+import app.notate.core.model.PaperPattern
+import app.notate.editor.zoom.ZoomWindowView
 import app.notate.core.doc.tools.ToolSettings
 import app.notate.core.geometry.Rect
-import app.notate.core.geometry.Vec2
 import app.notate.core.ink.driver.DriverInkPolicy
 import app.notate.core.input.BlockReason
 import app.notate.core.input.EpdMode
@@ -112,17 +117,17 @@ class NotebookPane(
 
     private val images = ImageCache(AssetFiles { handle.assetFile(it) }, onLoaded = { a -> main.post { onImageLoaded(a) } })
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
-    private val scheduler = TileScheduler(
-        cache = cache,
-        rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache(), images)),
-        source = object : TileSource {
-            override fun pageInfo(page: PageId): PageInfo? = editor.pages.value.firstOrNull { it.id == page }
-            override fun content(page: PageId): PageContent? = editor.content(page)
-        },
-        scope = scope,
-        renderDispatcher = deps.dispatchers.render,
-        onTileReady = { onTileReady() },
-    )
+    private val rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache(), images))
+    private val tileSource = object : TileSource {
+        override fun pageInfo(page: PageId): PageInfo? = editor.pages.value.firstOrNull { it.id == page }
+        override fun content(page: PageId): PageContent? = editor.content(page)
+    }
+    private val scheduler = TileScheduler(cache, rasterizer, tileSource, scope, deps.dispatchers.render, { onTileReady() })
+
+    // The zoom writing window renders its own tiles (another zoom level) into the same cache, with its own scheduler.
+    private val zoomScheduler = TileScheduler(cache, rasterizer, tileSource, scope, deps.dispatchers.render, { onTileReady() })
+    private val zoomView = ZoomWindowView(context, TileCompositor(cache, density) { p -> editor.pages.value.firstOrNull { it.id == p } }, live)
+    private val whiteboardReason = context.getString(R.string.unavailable_whiteboard)
 
     // "Low-latency pen" off (Settings): no driver at all, the pen arrives as touch events; takes effect when the document is reopened.
     override val driver: ConfigurableDriverPort =
@@ -203,6 +208,9 @@ class NotebookPane(
     private var lastLocalY = 0f
     private var lastPoint: InkPoint? = null
     private var activeCtx: ToolContext? = null
+    private var strokeMap: Affine? = null           // screen → page for a stroke written in the zoom window
+    private var zoomBounds: Rect = Rect.EMPTY       // page-coordinate bounds of that stroke
+    private var zoomAdvance = false
     private var adjustSoftware = false
     private var strokeBounds: android.graphics.Rect? = null
     private val pollRunnable = object : Runnable {
@@ -232,6 +240,8 @@ class NotebookPane(
     init {
         canvasView.compositor = TileCompositor(cache, density) { p -> editor.pages.value.firstOrNull { it.id == p } }
         canvasView.live = live
+        canvasView.zoom = zoomView
+        live.projectionProvider = { zoomView.projection() }
         canvasView.overlay = { selectionUi.draw(it); guides.draw(it) }
         live.viewportProvider = { viewport }
         live.layoutProvider = { layout }
@@ -243,6 +253,7 @@ class NotebookPane(
         scope.launch {
             editor.changes.collect { c ->
                 scheduler.invalidate(c.page, c.dirty)
+                if (zoomView.isOpen) zoomScheduler.invalidate(c.page, c.dirty)
                 canvasView.invalidate()
                 selection.refresh()     // undo / redo may have removed the selected items
             }
@@ -270,6 +281,9 @@ class NotebookPane(
 
     private fun publish() {
         reportGrid()
+        zoomView.viewport = viewport
+        zoomView.layout = layout
+        syncZoomSize()
         canvasView.viewport = viewport
         canvasView.layout = layout
         canvasView.addCard = addCard
@@ -299,7 +313,9 @@ class NotebookPane(
         } else {
             0f
         }
-        return vp.panBy(dxPx, dyPx, layout, extra)
+        // The zoom window covers the bottom third: the last lines of a page must be scrollable above it.
+        val zoomExtra = if (zoomView.isOpen) zoomView.region.height() / vp.scale else 0f
+        return vp.panBy(dxPx, dyPx, layout, extra + zoomExtra)
     }
 
     /** The page list changed (insert, delete, move, template): rebuild the layout and keep the page in view where it was. */
@@ -321,6 +337,7 @@ class NotebookPane(
         if (addCard && layout.pageCount != notifiedCount) addCard = false
         publish()
         requestTiles()
+        refollowZoomPage()
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -341,9 +358,10 @@ class NotebookPane(
             }
         }
         viewport = vp
+        zoomView.dock(w, h)
         publish()
         requestTiles()
-        driver.setLimits(android.graphics.Rect(0, 0, w, h), host.excludeRects())
+        applyDriverLimits()
         updateDriverInk()
         if (!attached) {
             attached = true
@@ -369,6 +387,7 @@ class NotebookPane(
         if (released || viewport.widthPx == 0) return
         ensureVisibleLoaded()
         scheduler.request(viewport, layout)
+        zoomView.zoomViewport()?.let { zoomScheduler.request(it, layout) }
     }
 
     private fun ensureVisibleLoaded() {
@@ -405,6 +424,7 @@ class NotebookPane(
     private fun onTileReady() {
         canvasView.invalidate()
         checkOverlay()
+        checkZoomRefresh(force = false)
     }
 
     /** Fraction of the visible tiles that are fresh, and tiles in flight (debug HUD). */
@@ -450,17 +470,30 @@ class NotebookPane(
                 panDy = 0f
                 edgeBack = addCard || PageTurn.atEdge(viewport, layout, -1)
                 edgeForward = addCard || PageTurn.atEdge(viewport, layout, 1)
+                zoomGesture = zoomGestureAt(localX(g.x), localY(g.y))
+                if (zoomGesture == ZoomGesture.BOX) noteBoxRefresh()
                 beginFinger()
             }
-            is FingerGesture.PinchStart -> beginFinger()
-            is FingerGesture.Pan -> {
-                panDx += g.dx
-                panDy += g.dy
-                if (!addCard) setViewport(panned(g.dx, g.dy), delayTiles = false)
+            is FingerGesture.PinchStart -> {
+                zoomGesture = if (zoomView.contains(localX(g.fx), localY(g.fy))) ZoomGesture.SWALLOW else ZoomGesture.NONE
+                beginFinger()
             }
-            is FingerGesture.PanEnd -> if (!(layoutMode == PageLayoutMode.SINGLE && swipeEnded(g.vx))) scheduleEndFinger()
-            FingerGesture.PinchEnd, FingerGesture.Cancel -> scheduleEndFinger()
-            is FingerGesture.Pinch -> {
+            is FingerGesture.Pan -> when (zoomGesture) {
+                ZoomGesture.BOX -> dragZoomBox(g.dx, g.dy)
+                ZoomGesture.SWALLOW -> Unit
+                ZoomGesture.NONE -> {
+                    panDx += g.dx
+                    panDy += g.dy
+                    if (!addCard) setViewport(panned(g.dx, g.dy), delayTiles = false)
+                }
+            }
+            is FingerGesture.PanEnd -> when (zoomGesture) {
+                ZoomGesture.BOX -> { zoomGesture = ZoomGesture.NONE; noteBoxRefresh(); onZoomMoved(); scheduleEndFinger() }
+                ZoomGesture.SWALLOW -> { zoomGesture = ZoomGesture.NONE; scheduleEndFinger() }
+                ZoomGesture.NONE -> if (!(layoutMode == PageLayoutMode.SINGLE && swipeEnded(g.vx))) scheduleEndFinger()
+            }
+            FingerGesture.PinchEnd, FingerGesture.Cancel -> { zoomGesture = ZoomGesture.NONE; scheduleEndFinger() }
+            is FingerGesture.Pinch -> if (zoomGesture == ZoomGesture.NONE) {
                 val fx = localX(g.fx)
                 val fy = localY(g.fy)
                 setViewport(panned(g.dx, g.dy, viewport.zoomAround(g.scale, fx, fy)), delayTiles = true)
@@ -475,6 +508,10 @@ class NotebookPane(
             1 -> {
                 val x = localX(g.x)
                 val y = localY(g.y)
+                if (zoomView.contains(x, y)) {
+                    zoomView.controlAt(x, y)?.let(::onZoomControl)
+                    return
+                }
                 if (objects.editingText) { objects.finishTextEdit(); return }
                 if (objects.onTap(x, y)) return
                 if (selection.selection.value != null) selection.clear()
@@ -605,7 +642,15 @@ class NotebookPane(
             deps.toolController.temporaryTool(ToolKind.LASSO)
         }
         val vp = viewport
-        val hit = PaneCoords.toPage(vp, layout, x, y)
+        // With the zoom window open the pen writes into its writing area only, and points map through the box.
+        val zmap = zoomView.pointMap()
+        val hit = if (zmap == null) {
+            PaneCoords.toPage(vp, layout, x, y)
+        } else if (zoomView.writing.contains(x, y)) {
+            zoomView.state?.let { st -> zmap.map(x, y).let { PagePoint(st.page, it.x, it.y) } }
+        } else {
+            null
+        }
         val content = hit?.let { editor.content(it.page) }
         val info = hit?.let { h -> editor.pages.value.firstOrNull { it.id == h.page } }
         if (hit == null || content == null || info == null) {
@@ -615,11 +660,14 @@ class NotebookPane(
         strokeViewport = vp
         strokeFrame = layout.frameOf(hit.page)
         strokePage = hit.page
+        strokeMap = zmap
+        zoomBounds = Rect(hit.x, hit.y, hit.x, hit.y)
+        zoomAdvance = zmap != null && deps.toolController.state.value.preset().kind.let { it == ToolKind.PEN || it == ToolKind.HIGHLIGHTER }
         sessionViaDriver = viaDriver
         var preset = deps.toolController.state.value.preset()
         // A pen-down on the selection's box or a handle drags the selection whatever the tool is; elsewhere it ends the selection.
         if (selection.selection.value != null) {
-            if (selectionUi.hits(hit.page, x, y)) {
+            if (zmap == null && selectionUi.hits(hit.page, x, y)) {
                 preset = ToolPreset(ToolKind.LASSO, lassoMode = deps.toolController.baseState().lassoMode)
             } else if (preset.kind != ToolKind.LASSO) {
                 selection.clear()
@@ -630,7 +678,7 @@ class NotebookPane(
             editor = editor,
             page = hit.page,
             pageBounds = info.height?.let { Rect(0f, 0f, info.width, it) },
-            pxPerPt = vp.scale,
+            pxPerPt = if (zmap != null) zoomView.scale else vp.scale,
             preview = live,
             settings = ToolSettings(
                 holdMs, (preset.eraserRadiusDp ?: 0f) * density,
@@ -668,8 +716,9 @@ class NotebookPane(
         for ((i, p) in points.withIndex()) {
             val sx = xs?.get(i)?.first ?: lastX
             val sy = xs?.get(i)?.second ?: lastY
-            val pt = PaneCoords.toPageIn(strokeViewport, strokeFrame, sx, sy)
+            val pt = strokePoint(sx, sy)
             out.add(InkPoint(pt.x, pt.y, p.pressure, p.tiltX, p.tiltY, p.tMs))
+            growZoomBounds(pt)
             growBounds(sx, sy)
         }
         lastLocalX = lastX
@@ -708,7 +757,8 @@ class NotebookPane(
         session = null
         main.removeCallbacks(pollRunnable)
         growBounds(x, y)
-        val pt = PaneCoords.toPageIn(strokeViewport, strokeFrame, x, y)
+        val pt = strokePoint(x, y)
+        growZoomBounds(pt)
         val t0 = SystemClock.uptimeMillis()
         s.end(InkPoint(pt.x, pt.y, pressure, 0f, 0f, tMs))
         lastUpToModelMs = SystemClock.uptimeMillis() - t0
@@ -727,6 +777,7 @@ class NotebookPane(
         selStartDirty = null
         if (page != null && rect != null) afterCommit(page, rect, viaDriver)
         leaveAdjust()
+        if (strokeMap != null) afterZoomStroke()
     }
 
     private fun cancelPen() {
@@ -735,6 +786,7 @@ class NotebookPane(
         main.removeCallbacks(pollRunnable)
         s.cancel()
         live.discardCurrent()
+        strokeMap = null
         leaveAdjust()
         if (!sessionViaDriver) deps.epd.releaseFast(INK_OWNER)
         activeCtx?.constraint = false
@@ -767,10 +819,11 @@ class NotebookPane(
         val f = strokeFrame
         val s = vp.scale
         // Screen rect → page rect, to ask whether the tiles under it were re-rendered.
-        val pageRect = Rect(
-            screenRect.left / s + vp.scrollX - f.l, screenRect.top / s + vp.scrollY - f.t,
-            screenRect.right / s + vp.scrollX - f.l, screenRect.bottom / s + vp.scrollY - f.t,
-        )
+        val pageRect = strokeMap?.mapRect(Rect(screenRect.left.toFloat(), screenRect.top.toFloat(), screenRect.right.toFloat(), screenRect.bottom.toFloat()))
+            ?: Rect(
+                screenRect.left / s + vp.scrollX - f.l, screenRect.top / s + vp.scrollY - f.t,
+                screenRect.right / s + vp.scrollX - f.l, screenRect.bottom / s + vp.scrollY - f.t,
+            )
         overlayRect = if (overlayPage == page) overlayRect.union(pageRect) else pageRect
         overlayPage = page
         overlayDeadline = SystemClock.uptimeMillis() + OVERLAY_MAX_MS
@@ -787,9 +840,9 @@ class NotebookPane(
     private fun overlayFresh(): Boolean {
         val page = overlayPage ?: return true
         val info = editor.pages.value.firstOrNull { it.id == page } ?: return true
-        val level = Viewport.levelFor(viewport.scale)
         val bounds = info.height?.let { Rect(0f, 0f, info.width, it) }
-        return TileGeometry.cover(page, level, overlayRect, bounds).all { cache.isFresh(it) }
+        val levels = listOfNotNull(Viewport.levelFor(viewport.scale), zoomView.zoomViewport()?.let { Viewport.levelFor(it.scale) })
+        return levels.all { level -> TileGeometry.cover(page, level, overlayRect, bounds).all { cache.isFresh(it) } }
     }
 
     private fun checkOverlay() {
@@ -814,11 +867,16 @@ class NotebookPane(
         refreshRect = null
         refreshFirstAt = 0L
         refreshAfterDriver = false
+        val box = boxRefresh
+        boxRefresh = null
         rect.intersect(0, 0, canvasView.width, canvasView.height)
         if (rect.isEmpty) return
         host.arbiter.block(this, BlockReason.REFRESH, true)
         deps.epd.afterDraw(canvasView) {
             deps.epd.refresh(canvasView, EpdMode.GU, intArrayOf(rect.left, rect.top, rect.right, rect.bottom), EpdTiming.NOW)
+            if (box != null && box.intersect(0, 0, canvasView.width, canvasView.height)) {
+                deps.epd.refresh(canvasView, EpdMode.GU, intArrayOf(box.left, box.top, box.right, box.bottom), EpdTiming.NOW)
+            }
             host.arbiter.block(this, BlockReason.REFRESH, false)
         }
     }
@@ -898,7 +956,18 @@ class NotebookPane(
 
     override fun refreshExcludes() {
         if (viewport.widthPx == 0) return
-        driver.setLimits(android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx), host.excludeRects())
+        applyDriverLimits()
+    }
+
+    /** The pen driver inks in the whole pane, or only in the zoom window's writing area while that is open. */
+    private fun applyDriverLimits() {
+        val w = zoomView.writing
+        val area = if (zoomView.isOpen) {
+            android.graphics.Rect(floor(w.left).toInt(), ceil(w.top).toInt(), ceil(w.right).toInt(), ceil(w.bottom).toInt())
+        } else {
+            android.graphics.Rect(0, 0, viewport.widthPx, viewport.heightPx)
+        }
+        driver.setLimits(area, host.excludeRects())
     }
 
     // --- Hand tool: the pen pans instead of writing; the driver stays off so that the pen arrives as touch events ---
@@ -951,7 +1020,10 @@ class NotebookPane(
             null
         } else if (preset.kind == ToolKind.PEN || preset.kind == ToolKind.HIGHLIGHTER) {
             val pen = if (preset.kind == ToolKind.HIGHLIGHTER) PenType.HIGHLIGHTER else preset.pen ?: PenType.BALLPOINT
-            DriverInkPolicy.forPen(InkStyle(pen, preset.color ?: 0xFF000000.toInt(), preset.widthPt ?: DEFAULT_WIDTH_PT), viewport.scale)
+            DriverInkPolicy.forPen(
+                InkStyle(pen, preset.color ?: 0xFF000000.toInt(), preset.widthPt ?: DEFAULT_WIDTH_PT),
+                if (zoomView.isOpen) zoomView.scale else viewport.scale,
+            )
         } else {
             null    // erasers and other tools: the driver draws nothing
         }
@@ -1049,6 +1121,213 @@ class NotebookPane(
     }
 
     // ---------------------------------------------------------------------------------------------------------
+    // Zoom writing window (04 §3.10)
+    // ---------------------------------------------------------------------------------------------------------
+
+    private enum class ZoomGesture { NONE, BOX, SWALLOW }
+
+    private var zoomGesture = ZoomGesture.NONE
+    private var zoomRefreshPending = false
+    private var boxRefresh: android.graphics.Rect? = null
+    private val zoomRefreshFallback = Runnable { checkZoomRefresh(force = true) }
+
+    override val zoomWindowOpen: Boolean get() = zoomView.isOpen
+
+    /** The zoom window (tests and the debug HUD read its state). */
+    internal val zoomWindow: ZoomWindowView get() = zoomView
+
+    override fun zoomUnavailableReason(): String? {
+        val info = currentPage?.let { p -> editor.pages.value.firstOrNull { it.id == p } }
+        return if (info != null && info.height == null) whiteboardReason else null
+    }
+
+    override fun setZoomWindowOpen(open: Boolean): Boolean {
+        if (released) return false
+        if (!open) {
+            if (zoomView.isOpen) closeZoom()
+            return true
+        }
+        if (zoomView.isOpen) return true
+        if (Capability.ZOOM_WINDOW !in capabilities || viewport.widthPx == 0 || zoomView.writing.isEmpty) return false
+        val page = currentPage ?: return false
+        val info = editor.pages.value.firstOrNull { it.id == page } ?: return false
+        val height = info.height ?: return false
+        val w = zoomView.writing
+        val st = ZoomWindowState(page, Rect(0f, 0f, info.width, height), w.width() / viewport.scale, w.width() / w.height(), lineSpacingOf(info))
+        val f = layout.frameOf(page)
+        val vis = viewport.visibleDocRect()
+        st.moveTo(maxOf(vis.l - f.l, 0f) + st.marginPt, maxOf(vis.t - f.t, 0f) + st.marginPt)
+        cancelPen()
+        zoomView.state = st
+        zoomView.viewport = viewport
+        zoomView.layout = layout
+        if (editor.content(page) == null) {
+            scope.launch {
+                editor.ensureLoaded(page, null)
+                if (!released) requestTiles()
+            }
+        }
+        applyDriverLimits()
+        updateDriverInk()
+        host.onZoomWindowChanged(true)
+        keepBoxVisible()
+        queueRegionRefresh()
+        onZoomMoved()
+        return true
+    }
+
+    private fun closeZoom() {
+        noteBoxRefresh()
+        zoomView.state = null
+        zoomScheduler.cancelAll()
+        zoomRefreshPending = false
+        main.removeCallbacks(zoomRefreshFallback)
+        applyDriverLimits()
+        updateDriverInk()
+        queueRegionRefresh()
+        canvasView.invalidate()
+        host.onZoomWindowChanged(false)
+    }
+
+    private fun lineSpacingOf(info: PageInfo): Float? =
+        (info.background as? Background.Paper)?.takeIf { it.pattern == PaperPattern.LINED || it.pattern == PaperPattern.CORNELL }?.spacingPt
+
+    /** The writing area or the pane's zoom changed: the box gets the matching size. */
+    private fun syncZoomSize() {
+        val st = zoomView.state ?: return
+        val w = zoomView.writing
+        if (w.isEmpty || viewport.scale <= 0f) return
+        st.resize(w.width() / viewport.scale, w.width() / w.height())
+    }
+
+    /** The page list changed: the zoom window follows its page (new paper, new size) or closes when the page is gone. */
+    private fun refollowZoomPage() {
+        val st = zoomView.state ?: return
+        val info = editor.pages.value.firstOrNull { it.id == st.page }
+        val height = info?.height
+        if (info == null || height == null) {
+            closeZoom()
+            return
+        }
+        st.updatePage(Rect(0f, 0f, info.width, height), lineSpacingOf(info))
+        requestTiles()
+    }
+
+    private fun zoomGestureAt(x: Float, y: Float): ZoomGesture {
+        if (!zoomView.isOpen) return ZoomGesture.NONE
+        if (zoomView.contains(x, y)) return ZoomGesture.SWALLOW
+        val box = zoomView.boxOnScreen() ?: return ZoomGesture.NONE
+        val slop = BOX_GRAB_DP * density
+        return if (box.left - slop <= x && x <= box.right + slop && box.top - slop <= y && y <= box.bottom + slop) ZoomGesture.BOX else ZoomGesture.NONE
+    }
+
+    private fun dragZoomBox(dxPx: Float, dyPx: Float) {
+        val st = zoomView.state ?: return
+        val b = st.box
+        st.moveTo(b.l + dxPx / viewport.scale, b.t + dyPx / viewport.scale)
+        canvasView.invalidate()
+        main.removeCallbacks(requestTilesRunnable)
+        main.postDelayed(requestTilesRunnable, ZOOM_RENDER_DELAY_MS)
+    }
+
+    private fun onZoomControl(c: ZoomWindowView.Control) {
+        val st = zoomView.state ?: return
+        noteBoxRefresh()
+        when (c) {
+            ZoomWindowView.Control.BACK -> st.step(-ZoomWindowState.BUTTON_STEP_FRACTION)
+            ZoomWindowView.Control.FORWARD -> st.step(ZoomWindowState.BUTTON_STEP_FRACTION)
+            ZoomWindowView.Control.NEW_LINE -> st.newLine()
+            ZoomWindowView.Control.SMALLER -> st.setMagnification(st.magnification - ZoomWindowState.MAGNIFICATION_STEP)
+            ZoomWindowView.Control.LARGER -> st.setMagnification(st.magnification + ZoomWindowState.MAGNIFICATION_STEP)
+            ZoomWindowView.Control.CLOSE -> {
+                closeZoom()
+                return
+            }
+        }
+        keepBoxVisible()
+        onZoomMoved()
+        updateDriverInk()
+    }
+
+    /** The box moved or changed size: show the page area it covers once its tiles are there, then refresh the panel. */
+    private fun onZoomMoved() {
+        noteBoxRefresh()
+        canvasView.invalidate()
+        requestTiles()
+        zoomRefreshPending = true
+        main.removeCallbacks(zoomRefreshFallback)
+        main.postDelayed(zoomRefreshFallback, ZOOM_REFRESH_MAX_MS)
+        checkZoomRefresh(force = false)
+    }
+
+    private fun zoomTilesFresh(): Boolean {
+        val st = zoomView.state ?: return true
+        val zv = zoomView.zoomViewport() ?: return true
+        val info = editor.pages.value.firstOrNull { it.id == st.page } ?: return true
+        val bounds = info.height?.let { Rect(0f, 0f, info.width, it) }
+        return TileGeometry.cover(st.page, Viewport.levelFor(zv.scale), st.box, bounds).all { cache.isFresh(it) }
+    }
+
+    private fun checkZoomRefresh(force: Boolean) {
+        if (!zoomRefreshPending || !zoomView.isOpen) return
+        if (!force && !zoomTilesFresh()) return
+        zoomRefreshPending = false
+        main.removeCallbacks(zoomRefreshFallback)
+        queueRegionRefresh()
+    }
+
+    private fun queueRegionRefresh() {
+        val r = zoomView.region
+        val rect = android.graphics.Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt())
+        val pending = refreshRect
+        if (pending == null) refreshRect = rect else pending.union(rect)
+        if (refreshFirstAt == 0L) refreshFirstAt = SystemClock.uptimeMillis()
+        armRefresh(0L)
+    }
+
+    /** Remembers the dashed box's screen area (old and new position) for the next panel refresh. */
+    private fun noteBoxRefresh() {
+        val b = zoomView.boxOnScreen() ?: return
+        val pad = (BOX_GRAB_DP * density / 2).toInt()
+        val r = android.graphics.Rect(floor(b.left).toInt() - pad, floor(b.top).toInt() - pad, ceil(b.right).toInt() + pad, ceil(b.bottom).toInt() + pad)
+        val pending = boxRefresh
+        if (pending == null) boxRefresh = r else pending.union(r)
+    }
+
+    /** Scrolls the page so that the dashed box stays visible above the zoom window. */
+    private fun keepBoxVisible() {
+        val b = zoomView.boxOnScreen() ?: return
+        val m = BOX_MARGIN_DP * density
+        val availH = zoomView.region.top
+        var dx = 0f
+        var dy = 0f
+        if (b.height() > availH - 2 * m || b.top < m) dy = m - b.top
+        else if (b.bottom > availH - m) dy = availH - m - b.bottom
+        if (b.left < m) dx = m - b.left else if (b.right > viewport.widthPx - m) dx = viewport.widthPx - m - b.right
+        if (dx != 0f || dy != 0f) setViewport(panned(dx, dy), delayTiles = false)
+    }
+
+    private fun strokePoint(sx: Float, sy: Float): Vec2 = strokeMap?.map(sx, sy) ?: PaneCoords.toPageIn(strokeViewport, strokeFrame, sx, sy)
+
+    private fun growZoomBounds(p: Vec2) {
+        if (strokeMap == null) return
+        val b = zoomBounds
+        zoomBounds = Rect(minOf(b.l, p.x), minOf(b.t, p.y), maxOf(b.r, p.x), maxOf(b.b, p.y))
+    }
+
+    /** A stroke in the writing area was committed: the page shows it too, and the box may move on. */
+    private fun afterZoomStroke() {
+        strokeMap = null
+        noteBoxRefresh()
+        val advance = zoomAdvance
+        zoomAdvance = false
+        if (advance && zoomView.state?.advanceAfterStroke(zoomBounds) == true) {
+            keepBoxVisible()
+            onZoomMoved()
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
     // View state, lifecycle
     // ---------------------------------------------------------------------------------------------------------
 
@@ -1121,6 +1400,7 @@ class NotebookPane(
         deps.epd.releaseFast(FAST_OWNER)
         deps.epd.releaseFast(INK_OWNER)
         scheduler.cancelAll()
+        zoomScheduler.cancelAll()
         host.arbiter.detach(this)
         cache.clear()
     }
@@ -1139,6 +1419,9 @@ class NotebookPane(
         const val GO_TO_MARGIN_DP = 8f
         const val PAGE_TURN_SETTLE_MS = 250L
         const val DEFAULT_WIDTH_PT = 1.134f
+        const val BOX_GRAB_DP = 16f
+        const val BOX_MARGIN_DP = 12f
+        const val ZOOM_REFRESH_MAX_MS = 800L
         const val FAST_OWNER = "pane-finger"
         const val INK_OWNER = "pane-ink"
     }
