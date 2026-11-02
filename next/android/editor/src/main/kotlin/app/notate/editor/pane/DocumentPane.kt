@@ -54,6 +54,15 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
     fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
 
+    /** True while the zoom writing window is open in this pane. */
+    val zoomWindowOpen: Boolean get() = false
+
+    /** Why the zoom window cannot be opened now (e.g. the page is a whiteboard), or null when it can. */
+    fun zoomUnavailableReason(): String? = null
+
+    /** Opens or closes the zoom writing window; false when it cannot be opened. */
+    fun setZoomWindowOpen(open: Boolean): Boolean = false
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
 }
@@ -81,6 +90,9 @@ interface PaneHost {
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** The zoom window of the pane opened or closed (the toolbar's Zoom button follows). */
+    fun onZoomWindowChanged(open: Boolean) {}
 
     /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
     fun onPageGrid(hasGrid: Boolean) {}

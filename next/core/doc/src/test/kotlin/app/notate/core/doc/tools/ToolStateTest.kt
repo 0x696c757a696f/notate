@@ -72,4 +72,10 @@ class ToolStateTest {
         assertThat(s.pen.pen).isEqualTo(PenType.FOUNTAIN)
         assertThat(s.pen.pressure).isEqualTo(0.7f)
     }
+
+    @Test fun aSavedZoomWindowToolFallsBackToThePen() {
+        val kv = InMemoryKeyValueStore()
+        ToolController(Settings(kv)).select(ToolKind.ZOOM_WINDOW)
+        assertThat(ToolController(Settings(kv)).state.value.active).isEqualTo(ToolKind.PEN)
+    }
 }

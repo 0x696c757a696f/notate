@@ -52,6 +52,12 @@ class LiveInkLayer(
     var paintHiddenWhite: Boolean = true
 
     var viewportProvider: () -> Viewport = { Viewport(0f, 0f, 1f, 1f, 0, 0) }
+
+    /** A second place that shows the same gesture: [viewport] has its origin at ([offsetX], [offsetY]) of the host view (zoom window). */
+    class Projection(val viewport: Viewport, val offsetX: Float, val offsetY: Float)
+
+    /** The zoom writing window's projection while it is open, else null; invalidations cover it, too. */
+    var projectionProvider: () -> Projection? = { null }
     var layoutProvider: () -> DocumentLayout? = { null }
 
     private class Entry(val page: PageId, val item: Item, val hide: Boolean)
@@ -186,10 +192,15 @@ class LiveInkLayer(
         }
         val f = layout.frameOf(pg)
         val vp = viewportProvider()
+        invalidateIn(f, vp, 0f, 0f, both)
+        projectionProvider()?.let { invalidateIn(f, it.viewport, it.offsetX, it.offsetY, both) }
+    }
+
+    private fun invalidateIn(f: Rect, vp: Viewport, ox: Float, oy: Float, r: Rect) {
         val s = vp.scale
         host.invalidate(
-            floor((f.l + both.l - vp.scrollX) * s).toInt() - 2, floor((f.t + both.t - vp.scrollY) * s).toInt() - 2,
-            ceil((f.l + both.r - vp.scrollX) * s).toInt() + 2, ceil((f.t + both.b - vp.scrollY) * s).toInt() + 2,
+            floor((f.l + r.l - vp.scrollX) * s + ox).toInt() - 2, floor((f.t + r.t - vp.scrollY) * s + oy).toInt() - 2,
+            ceil((f.l + r.r - vp.scrollX) * s + ox).toInt() + 2, ceil((f.t + r.b - vp.scrollY) * s + oy).toInt() + 2,
         )
     }
 

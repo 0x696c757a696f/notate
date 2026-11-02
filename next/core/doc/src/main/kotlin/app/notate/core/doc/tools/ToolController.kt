@@ -51,7 +51,9 @@ class ToolController(private val settings: Settings) {
 
     private fun load(): ToolState {
         val s = settings.toolStateJson.value ?: return ToolState.defaults()
-        return runCatching { json.decodeFromString(ToolState.serializer(), s) }.getOrNull() ?: ToolState.defaults()
+        val loaded = runCatching { json.decodeFromString(ToolState.serializer(), s) }.getOrNull() ?: return ToolState.defaults()
+        // The zoom window is a toggle now, not a tool; a state saved while it was selectable falls back to the pen.
+        return if (loaded.active == ToolKind.ZOOM_WINDOW) loaded.copy(active = ToolKind.PEN) else loaded
     }
 
     private companion object { val json = Json { ignoreUnknownKeys = true; encodeDefaults = true } }
