@@ -13,7 +13,9 @@ import app.notate.core.doc.layout.Viewport
 import app.notate.core.doc.registry.DocumentHandle
 import app.notate.core.doc.settings.Tap2Action
 import app.notate.core.doc.settings.Tap3Action
+import app.notate.core.doc.tools.GridSnapper
 import app.notate.core.doc.tools.PenSession
+import app.notate.core.doc.tools.ShapeDragSession
 import app.notate.core.doc.tools.ToolContext
 import app.notate.core.doc.tools.ToolSession
 import app.notate.core.doc.tools.ToolSessionFactory
@@ -104,6 +106,14 @@ class NotebookPane(
         if (deps.device.hasRawDrawing) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val penMode: InputPenMode = InputPenMode.WRITE
+    override val takesConstraintFinger: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
+
+    override fun onConstraint(on: Boolean) {
+        val ctx = activeCtx ?: return
+        if (ctx.constraint == on) return
+        ctx.constraint = on
+        (session as? ShapeDragSession)?.reapplyConstraint()
+    }
 
     override var layoutMode: PageLayoutMode = editor.meta.value.view?.layout ?: deps.settings.pageLayout.value
         private set
@@ -145,11 +155,16 @@ class NotebookPane(
     private var lastLocalX = 0f
     private var lastLocalY = 0f
     private var lastPoint: InkPoint? = null
+    private var activeCtx: ToolContext? = null
+    private var adjustSoftware = false
     private var strokeBounds: android.graphics.Rect? = null
     private val pollRunnable = object : Runnable {
         override fun run() {
             val s = session ?: return
-            (s as? PenSession)?.poll()
+            (s as? PenSession)?.let {
+                it.poll()
+                if (it.isAdjusting && sessionViaDriver) enterAdjust()
+            }
             main.postDelayed(this, POLL_MS)
         }
     }
@@ -192,7 +207,20 @@ class NotebookPane(
 
     private fun buildLayout() = DocumentLayout(editor.pages.value, layoutMode)
 
+    private var gridPage: PageId? = null
+
+    private fun reportGrid() {
+        val idx = layout.nearestIndex(viewport.scrollX + viewport.widthPx / viewport.scale / 2f, viewport.scrollY + viewport.heightPx / viewport.scale / 2f)
+        if (idx < 0) return
+        val id = layout.pageIdAt(idx)
+        if (id == gridPage) return
+        gridPage = id
+        val bg = editor.pages.value.firstOrNull { it.id == id }?.background
+        host.onPageGrid(GridSnapper(bg).available)
+    }
+
     private fun publish() {
+        reportGrid()
         canvasView.viewport = viewport
         canvasView.layout = layout
         canvasView.addCard = addCard
@@ -532,7 +560,9 @@ class NotebookPane(
             preview = live,
             settings = ToolSettings(holdMs, (preset.eraserRadiusDp ?: 0f) * density),
             clock = deps.clock,
+            background = info.background,
         )
+        activeCtx = ctx
         live.page = hit.page
         live.driverDraws = viaDriver && preset.kind.let { it == ToolKind.PEN || it == ToolKind.HIGHLIGHTER }
         val s = factory.create(preset, ctx)
@@ -565,6 +595,31 @@ class NotebookPane(
         s.move(out)
     }
 
+    /**
+     * A held shape replaced the stroke while the e-ink driver was inking it: hand the rest of the gesture to the software
+     * preview. The driver is blocked (its ink is cleared by one partial refresh) and the touch events carry the pen from here;
+     * the block lifts after pen-up.
+     */
+    private fun enterAdjust() {
+        sessionViaDriver = false
+        adjustSoftware = true
+        live.driverDraws = false
+        deps.epd.acquireFast(INK_OWNER)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, true)
+        strokeBounds?.let { r ->
+            val pending = refreshRect
+            if (pending == null) refreshRect = android.graphics.Rect(r) else pending.union(r)
+            if (refreshFirstAt == 0L) refreshFirstAt = SystemClock.uptimeMillis()
+            armRefresh(0L)
+        }
+    }
+
+    private fun leaveAdjust() {
+        if (!adjustSoftware) return
+        adjustSoftware = false
+        updateHandMode()
+    }
+
     private fun endPen(x: Float, y: Float, tMs: Long, pressure: Float) {
         val s = session ?: return
         session = null
@@ -577,10 +632,12 @@ class NotebookPane(
         lastUpAt = t0
         val viaDriver = sessionViaDriver
         if (!viaDriver) deps.epd.releaseFast(INK_OWNER)
+        activeCtx?.constraint = false
         restoreEraser()
         val page = strokePage
         val rect = strokeBounds
         if (page != null && rect != null) afterCommit(page, rect, viaDriver)
+        leaveAdjust()
     }
 
     private fun cancelPen() {
@@ -589,7 +646,9 @@ class NotebookPane(
         main.removeCallbacks(pollRunnable)
         s.cancel()
         live.discardCurrent()
+        leaveAdjust()
         if (!sessionViaDriver) deps.epd.releaseFast(INK_OWNER)
+        activeCtx?.constraint = false
         restoreEraser()
     }
 
@@ -701,6 +760,9 @@ class NotebookPane(
     // --- Hand tool: the pen pans instead of writing; the driver stays off so that the pen arrives as touch events ---
 
     private val handMode: Boolean get() = deps.toolController.baseState().active == ToolKind.HAND
+
+    /** The shape tool draws a software ghost, so the driver stays off for it (like the Hand tool). */
+    private val shapeMode: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
     private var handing = false
     private var handX = 0f
     private var handY = 0f
@@ -708,7 +770,7 @@ class NotebookPane(
     private fun updateHandMode() {
         val on = handMode
         if (!on && handing) endHand()
-        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on)
+        host.arbiter.block(this, BlockReason.TOOL_NEEDS_SOFTWARE, on || shapeMode || adjustSoftware)
     }
 
     private fun panWithPen(ev: PenEvent) {

@@ -55,4 +55,7 @@ interface PaneHost {
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
+    fun onPageGrid(hasGrid: Boolean) {}
 }
