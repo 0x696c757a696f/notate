@@ -29,7 +29,6 @@ import app.notate.core.model.PaperPattern
 import app.notate.editor.zoom.ZoomWindowView
 import app.notate.core.doc.tools.ToolSettings
 import app.notate.core.geometry.Rect
-import app.notate.core.geometry.Vec2
 import app.notate.core.ink.driver.DriverInkPolicy
 import app.notate.core.input.BlockReason
 import app.notate.core.input.EpdMode
