@@ -771,6 +771,13 @@ class WebPane(
     }
 
     private fun onHover(ev: PenEvent.Hover) {
+        // The pen is over the page right after a scroll: end the scroll's driver pause now instead of after the settle
+        // delay, so the driver is back before the nib lands. Otherwise a stroke started inside that window is written
+        // through touch events from start to end (the lag after scrolling).
+        if (fingerBusy && !ev.exit) {
+            main.removeCallbacks(endFingerRunnable)
+            endFinger()
+        }
         if (refreshRect == null || !refreshAfterDriver) return
         val waited = SystemClock.uptimeMillis() - refreshFirstAt
         when {
