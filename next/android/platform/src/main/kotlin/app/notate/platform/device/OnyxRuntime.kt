@@ -14,7 +14,10 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
 object OnyxRuntime {
     private const val TAG = "OnyxRuntime"
 
-    /** Call from `Application.onCreate` on Onyx devices (same sequence as the legacy app). Main thread only. */
+    /**
+     * Call first thing in `Application.onCreate` on Onyx devices, before any other SDK class is used (same sequence as the
+     * legacy app). Main thread only.
+     */
     fun init(app: Application) {
         runCatching { ResManager.init(app) }.onFailure { Log.w(TAG, "ResManager.init failed", it) }
         runCatching { RxBaseAction.init(app) }.onFailure { Log.w(TAG, "RxBaseAction.init failed", it) }

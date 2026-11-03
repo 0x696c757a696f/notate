@@ -288,7 +288,19 @@ class OnyxDriverPort(
         }
     }
 
-    private fun regionNote(): String = "limit=${currentLimit().flattenToString()} excl=${currentExclude().size}/${exclude.size}"
+    private fun regionNote(): String =
+        "limit=${currentLimit().flattenToString()} excl=${currentExclude().size}/${exclude.size} raw=${rawNote()}"
+
+    /**
+     * The limit as the SDK hands it to the native reader (digitizer units), and whether the raw-to-screen matrix exists.
+     * A raw rect equal to the screen rect, or no matrix, means the SDK's hidden-method lookups failed: the reader then
+     * drops every point as outside the region.
+     */
+    private fun rawNote(): String = runCatching {
+        val r = EpdController.mapToRawTouchPoint(view, android.graphics.RectF(currentLimit()))
+        val m = EpdController.getRawTouchPointToScreenMatrix()
+        "${r?.let { "${it.left.toInt()},${it.top.toInt()},${it.right.toInt()},${it.bottom.toInt()}" } ?: "null"} mx=${if (m != null) "ok" else "null"}"
+    }.getOrElse { "!${it.javaClass.simpleName}" }
 
     private fun applyInk() {
         val h = helper ?: return
