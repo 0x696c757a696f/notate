@@ -53,31 +53,42 @@ class OnyxDriverPort(
     private var lastTimestamp = -1L
 
     private val callbacks = java.util.concurrent.atomic.AtomicInteger()
+    private val pointCount = java.util.concurrent.atomic.AtomicInteger()
+
+    @Volatile
+    private var lastCallback = "-"
     private var openTries = 0
     private var openNote = "never opened"
 
     override fun debugStatus(): String =
-        "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries cb=${callbacks.get()} [$openNote]"
+        "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries " +
+            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote]"
+
+    /** Every SDK callback goes through here first, so `cb=0` means none of the eight methods was ever called. */
+    private fun seen(name: String) {
+        callbacks.incrementAndGet()
+        lastCallback = "$name@${Thread.currentThread().name}"
+    }
 
     private val callback = object : RawInputCallback() {
-        override fun onBeginRawDrawing(sideButton: Boolean, p: TouchPoint) = begin(p, sideButton)
-        override fun onEndRawDrawing(sideButton: Boolean, p: TouchPoint) = end(p, sideButton)
-        override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) = move(p)
-        override fun onRawDrawingTouchPointListReceived(list: TouchPointList) = moveAll(list)
-        override fun onBeginRawErasing(sideButton: Boolean, p: TouchPoint) = begin(p, true)
-        override fun onEndRawErasing(sideButton: Boolean, p: TouchPoint) = end(p, true)
-        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) = move(p)
-        override fun onRawErasingTouchPointListReceived(list: TouchPointList) = moveAll(list)
+        override fun onBeginRawDrawing(sideButton: Boolean, p: TouchPoint) { seen("beginDraw"); begin(p, sideButton) }
+        override fun onEndRawDrawing(sideButton: Boolean, p: TouchPoint) { seen("endDraw"); end(p, sideButton) }
+        override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) { seen("moveDraw"); move(p) }
+        override fun onRawDrawingTouchPointListReceived(list: TouchPointList) { seen("listDraw"); moveAll(list) }
+        override fun onBeginRawErasing(sideButton: Boolean, p: TouchPoint) { seen("beginErase"); begin(p, true) }
+        override fun onEndRawErasing(sideButton: Boolean, p: TouchPoint) { seen("endErase"); end(p, true) }
+        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) { seen("moveErase"); move(p) }
+        override fun onRawErasingTouchPointListReceived(list: TouchPointList) { seen("listErase"); moveAll(list) }
     }
 
     private fun begin(p: TouchPoint, eraser: Boolean) {
-        callbacks.incrementAndGet()
+        pointCount.incrementAndGet()
         lastTimestamp = p.timestamp
         enqueue(Op.Begin(point(p), eraser))
     }
 
     private fun move(p: TouchPoint) {
-        callbacks.incrementAndGet()
+        pointCount.incrementAndGet()
         if (p.timestamp <= lastTimestamp) return
         lastTimestamp = p.timestamp
         enqueue(Op.Move(point(p)))
@@ -146,13 +157,27 @@ class OnyxDriverPort(
 
     // --- DriverPort -------------------------------------------------------------------------------------
     override fun open() {
-        if (helper != null) return
         // Like the legacy canvas: no session while there is no surface; the pane re-opens when it is created.
         if (view is android.view.SurfaceView && !view.holder.surface.isValid) { openNote = "no surface yet"; return }
         openTries++
+        val existing = helper
+        if (existing != null) {
+            // Legacy openDriverSession: an existing helper gets its rect and raw drawing re-applied (the surface may be new).
+            try {
+                OnyxSystemHelper.ignoreSystemSideButton(view)
+                existing.setLimitRect(currentLimit(), exclude)
+                existing.openRawDrawing()
+                if (sfRender) existing.setSingleRegionMode()
+                EpdController.enterScribbleMode(view)
+                openNote = "re-open ok ${view.width}x${view.height}"
+            } catch (t: Throwable) {
+                Log.w(TAG, "re-open failed", t)
+                openNote = "re-open failed: ${t.javaClass.simpleName} ${t.message}".take(80)
+            }
+            return
+        }
         try {
-            // The editor surface is a plain View, so use the plain form that the legacy web overlay (also a plain View)
-            // has always used. The SurfaceView-only "SFTouchRender" mode (create(view, true, ...)) delivered no points here.
+            // Same form as the legacy canvas (SFTouchRender on a SurfaceView).
             val h = if (sfRender) TouchHelper.create(view, true, callback) else TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
@@ -186,21 +211,19 @@ class OnyxDriverPort(
         synchronized(lock) { queue.clear() }
     }
 
-    /** Which TouchHelper form the session uses; [reopen] alternates it so a deaf session tries the other one. */
-    var sfRender = true
-        private set
+    /** The TouchHelper form: the legacy canvas's SFTouchRender mode, fixed so every test run is comparable. */
+    val sfRender = true
 
     override fun reopen() {
         if (helper == null) return
         val wasActive = active
-        sfRender = !sfRender
-        Log.i(TAG, "reopen: sfRender=$sfRender")
         close()
         open()
         if (wasActive) setActive(true)
     }
 
     override fun setActive(on: Boolean) {
+        if (on && helper == null) open()
         val h = helper ?: return
         active = on
         try {

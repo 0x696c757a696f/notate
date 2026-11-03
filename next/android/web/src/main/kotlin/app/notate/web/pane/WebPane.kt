@@ -1017,6 +1017,7 @@ class WebPane(
         return listOf(
             "owner=${a.isOwner(this)} active=${a.isDriverActive(this)} suspended=${a.isSuspended(this)}",
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
+            "driver: ${driver.debugStatus()}",
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
             "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
         )
