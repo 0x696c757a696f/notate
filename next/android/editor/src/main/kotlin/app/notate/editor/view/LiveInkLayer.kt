@@ -112,11 +112,17 @@ class LiveInkLayer(
             ghost.forEach { overlay.add(Entry(pg, it, hide = false, clip = !unclippedGhost)) }
             stroke?.let { overlay.add(Entry(pg, it, hide = false)) }
         }
+        // A stroke the driver inked is on the panel already and nothing else of this gesture is visible: no redraw now.
+        val quiet = driverDraws && ghost.isEmpty() && hidden.isEmpty() && lasso == null && cursorRadius < 0f
         hidden.clear()
         ghost = emptyList()
         stroke = null
         lasso = null
         cursorRadius = -1f
+        if (quiet) {
+            lastBounds = Rect.EMPTY
+            return
+        }
         invalidateChanged()
     }
 
@@ -128,6 +134,12 @@ class LiveInkLayer(
         lasso = null
         cursorRadius = -1f
         invalidateChanged()
+    }
+
+    /** Like [releaseOverlay], without a redraw: the caller redraws later (the driver's ink shows the stroke meanwhile). */
+    fun releaseOverlaySilently() {
+        overlay.clear()
+        lastBounds = Rect.EMPTY
     }
 
     /** Drops everything at once: the tiles now show the result. */
