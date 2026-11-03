@@ -168,7 +168,7 @@ class OnyxDriverPort(
                 existing.setLimitRect(currentLimit(), currentExclude())
                 existing.openRawDrawing()
                 if (sfRender) existing.setSingleRegionMode()
-                EpdController.enterScribbleMode(view)
+                if (sfRender) EpdController.enterScribbleMode(view)
                 openNote = "re-open ok ${view.width}x${view.height} ${regionNote()}"
             } catch (t: Throwable) {
                 Log.w(TAG, "re-open failed", t)
@@ -185,7 +185,7 @@ class OnyxDriverPort(
             h.openRawDrawing()
             // The legacy canvas (SFTouchRender mode) needs this for fast stroke capture.
             if (sfRender) h.setSingleRegionMode()
-            EpdController.enterScribbleMode(view)
+            if (sfRender) EpdController.enterScribbleMode(view)
             openNote = "open ok ${view.width}x${view.height} ${regionNote()}"
         } catch (t: Throwable) {
             Log.e(TAG, "open failed", t)
@@ -212,7 +212,9 @@ class OnyxDriverPort(
     }
 
     /** The TouchHelper form: the legacy canvas's SFTouchRender mode, fixed so every test run is comparable. */
-    val sfRender = true
+    // Legacy forms: the note canvas (a SurfaceView) uses SFTouchRender + single-region mode; the web overlay (a plain View)
+    // uses TouchHelper.create(view, callback) with neither, and no scribble call at open.
+    val sfRender = view is android.view.SurfaceView
 
     override fun reopen() {
         if (helper == null) return
