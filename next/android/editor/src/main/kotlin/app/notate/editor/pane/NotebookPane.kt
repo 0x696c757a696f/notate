@@ -261,8 +261,18 @@ class NotebookPane(
         live.layoutProvider = { layout }
         canvasView.sizeListener = ::onViewSized
         canvasView.penSurface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: android.view.SurfaceHolder) { if (attached && !released) host.arbiter.reopen(this@NotebookPane) }
+            // surfaceChanged always follows surfaceCreated with the same size: reopen once per new surface or real size change,
+            // not twice (each reopen tears the raw-drawing session down).
+            private var surfaceW = -1
+            private var surfaceH = -1
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                val f = holder.surfaceFrame
+                surfaceW = f.width(); surfaceH = f.height()
+                if (attached && !released) host.arbiter.reopen(this@NotebookPane)
+            }
             override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                if (w == surfaceW && h == surfaceH) return
+                surfaceW = w; surfaceH = h
                 if (attached && !released) host.arbiter.reopen(this@NotebookPane)
             }
             override fun surfaceDestroyed(holder: android.view.SurfaceHolder) { if (attached && !released) host.arbiter.closeSession(this@NotebookPane) }
