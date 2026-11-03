@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 
 /** [KeyValueStore] backed by a map, for tests. */
 class InMemoryKeyValueStore : KeyValueStore {
-    val map = HashMap<String, String>()
+    val map: MutableMap<String, String> = java.util.concurrent.ConcurrentHashMap()
     private val _changes = MutableSharedFlow<String>(extraBufferCapacity = 64)
     override fun getString(k: String): String? = map[k]
     override fun putString(k: String, v: String?) {

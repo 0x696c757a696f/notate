@@ -64,6 +64,19 @@ class SandboxClientTest {
         assertThat(client.respond("https://example.com/x.js", "GET", emptyMap())).isNull()   // handed to the network
     }
 
+    @Test fun countsBlockedRequestsAndListsMissingResources() {
+        client.respond("https://example.com/a.js", "GET", emptyMap())
+        client.respond("https://example.com/b.js", "GET", emptyMap())
+        client.respond(origin + "nope.html", "GET", emptyMap())
+        client.respond(origin + "nope.html", "GET", emptyMap())
+        client.respond(origin + "css/book.css", "GET", emptyMap())
+        assertThat(client.blockedRequests).isEqualTo(2)
+        assertThat(client.failedResources).containsExactly("nope.html")
+        network = true
+        client.respond("https://example.com/c.js", "GET", emptyMap())
+        assertThat(client.blockedRequests).isEqualTo(2)       // allowed requests are not counted
+    }
+
     @Test fun anotherDocumentsOriginIsExternal() {
         assertThat(client.respond("https://zzzzzzzzzzzzzzzz.webdoc.notate/ch1.xhtml", "GET", emptyMap())!!.statusCode).isEqualTo(403)
     }

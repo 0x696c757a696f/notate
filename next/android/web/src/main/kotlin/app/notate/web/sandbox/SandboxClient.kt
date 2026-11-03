@@ -38,6 +38,20 @@ class SandboxClient(
         fun onRendererGone()
     }
 
+    private val statsLock = Any()
+    private var blocked = 0
+    private val failed = ArrayList<String>()
+
+    /** Requests to other origins refused since the main frame last started loading (R4-3 compatibility check). */
+    val blockedRequests: Int get() = synchronized(statsLock) { blocked }
+
+    /** Same-origin resources that were not found since the main frame last started loading (first [MAX_FAILED]). */
+    val failedResources: List<String> get() = synchronized(statsLock) { failed.toList() }
+
+    private fun noteBlocked() = synchronized(statsLock) { blocked++ }
+
+    private fun noteMissing(path: String) = synchronized(statsLock) { if (failed.size < MAX_FAILED && path !in failed) failed.add(path) }
+
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
         respond(request.url.toString(), request.method, request.requestHeaders, request.isForMainFrame)
 
@@ -46,13 +60,18 @@ class SandboxClient(
         if (WebOrigin.isSameOrigin(docId, url)) {
             return serve(url, method, headers?.entries?.firstOrNull { it.key.equals("Range", true) }?.value, mainFrame)
         }
-        return if (network()) null else empty(403, "Blocked offline")
+        if (network()) return null
+        noteBlocked()
+        return empty(403, "Blocked offline")
     }
 
     private fun serve(url: String, method: String, rangeHeader: String?, mainFrame: Boolean): WebResourceResponse {
         if (method != "GET" && method != "HEAD") return empty(405, "Method Not Allowed")
         val path = url.substring(WebOrigin.base(docId).length).substringBefore('#').substringBefore('?')
-        val file = WebResourcePaths.resolve(root, path) ?: return empty(404, "Not Found")
+        val file = WebResourcePaths.resolve(root, path)?.takeIf { it.isFile } ?: run {
+            noteMissing(path)
+            return empty(404, "Not Found")
+        }
         val mime = WebResourcePaths.mimeType(file)
         // HTML and XHTML: the parser picks the charset from <meta> or the XML declaration.
         val encoding = if (WebResourcePaths.isTextual(mime) && mime != "text/html" && mime != "application/xhtml+xml") "utf-8" else null
@@ -106,7 +125,10 @@ class SandboxClient(
         return true
     }
 
-    override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) = listener.onPageStarted(url)
+    override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+        synchronized(statsLock) { blocked = 0; failed.clear() }
+        listener.onPageStarted(url)
+    }
 
     override fun onPageFinished(view: WebView, url: String) = listener.onPageFinished(url)
 
@@ -131,5 +153,9 @@ class SandboxClient(
             if (n > 0) remaining -= n
             return n
         }
+    }
+
+    private companion object {
+        const val MAX_FAILED = 20
     }
 }

@@ -10,6 +10,27 @@
   var B = window.NotateBridge;
   var N = (window.__notate = { el: null, width: 0, reduce: false });
 
+  // Feature detection for the compatibility check (R4-3): remember what the page tries to use. Bits match WebBridge.FEATURE_*.
+  var F = 0;
+  function flag(bit) { if (!(F & bit)) { F |= bit; if (B && B.onFeatures) B.onFeatures(F); } }
+  try {
+    var sw = navigator.serviceWorker;
+    if (sw && sw.register) { var reg = sw.register; sw.register = function () { flag(1); return reg.apply(this, arguments); }; }
+  } catch (e) {}
+  try {
+    var gc = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (t) { if (/webgl/i.test(String(t))) flag(2); return gc.apply(this, arguments); };
+  } catch (e) {}
+  try {
+    if (window.WebAssembly) {
+      ['instantiate', 'compile', 'instantiateStreaming', 'compileStreaming'].forEach(function (n) {
+        var f = WebAssembly[n];
+        if (f) WebAssembly[n] = function () { flag(4); return f.apply(this, arguments); };
+      });
+    }
+  } catch (e) {}
+  function scanModules() { try { if (document.querySelector('script[type=module]')) flag(8); } catch (e) {} }
+
   function rootEl() { return document.scrollingElement || document.documentElement; }
 
   function lockWidth(w) {
@@ -50,6 +71,7 @@
   function report() {
     raf = 0;
     if (!B) return;
+    scanModules();
     var e = N.el || (N.el = pick());
     var inner = e !== rootEl();
     var w = inner ? e.scrollWidth : Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
