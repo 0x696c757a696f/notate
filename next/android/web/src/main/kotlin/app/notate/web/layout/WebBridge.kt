@@ -31,10 +31,15 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
         @JavascriptInterface
         fun onScroll(x: Float, y: Float, contentWidth: Float, contentHeight: Float) {
             if (!x.isFinite() || !y.isFinite() || !contentWidth.isFinite() || !contentHeight.isFinite()) return
+            val w = contentWidth.coerceIn(0f, MAX_CSS)
+            val h = contentHeight.coerceIn(0f, MAX_CSS)
+            // The page reports after every DOM mutation, resize and scroll event; most reports change nothing. Each report
+            // makes the pane resync (and a real move pauses the pen driver), so pass on only actual changes.
+            if (x == innerX && y == innerY && w == contentWidthCss && h == contentHeightCss) return
             innerX = x
             innerY = y
-            contentWidthCss = contentWidth.coerceIn(0f, MAX_CSS)
-            contentHeightCss = contentHeight.coerceIn(0f, MAX_CSS)
+            contentWidthCss = w
+            contentHeightCss = h
             webView.post { listener.onScrolled() }
         }
 

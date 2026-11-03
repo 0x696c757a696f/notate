@@ -195,6 +195,12 @@ class WebPane(
     private var refreshRect: android.graphics.Rect? = null
     private var refreshFirstAt = 0L
     private var refreshAfterDriver = false
+    /** The overlay's last frame lacks committed driver strokes (the driver's ink shows them); redrawn with the refresh. */
+    private var overlayStale = false
+    private var inkedByDriver = 0
+    private var inkedByTouch = 0
+    private var refreshes = 0
+    private var deferOwnCommitUntil = 0L
     private val refreshRunnable = Runnable { tryRefresh() }
     private var fingerBusy = false
     private val endFingerRunnable = Runnable { endFinger() }
@@ -243,7 +249,9 @@ class WebPane(
 
         scope.launch {
             editor.changes.collect {
-                overlay.invalidate()
+                // The driver already shows a stroke it inked: redrawing the overlay now would put a window frame (overlay +
+                // WebView) on the panel between two strokes. The overlay is redrawn with the post-writing refresh instead.
+                if (SystemClock.uptimeMillis() < deferOwnCommitUntil) overlayStale = true else overlay.invalidate()
                 updateBanner()
             }
         }
@@ -488,21 +496,36 @@ class WebPane(
         val vp = Viewport(t.scrollXPx / pxPerPt, t.scrollYPx / pxPerPt, 1f, pxPerPt, w, h)
         viewport = vp
         val cur = current
+        var key: Any = vp
         if (cur != null) {
             // One page that always covers the content and everything visible, so any visible point belongs to it.
             val vis = vp.visibleDocRect()
             val pageW = max(max(cur.width, WebViewTransform.cssToPt(bridge.contentWidthCss)), vis.r)
             val pageH = max(WebViewTransform.cssToPt(max(bridge.contentHeightCss, webView.contentHeight.toFloat())), vis.b)
-            layout = DocumentLayout(listOf(cur.copy(width = pageW, height = pageH)), PageLayoutMode.CONTINUOUS)
+            key = listOf(vp, cur.id, pageW, pageH)
+            if (key != syncedKey) layout = DocumentLayout(listOf(cur.copy(width = pageW, height = pageH)), PageLayoutMode.CONTINUOUS)
         }
         overlay.viewport = vp
         overlay.layout = layout
-        overlay.invalidate()
+        // Pen-down calls this too: redrawing the overlay (and with it the WebView) for an unchanged view would put a window
+        // frame on the panel just as the driver starts inking.
+        if (key != syncedKey) {
+            syncedKey = key
+            overlay.invalidate()
+        }
     }
+
+    private var syncedKey: Any? = null
 
     private fun onContentMoved() {
         if (released) return
+        val before = viewport
         syncViewport()
+        // Only a real scroll or zoom pauses the pen driver. The bridge also reports when the content only grew (images,
+        // fonts, script-driven DOM changes); pausing for those switched the driver off for 700 ms and refreshed the whole
+        // pane while the user was writing, so the strokes in that window fell back to software ink.
+        val vp = viewport
+        if (vp.scrollX == before.scrollX && vp.scrollY == before.scrollY && vp.scale == before.scale) return
         beginFinger()
         scheduleEndFinger()
         main.removeCallbacks(saveViewRunnable)
@@ -650,6 +673,7 @@ class WebPane(
         strokeViewport = vp
         strokePage = page.id
         sessionViaDriver = viaDriver
+        if (viaDriver) inkedByDriver++ else inkedByTouch++
         val preset = deps.toolController.state.value.preset()
         val holdMs = deps.settings.holdShapeMs.value.takeIf { it > 0 }?.toLong()
         val ctx = ToolContext(
@@ -704,9 +728,16 @@ class WebPane(
         val viaDriver = sessionViaDriver
         if (!viaDriver) deps.epd.releaseFast(INK_OWNER)
         restoreEraser()
-        // The result is in the page content already and the overlay draws it: the live picture can go.
-        live.releaseOverlay()
-        overlay.invalidate()
+        // The result is in the page content already and the overlay draws it: the live picture can go. A stroke the driver
+        // inked is on the panel already; the overlay catches up with the post-writing refresh (no frame between strokes).
+        if (live.driverDraws) {
+            live.releaseOverlaySilently()
+            overlayStale = true
+            deferOwnCommitUntil = SystemClock.uptimeMillis() + OWN_COMMIT_WINDOW_MS
+        } else {
+            live.releaseOverlay()
+            overlay.invalidate()
+        }
         updateBanner()
         strokeBounds?.let { afterCommit(it, viaDriver) }
     }
@@ -763,7 +794,12 @@ class WebPane(
         refreshAfterDriver = false
         rect.intersect(0, 0, overlay.width, overlay.height)
         if (rect.isEmpty) return
+        refreshes++
         host.arbiter.block(this, BlockReason.REFRESH, true)
+        if (overlayStale) {
+            overlayStale = false
+            overlay.invalidate()
+        }
         deps.epd.afterDraw(overlay) {
             deps.epd.refresh(overlay, EpdMode.GU, intArrayOf(rect.left, rect.top, rect.right, rect.bottom), EpdTiming.NOW)
             host.arbiter.block(this, BlockReason.REFRESH, false)
@@ -780,8 +816,10 @@ class WebPane(
         }
         if (refreshRect == null || !refreshAfterDriver) return
         // While the pen hovers the user is still writing: the refresh pauses the driver, so a stroke started during it
-        // would go through touch events and the ink would stall. Wait until the pen leaves (or stops reporting).
-        if (ev.exit) armRefresh(0L) else armRefresh(HOVER_QUIET_MS)
+        // would go through touch events and the ink would stall. Wait until the pen has been away for a while (as the legacy
+        // canvas: 2 s after hover exit, cancelled by any hover). Lifting the pen between two words is a short hover exit, so
+        // refreshing at once on exit paused the driver right under the next word's first stroke.
+        if (ev.exit) armRefresh(HOVER_EXIT_REFRESH_MS) else armRefresh(HOVER_QUIET_MS)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -1029,6 +1067,7 @@ class WebPane(
             "driver: ${driver.debugStatus()}",
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
             "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
+            "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes",
         )
     }
 
@@ -1050,7 +1089,12 @@ class WebPane(
     private companion object {
         const val TAG = "WebPane"
         const val POLL_MS = 50L
-        const val HOVER_QUIET_MS = 600L
+        /** After a driver stroke with the pen still hovering (or no hover reported): wait this long before the refresh. */
+        const val HOVER_QUIET_MS = 3000L
+        /** After the pen left the screen: the legacy canvas's delay before the post-writing refresh. */
+        const val HOVER_EXIT_REFRESH_MS = 2000L
+        /** A content change this soon after a driver stroke's pen-up is that stroke's own commit. */
+        const val OWN_COMMIT_WINDOW_MS = 300L
         const val FINGER_SETTLE_MS = 700L
         const val VIEW_STATE_DELAY_MS = 1000L
         const val RESTORE_FIRST_MS = 150L

@@ -233,6 +233,11 @@ class NotebookPane(
         }
     }
 
+    // HUD counters: strokes inked by the driver vs. by touch events (laggy software ink), panel refreshes after strokes.
+    private var inkedByDriver = 0
+    private var inkedByTouch = 0
+    private var refreshes = 0
+
     // --- refresh state ---
     private var refreshRect: android.graphics.Rect? = null
     private var refreshFirstAt = 0L
@@ -256,8 +261,18 @@ class NotebookPane(
         live.layoutProvider = { layout }
         canvasView.sizeListener = ::onViewSized
         canvasView.penSurface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: android.view.SurfaceHolder) { if (attached && !released) host.arbiter.reopen(this@NotebookPane) }
+            // surfaceChanged always follows surfaceCreated with the same size: reopen once per new surface or real size change,
+            // not twice (each reopen tears the raw-drawing session down).
+            private var surfaceW = -1
+            private var surfaceH = -1
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                val f = holder.surfaceFrame
+                surfaceW = f.width(); surfaceH = f.height()
+                if (attached && !released) host.arbiter.reopen(this@NotebookPane)
+            }
             override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                if (w == surfaceW && h == surfaceH) return
+                surfaceW = w; surfaceH = h
                 if (attached && !released) host.arbiter.reopen(this@NotebookPane)
             }
             override fun surfaceDestroyed(holder: android.view.SurfaceHolder) { if (attached && !released) host.arbiter.closeSession(this@NotebookPane) }
@@ -694,6 +709,7 @@ class NotebookPane(
             return
         }
         note("stroke started (${if (viaDriver) "driver" else "touch"})")
+        if (viaDriver) inkedByDriver++ else inkedByTouch++
         strokeViewport = vp
         strokeFrame = layout.frameOf(hit.page)
         strokePage = hit.page
@@ -908,6 +924,7 @@ class NotebookPane(
         boxRefresh = null
         rect.intersect(0, 0, canvasView.width, canvasView.height)
         if (rect.isEmpty) return
+        refreshes++
         host.arbiter.block(this, BlockReason.REFRESH, true)
         deps.epd.afterDraw(canvasView) {
             deps.epd.refresh(canvasView, EpdMode.GU, intArrayOf(rect.left, rect.top, rect.right, rect.bottom), EpdTiming.NOW)
@@ -921,8 +938,10 @@ class NotebookPane(
     private fun onHover(ev: PenEvent.Hover) {
         if (refreshRect == null || !refreshAfterDriver) return
         // While the pen hovers the user is still writing: the refresh pauses the driver, so a stroke started during it
-        // would go through touch events and the ink would stall. Wait until the pen leaves (or stops reporting).
-        if (ev.exit) armRefresh(0L) else armRefresh(HOVER_QUIET_MS)
+        // would go through touch events and the ink would stall. Wait until the pen has been away for a while (as the legacy
+        // canvas: 2 s after hover exit, cancelled by any hover). Lifting the pen between two words is a short hover exit, so
+        // refreshing at once on exit paused the driver right under the next word's first stroke.
+        if (ev.exit) armRefresh(HOVER_EXIT_REFRESH_MS) else armRefresh(HOVER_QUIET_MS)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -1396,7 +1415,7 @@ class NotebookPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "level=${Viewport.levelFor(viewport.scale)} zoom=${"%.2f".format(viewport.zoom)}",
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
-            "pen strokes: driver=$rawBegins touch=$touchDowns",
+            "pen strokes: driver=$rawBegins touch=$touchDowns inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes",
             "last pen: $penNote",
             "driver: ${driver.debugStatus()}",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",
@@ -1451,7 +1470,10 @@ class NotebookPane(
         val REAPPLY_DRIVER_MS = longArrayOf(400L, 1500L)
         const val FINGER_SETTLE_MS = 700L
         const val POLL_MS = 50L
-        const val HOVER_QUIET_MS = 600L
+        /** After a driver stroke with the pen still hovering (or no hover reported): wait this long before the refresh. */
+        const val HOVER_QUIET_MS = 3000L
+        /** After the pen left the screen: the legacy canvas's delay before the post-writing refresh. */
+        const val HOVER_EXIT_REFRESH_MS = 2000L
         const val REFRESH_MAX_MS = 1500L
         const val OVERLAY_MAX_MS = 700L
         const val BOUNDS_PAD_DP = 6f
