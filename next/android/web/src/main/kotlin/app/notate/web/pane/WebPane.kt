@@ -228,7 +228,13 @@ class WebPane(
             isHorizontalScrollBarEnabled = false
             setBackgroundColor(Color.WHITE)
             setOnScrollChangeListener { _, _, _, _, _ -> onContentMoved() }
+            // A finger on the page (tap an answer, scroll, play an animation) wakes it up; see [updateFreeze].
+            setOnTouchListener { _, ev ->
+                if (ev.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_FINGER) thaw(FINGER_THAW_MS)
+                false
+            }
         }
+        WebTimers.register(this, webView)
         WebSandbox.configure(webView.settings, docSettings)
         appliedJs = docSettings.javascript
         appliedZoom = docSettings.textZoom
@@ -332,6 +338,7 @@ class WebPane(
         fitScale = if (percent > 0) percent / 100f * density else 0f
         if (percent > 0) webView.setInitialScale(max(1, (percent * zoom).roundToInt()))
         val url = WebOrigin.urlFor(docId, Uri.encode(bg.href, "/")) + (fragment?.let { "#" + Uri.encode(it) } ?: "")
+        pageBusy()      // a frozen WebView would not even parse the new page
         webView.loadUrl(url)
         updateBar()
         updateBanner()
@@ -427,11 +434,13 @@ class WebPane(
     }
 
     override fun onPageStarted(url: String) {
+        pageBusy()
         bridge.reset()
         bridge.inject(lockedWidthCss, docSettings.reduceMotion)
     }
 
     override fun onPageFinished(url: String) {
+        pageBusy()      // freeze once it stays quiet: scripts (math, images) usually finish right after load
         bridge.inject(lockedWidthCss, docSettings.reduceMotion)
         main.removeCallbacks(restoreRunnable)
         main.removeCallbacks(finalRestoreRunnable)
@@ -452,7 +461,10 @@ class WebPane(
 
     // --- WebBridge.Listener ---
 
-    override fun onScrolled() = onContentMoved()
+    override fun onScrolled() {
+        if (!pageSettled) pageBusy()    // still loading/laying out: push the freeze back
+        onContentMoved()
+    }
 
     override fun onLayoutReported(widthCss: Float, fixed: Boolean) {
         val page = current ?: return
@@ -485,6 +497,41 @@ class WebPane(
     private fun scrollYCss(): Float = transform().let { it.scrollYPx / it.scale }
 
     private fun zoomFactor(): Float = if (fitScale > 0f) (webScale() / fitScale).coerceIn(0.25f, 6f) else 1f
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Freezing the page while writing
+    // ---------------------------------------------------------------------------------------------------------
+    // A live page redraws itself (CSS/JS animations, widgets, script-driven DOM changes). Each redraw is a panel update that
+    // competes with the pen driver, so the driver's ink trails the nib. Like e-ink readers that write on a static page,
+    // the page is frozen ([WebTimers]) in Write mode once it has loaded and gone quiet; a finger on it, Interact mode, or a
+    // new chapter wakes it.
+
+    private var pageSettled = false
+    private var thawUntil = 0L
+    private val settleRunnable = Runnable { pageSettled = true; updateFreeze() }
+    private val freezeCheck = Runnable { updateFreeze() }
+
+    /** The page may change (loading, layout reports): wait for it to stay quiet before freezing again. */
+    private fun pageBusy() {
+        pageSettled = false
+        main.removeCallbacks(settleRunnable)
+        main.postDelayed(settleRunnable, SETTLE_MS)
+        updateFreeze()
+    }
+
+    private fun thaw(forMs: Long) {
+        thawUntil = max(thawUntil, SystemClock.uptimeMillis() + forMs)
+        updateFreeze()
+    }
+
+    private fun updateFreeze() {
+        if (released) return
+        val now = SystemClock.uptimeMillis()
+        val frozen = !interactive && pageSettled && current != null && now >= thawUntil
+        WebTimers.want(this, frozen)
+        main.removeCallbacks(freezeCheck)
+        if (!frozen && now < thawUntil) main.postDelayed(freezeCheck, thawUntil - now)
+    }
 
     /** Recomputes how page points map to the overlay and redraws the ink. */
     private fun syncViewport() {
@@ -834,6 +881,7 @@ class WebPane(
     }
 
     private fun updateMode() {
+        updateFreeze()
         val on = interactive
         host.arbiter.block(this, BlockReason.INTERACT_MODE, on)
         host.arbiter.block(this, BlockReason.READ_ONLY, docSettings.penMode == PenMode.READ_ONLY)
@@ -843,6 +891,7 @@ class WebPane(
     }
 
     private fun onMetaChanged() {
+        thaw(SETTLE_MS)
         val web = docSettings
         if (web.penMode != appliedPenMode) {
             appliedPenMode = web.penMode
@@ -1067,7 +1116,7 @@ class WebPane(
             "driver: ${driver.debugStatus()}",
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
             "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
-            "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes",
+            "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes frozen=${WebTimers.isPaused} settled=$pageSettled",
         )
     }
 
@@ -1080,6 +1129,7 @@ class WebPane(
         deps.epd.releaseFast(FAST_OWNER)
         deps.epd.releaseFast(INK_OWNER)
         host.arbiter.detach(this)
+        WebTimers.unregister(this)
         bridge.release()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
@@ -1099,6 +1149,10 @@ class WebPane(
         const val VIEW_STATE_DELAY_MS = 1000L
         const val RESTORE_FIRST_MS = 150L
         const val RESTORE_FINAL_MS = 800L
+        /** The page must stay quiet this long after loading before it is frozen for writing. */
+        const val SETTLE_MS = 1500L
+        /** A finger on the page keeps it live this long after the last touch. */
+        const val FINGER_THAW_MS = 5000L
         const val RELOAD_WIDTH_FRACTION = 0.05f
         const val BOUNDS_PAD_DP = 6f
         const val DEFAULT_WIDTH_PT = 1.134f
