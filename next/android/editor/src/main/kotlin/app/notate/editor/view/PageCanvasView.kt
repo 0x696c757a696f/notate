@@ -3,15 +3,29 @@ package app.notate.editor.view
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.Paint
 import android.graphics.RectF
-import android.view.View
+import android.view.SurfaceView
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import app.notate.core.doc.layout.DocumentLayout
 import app.notate.core.doc.layout.Viewport
 import app.notate.render.view.TileCompositor
 
 /** The page surface: tiles first, then the live ink layer. Draws what [NotebookPane] hands it; owns no state. */
-class PageCanvasView(context: Context) : View(context) {
+class PageCanvasView(context: Context) : FrameLayout(context) {
+    /**
+     * Transparent surface over the whole page that only the Onyx pen driver uses (its TouchHelper session lives on this
+     * SurfaceView, exactly as in the legacy canvas, which was itself a SurfaceView). It draws nothing; it must be on top,
+     * or its hole would punch the tiles out of the window.
+     */
+    val penSurface: SurfaceView = SurfaceView(context).apply {
+        setZOrderOnTop(true)
+        holder.setFormat(PixelFormat.TRANSPARENT)
+        isFocusable = false
+    }
+
     var viewport: Viewport = Viewport(0f, 0f, 1f, 1f, 0, 0)
     var layout: DocumentLayout? = null
     var compositor: TileCompositor? = null
@@ -39,6 +53,7 @@ class PageCanvasView(context: Context) : View(context) {
     private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF5F5F5F.toInt(); textSize = 14 * density; textAlign = Paint.Align.CENTER }
 
     init {
+        addView(penSurface, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         isFocusable = false
         setWillNotDraw(false)
     }
