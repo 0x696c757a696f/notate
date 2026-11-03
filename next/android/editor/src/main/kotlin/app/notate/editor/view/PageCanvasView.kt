@@ -53,9 +53,25 @@ class PageCanvasView(context: Context) : FrameLayout(context) {
     private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF5F5F5F.toInt(); textSize = 14 * density; textAlign = Paint.Align.CENTER }
 
     init {
+        // The legacy canvas always drew into its surface; a surface that never received a buffer may not be recognised by the
+        // Onyx driver. Post one fully transparent frame whenever the surface is (re)created or resized.
+        penSurface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) = postClearFrame(holder)
+            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) = postClearFrame(holder)
+            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+        })
         addView(penSurface, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         isFocusable = false
         setWillNotDraw(false)
+    }
+
+    private fun postClearFrame(holder: android.view.SurfaceHolder) {
+        val c = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(c) }
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
