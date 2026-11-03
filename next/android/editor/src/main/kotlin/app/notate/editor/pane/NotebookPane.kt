@@ -233,6 +233,11 @@ class NotebookPane(
         }
     }
 
+    // HUD counters: strokes inked by the driver vs. by touch events (laggy software ink), panel refreshes after strokes.
+    private var inkedByDriver = 0
+    private var inkedByTouch = 0
+    private var refreshes = 0
+
     // --- refresh state ---
     private var refreshRect: android.graphics.Rect? = null
     private var refreshFirstAt = 0L
@@ -694,6 +699,7 @@ class NotebookPane(
             return
         }
         note("stroke started (${if (viaDriver) "driver" else "touch"})")
+        if (viaDriver) inkedByDriver++ else inkedByTouch++
         strokeViewport = vp
         strokeFrame = layout.frameOf(hit.page)
         strokePage = hit.page
@@ -908,6 +914,7 @@ class NotebookPane(
         boxRefresh = null
         rect.intersect(0, 0, canvasView.width, canvasView.height)
         if (rect.isEmpty) return
+        refreshes++
         host.arbiter.block(this, BlockReason.REFRESH, true)
         deps.epd.afterDraw(canvasView) {
             deps.epd.refresh(canvasView, EpdMode.GU, intArrayOf(rect.left, rect.top, rect.right, rect.bottom), EpdTiming.NOW)
@@ -1396,7 +1403,7 @@ class NotebookPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "level=${Viewport.levelFor(viewport.scale)} zoom=${"%.2f".format(viewport.zoom)}",
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
-            "pen strokes: driver=$rawBegins touch=$touchDowns",
+            "pen strokes: driver=$rawBegins touch=$touchDowns inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes",
             "last pen: $penNote",
             "driver: ${driver.debugStatus()}",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",

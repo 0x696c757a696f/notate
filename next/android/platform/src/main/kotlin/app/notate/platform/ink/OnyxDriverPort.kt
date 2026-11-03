@@ -62,7 +62,55 @@ class OnyxDriverPort(
 
     override fun debugStatus(): String =
         "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries " +
-            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote] now:${regionNote()}" + sdkState()
+            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote] now:${regionNote()}" +
+            "\ntiming: ${timing()}" + sdkState()
+
+    // --- timing (HUD) -----------------------------------------------------------------------------------
+    // How late points reach the app and how often the session is switched off/on. All plain counters: cheap enough to
+    // keep on in every build, read only by the HUD.
+    @Volatile private var lagLastStroke = 0L      // max (callback time - point time) in the last stroke, ms
+    @Volatile private var lagMax = 0L
+    @Volatile private var lagStroke = 0L
+    @Volatile private var gapStroke = 0L          // max time between two SDK callbacks within a stroke, ms
+    @Volatile private var gapLastStroke = 0L
+    @Volatile private var lastCbAt = 0L
+    @Volatile private var lastDelta = 0L          // raw (now - point timestamp): shows whether the SDK's clock is uptime
+    private var drainLagLast = 0L                 // max enqueue -> main-thread drain delay in the last stroke, ms
+    private var drainLagStroke = 0L
+    private var drainLagMax = 0L
+    @Volatile private var firstEnqueuedAt = 0L
+    private var offCount = 0
+    private var onCount = 0
+    private var restarts = 0
+    private var lastOffAt = 0L
+
+    private fun timing(): String {
+        val now = android.os.SystemClock.uptimeMillis()
+        val off = if (lastOffAt == 0L) "-" else "${(now - lastOffAt) / 1000}s ago"
+        return "lag last=${lagLastStroke}ms max=${lagMax}ms gap=${gapLastStroke}ms main=${drainLagLast}ms(max $drainLagMax) " +
+            "on=$onCount off=$offCount restart=$restarts lastOff=$off dts=$lastDelta"
+    }
+
+    private fun noteCallback(p: TouchPoint?) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val prev = lastCbAt
+        lastCbAt = now
+        if (prev != 0L && now - prev > gapStroke) gapStroke = now - prev
+        if (p != null) {
+            val lag = now - p.timestamp
+            lastDelta = lag
+            if (lag in 0..60_000 && lag > lagStroke) lagStroke = lag
+        }
+    }
+
+    private fun strokeTimingStart() { lagStroke = 0L; gapStroke = 0L; lastCbAt = 0L; drainLagStroke = 0L }
+
+    private fun strokeTimingEnd() {
+        lagLastStroke = lagStroke
+        if (lagStroke > lagMax) lagMax = lagStroke
+        gapLastStroke = gapStroke
+        lastCbAt = 0L
+    }
 
     private var sdkDumpAt = 0L
     private var sdkDump = ""
@@ -95,12 +143,15 @@ class OnyxDriverPort(
     }
 
     private fun begin(p: TouchPoint, eraser: Boolean) {
+        strokeTimingStart()
+        noteCallback(p)
         pointCount.incrementAndGet()
         lastTimestamp = p.timestamp
         enqueue(Op.Begin(point(p), eraser))
     }
 
     private fun move(p: TouchPoint) {
+        noteCallback(p)
         pointCount.incrementAndGet()
         if (p.timestamp <= lastTimestamp) return
         lastTimestamp = p.timestamp
@@ -113,6 +164,7 @@ class OnyxDriverPort(
 
     private fun end(p: TouchPoint, eraser: Boolean) {
         move(p)
+        strokeTimingEnd()
         enqueue(Op.End(point(p), eraser))
     }
 
@@ -126,6 +178,7 @@ class OnyxDriverPort(
         val post: Boolean
         synchronized(lock) {
             queue.add(op)
+            if (!drainPosted) firstEnqueuedAt = android.os.SystemClock.uptimeMillis()
             post = !drainPosted
             drainPosted = true
         }
@@ -138,6 +191,13 @@ class OnyxDriverPort(
             ops = queue
             queue = ArrayList()
             drainPosted = false
+        }
+        val waited = android.os.SystemClock.uptimeMillis() - firstEnqueuedAt
+        if (waited > drainLagStroke) drainLagStroke = waited
+        if (ops.any { it is Op.End }) {
+            drainLagLast = drainLagStroke
+            if (drainLagStroke > drainLagMax) drainLagMax = drainLagStroke
+            drainLagStroke = 0L
         }
         var batch = ArrayList<RawPoint>()
         fun flushMoves() {
@@ -243,6 +303,7 @@ class OnyxDriverPort(
         active = on
         try {
             if (on) {
+                onCount++
                 h.setRawDrawingEnabled(true)
                 screenPosChanged()      // resume() just re-read the view's screen position: remember it for setLimits
                 h.setRawDrawingRenderEnabled(ink != null && !erasing)
@@ -252,6 +313,8 @@ class OnyxDriverPort(
                 EpdController.setScreenHandWritingPenState(view, EpdPenManager.PEN_DRAWING)
                 applyInk()
             } else {
+                offCount++
+                lastOffAt = android.os.SystemClock.uptimeMillis()
                 h.setRawDrawingRenderEnabled(false)
                 h.setRawDrawingEnabled(false)
                 EpdController.setScreenHandWritingPenState(view, EpdPenManager.PEN_PAUSE)
@@ -278,7 +341,7 @@ class OnyxDriverPort(
             // divider, rotation): the switch pauses the driver's ink and leaves scribble mode for a moment.
             val moved = screenPosChanged()
             val wasActive = active
-            if (wasActive && moved) h.setRawDrawingEnabled(false)
+            if (wasActive && moved) { restarts++; h.setRawDrawingEnabled(false) }
             h.setLimitRect(currentLimit(), sdkExclude())
             if (wasActive && moved) {
                 h.setRawDrawingEnabled(true)

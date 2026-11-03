@@ -6,7 +6,8 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Diagnostic: the last few warnings/errors this process wrote to logcat, plus anything tagged like the
  * Onyx pen stack. Shown in the debug HUD so SDK-side refusals are visible without adb.
- * Polls on a daemon thread every [PERIOD_MS]; [lines] is cheap and any-thread.
+ * Polls on a daemon thread every [PERIOD_MS] while the HUD asks for it; the thread ends once [lines] has not been called
+ * for [IDLE_STOP_MS] (each poll forks a logcat process: too costly to leave running while the user writes).
  */
 object SdkLogTail {
     private const val PERIOD_MS = 3000L
@@ -16,9 +17,12 @@ object SdkLogTail {
     private val LEVEL = Regex("^([VDIWEF])/([^(]+)\\(")
 
     private val latest = AtomicReference<List<String>>(listOf("(logcat: starting)"))
+    private const val IDLE_STOP_MS = 5000L
     @Volatile private var started = false
+    @Volatile private var lastAsked = 0L
 
     fun lines(): List<String> {
+        lastAsked = android.os.SystemClock.uptimeMillis()
         start()
         return latest.get()
     }
@@ -29,6 +33,10 @@ object SdkLogTail {
         started = true
         Thread({
             while (true) {
+                if (android.os.SystemClock.uptimeMillis() - lastAsked > IDLE_STOP_MS) {
+                    stopped()
+                    return@Thread
+                }
                 latest.set(read())
                 try {
                     Thread.sleep(PERIOD_MS)
@@ -38,6 +46,9 @@ object SdkLogTail {
             }
         }, "sdk-log-tail").apply { isDaemon = true }.start()
     }
+
+    @Synchronized
+    private fun stopped() { started = false }
 
     private fun read(): List<String> =
         try {
