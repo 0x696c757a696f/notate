@@ -62,7 +62,7 @@ class OnyxDriverPort(
 
     override fun debugStatus(): String =
         "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries " +
-            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote]"
+            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote] now:${regionNote()}"
 
     /** Every SDK callback goes through here first, so `cb=0` means none of the eight methods was ever called. */
     private fun seen(name: String) {
@@ -165,11 +165,11 @@ class OnyxDriverPort(
             // Legacy openDriverSession: an existing helper gets its rect and raw drawing re-applied (the surface may be new).
             try {
                 OnyxSystemHelper.ignoreSystemSideButton(view)
-                existing.setLimitRect(currentLimit(), exclude)
+                existing.setLimitRect(currentLimit(), currentExclude())
                 existing.openRawDrawing()
                 if (sfRender) existing.setSingleRegionMode()
                 EpdController.enterScribbleMode(view)
-                openNote = "re-open ok ${view.width}x${view.height}"
+                openNote = "re-open ok ${view.width}x${view.height} ${regionNote()}"
             } catch (t: Throwable) {
                 Log.w(TAG, "re-open failed", t)
                 openNote = "re-open failed: ${t.javaClass.simpleName} ${t.message}".take(80)
@@ -181,12 +181,12 @@ class OnyxDriverPort(
             val h = if (sfRender) TouchHelper.create(view, true, callback) else TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
-            h.setLimitRect(currentLimit(), exclude)
+            h.setLimitRect(currentLimit(), currentExclude())
             h.openRawDrawing()
             // The legacy canvas (SFTouchRender mode) needs this for fast stroke capture.
             if (sfRender) h.setSingleRegionMode()
             EpdController.enterScribbleMode(view)
-            openNote = "open ok ${view.width}x${view.height}"
+            openNote = "open ok ${view.width}x${view.height} ${regionNote()}"
         } catch (t: Throwable) {
             Log.e(TAG, "open failed", t)
             openNote = "open failed: ${t.javaClass.simpleName} ${t.message}".take(80)
@@ -261,7 +261,7 @@ class OnyxDriverPort(
             // the session deaf, which is what the first device test saw (driver=0 strokes).
             val wasActive = active
             if (wasActive) h.setRawDrawingEnabled(false)
-            h.setLimitRect(currentLimit(), this.exclude)
+            h.setLimitRect(currentLimit(), currentExclude())
             if (wasActive) {
                 h.setRawDrawingEnabled(true)
                 applyInk()
@@ -271,7 +271,22 @@ class OnyxDriverPort(
         }
     }
 
-    private fun currentLimit(): Rect = limit ?: Rect().also { view.getLocalVisibleRect(it) }
+    /** Never an empty rect: the SDK logs "Empty region detected when mapping" and drops every point for one. */
+    private fun currentLimit(): Rect {
+        val l = limit?.takeUnless { it.isEmpty } ?: Rect().also { view.getLocalVisibleRect(it) }
+        return if (l.isEmpty) Rect(0, 0, view.width, view.height) else l
+    }
+
+    /** Exclusion rects that are non-empty, inside the limit, and do not swallow it whole. */
+    private fun currentExclude(): List<Rect> {
+        val l = currentLimit()
+        return exclude.mapNotNull { r ->
+            val c = Rect(r)
+            if (c.intersect(l) && !c.isEmpty && !(c.contains(l))) c else null
+        }
+    }
+
+    private fun regionNote(): String = "limit=${currentLimit().flattenToString()} excl=${currentExclude().size}/${exclude.size}"
 
     private fun applyInk() {
         val h = helper ?: return
