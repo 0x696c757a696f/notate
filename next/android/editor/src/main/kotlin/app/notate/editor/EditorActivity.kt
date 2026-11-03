@@ -603,7 +603,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private fun hudLines(): List<String> {
         val p = pane ?: return listOf("(no pane)")
         val save = handle?.save?.state?.value
-        return p.debugLines() + "save=$save" + "touch: ${recentFingers.joinToString(" | ").ifEmpty { "-" }}"
+        return p.debugLines() + "save=$save" + "touch: ${recentFingers.joinToString(" | ").ifEmpty { "-" }}" +
+            app.notate.platform.log.SdkLogTail.lines()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
