@@ -1417,6 +1417,7 @@ class NotebookPane(
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
             "pen strokes: driver=$rawBegins touch=$touchDowns",
             "last pen: $penNote",
+            "driver: ${driver.debugStatus()}",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",
         )
     }
