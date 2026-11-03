@@ -52,6 +52,13 @@ class OnyxDriverPort(
     @Volatile
     private var lastTimestamp = -1L
 
+    private val callbacks = java.util.concurrent.atomic.AtomicInteger()
+    private var openTries = 0
+    private var openNote = "never opened"
+
+    override fun debugStatus(): String =
+        "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries cb=${callbacks.get()} [$openNote]"
+
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(sideButton: Boolean, p: TouchPoint) = begin(p, sideButton)
         override fun onEndRawDrawing(sideButton: Boolean, p: TouchPoint) = end(p, sideButton)
@@ -64,11 +71,13 @@ class OnyxDriverPort(
     }
 
     private fun begin(p: TouchPoint, eraser: Boolean) {
+        callbacks.incrementAndGet()
         lastTimestamp = p.timestamp
         enqueue(Op.Begin(point(p), eraser))
     }
 
     private fun move(p: TouchPoint) {
+        callbacks.incrementAndGet()
         if (p.timestamp <= lastTimestamp) return
         lastTimestamp = p.timestamp
         enqueue(Op.Move(point(p)))
@@ -139,7 +148,8 @@ class OnyxDriverPort(
     override fun open() {
         if (helper != null) return
         // Like the legacy canvas: no session while there is no surface; the pane re-opens when it is created.
-        if (view is android.view.SurfaceView && !view.holder.surface.isValid) return
+        if (view is android.view.SurfaceView && !view.holder.surface.isValid) { openNote = "no surface yet"; return }
+        openTries++
         try {
             // The editor surface is a plain View, so use the plain form that the legacy web overlay (also a plain View)
             // has always used. The SurfaceView-only "SFTouchRender" mode (create(view, true, ...)) delivered no points here.
@@ -151,8 +161,10 @@ class OnyxDriverPort(
             // The legacy canvas (SFTouchRender mode) needs this for fast stroke capture.
             if (sfRender) h.setSingleRegionMode()
             EpdController.enterScribbleMode(view)
+            openNote = "open ok ${view.width}x${view.height}"
         } catch (t: Throwable) {
             Log.e(TAG, "open failed", t)
+            openNote = "open failed: ${t.javaClass.simpleName} ${t.message}".take(80)
             helper = null
         }
     }

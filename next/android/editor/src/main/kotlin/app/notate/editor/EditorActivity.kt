@@ -169,6 +169,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         chrome.onFocusChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         hud = DebugHud(this) { hudLines() }
         chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (deps.device.isOnyx) app.notate.platform.device.OnyxRuntime.enterScribbleScheme(this)
         setContentView(chrome)
         scope.launch {
             combine(controller.workspace, controller.saveStates, controller.closing) { ws, st, cl -> Triple(ws, st, cl) }
