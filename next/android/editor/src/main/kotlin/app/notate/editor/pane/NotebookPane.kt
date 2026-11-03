@@ -938,8 +938,10 @@ class NotebookPane(
     private fun onHover(ev: PenEvent.Hover) {
         if (refreshRect == null || !refreshAfterDriver) return
         // While the pen hovers the user is still writing: the refresh pauses the driver, so a stroke started during it
-        // would go through touch events and the ink would stall. Wait until the pen leaves (or stops reporting).
-        if (ev.exit) armRefresh(0L) else armRefresh(HOVER_QUIET_MS)
+        // would go through touch events and the ink would stall. Wait until the pen has been away for a while (as the legacy
+        // canvas: 2 s after hover exit, cancelled by any hover). Lifting the pen between two words is a short hover exit, so
+        // refreshing at once on exit paused the driver right under the next word's first stroke.
+        if (ev.exit) armRefresh(HOVER_EXIT_REFRESH_MS) else armRefresh(HOVER_QUIET_MS)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -1468,7 +1470,10 @@ class NotebookPane(
         val REAPPLY_DRIVER_MS = longArrayOf(400L, 1500L)
         const val FINGER_SETTLE_MS = 700L
         const val POLL_MS = 50L
-        const val HOVER_QUIET_MS = 600L
+        /** After a driver stroke with the pen still hovering (or no hover reported): wait this long before the refresh. */
+        const val HOVER_QUIET_MS = 3000L
+        /** After the pen left the screen: the legacy canvas's delay before the post-writing refresh. */
+        const val HOVER_EXIT_REFRESH_MS = 2000L
         const val REFRESH_MAX_MS = 1500L
         const val OVERLAY_MAX_MS = 700L
         const val BOUNDS_PAD_DP = 6f
