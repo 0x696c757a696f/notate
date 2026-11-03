@@ -779,11 +779,9 @@ class WebPane(
             endFinger()
         }
         if (refreshRect == null || !refreshAfterDriver) return
-        val waited = SystemClock.uptimeMillis() - refreshFirstAt
-        when {
-            ev.exit -> armRefresh(0L)
-            waited < REFRESH_MAX_MS -> armRefresh(HOVER_QUIET_MS)
-        }
+        // While the pen hovers the user is still writing: the refresh pauses the driver, so a stroke started during it
+        // would go through touch events and the ink would stall. Wait until the pen leaves (or stops reporting).
+        if (ev.exit) armRefresh(0L) else armRefresh(HOVER_QUIET_MS)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -1052,8 +1050,7 @@ class WebPane(
     private companion object {
         const val TAG = "WebPane"
         const val POLL_MS = 50L
-        const val HOVER_QUIET_MS = 400L
-        const val REFRESH_MAX_MS = 1500L
+        const val HOVER_QUIET_MS = 600L
         const val FINGER_SETTLE_MS = 700L
         const val VIEW_STATE_DELAY_MS = 1000L
         const val RESTORE_FIRST_MS = 150L

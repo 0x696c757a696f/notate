@@ -920,11 +920,9 @@ class NotebookPane(
 
     private fun onHover(ev: PenEvent.Hover) {
         if (refreshRect == null || !refreshAfterDriver) return
-        val waited = SystemClock.uptimeMillis() - refreshFirstAt
-        when {
-            ev.exit -> armRefresh(0L)
-            waited < REFRESH_MAX_MS -> armRefresh(HOVER_QUIET_MS)
-        }
+        // While the pen hovers the user is still writing: the refresh pauses the driver, so a stroke started during it
+        // would go through touch events and the ink would stall. Wait until the pen leaves (or stops reporting).
+        if (ev.exit) armRefresh(0L) else armRefresh(HOVER_QUIET_MS)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -1453,7 +1451,7 @@ class NotebookPane(
         val REAPPLY_DRIVER_MS = longArrayOf(400L, 1500L)
         const val FINGER_SETTLE_MS = 700L
         const val POLL_MS = 50L
-        const val HOVER_QUIET_MS = 400L
+        const val HOVER_QUIET_MS = 600L
         const val REFRESH_MAX_MS = 1500L
         const val OVERLAY_MAX_MS = 700L
         const val BOUNDS_PAD_DP = 6f

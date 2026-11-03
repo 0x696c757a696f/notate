@@ -69,11 +69,9 @@ class TabStripView(context: Context, private val callbacks: Callbacks) : LinearL
         val next = ws.tabs.mapIndexed { i, t ->
             val status = when {
                 t.doc in closing -> context.getString(R.string.tab_saving)
-                else -> when (states[t.doc]) {
-                    is SaveState.Pending, SaveState.Writing -> "●"
-                    is SaveState.Error -> "!"
-                    else -> ""
-                }
+                // No mark for the routine write-behind after each stroke: it flipped twice per stroke and rebuilt the strip,
+                // i.e. a window relayout and a panel refresh while the next stroke was being written.
+                else -> if (states[t.doc] is SaveState.Error) "!" else ""
             }
             TabModel(shorten(t.title), t.kind, status, i == focused, i == other)
         }
