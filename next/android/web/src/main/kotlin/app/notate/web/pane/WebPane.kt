@@ -519,7 +519,13 @@ class WebPane(
 
     private fun onContentMoved() {
         if (released) return
+        val before = viewport
         syncViewport()
+        // Only a real scroll or zoom pauses the pen driver. The bridge also reports when the content only grew (images,
+        // fonts, script-driven DOM changes); pausing for those switched the driver off for 700 ms and refreshed the whole
+        // pane while the user was writing, so the strokes in that window fell back to software ink.
+        val vp = viewport
+        if (vp.scrollX == before.scrollX && vp.scrollY == before.scrollY && vp.scale == before.scale) return
         beginFinger()
         scheduleEndFinger()
         main.removeCallbacks(saveViewRunnable)
