@@ -566,6 +566,9 @@ class WebPane(
 
     private val driverActive: Boolean get() = driver !== NoDriverPort && host.arbiter.isDriverActive(this)
 
+    /** Strokes the driver has delivered. Until it delivers one, a driver that is "active" may be deaf, so touch events keep inking. */
+    private var rawBegins = 0
+
     override fun onPen(ev: PenEvent) {
         if (released) return
         if (ev is PenEvent.Hover) {
@@ -574,7 +577,7 @@ class WebPane(
         }
         // See NotebookPane.onPen: a touch-driven stroke goes on that way, and so does the first stroke after a focus switch.
         val touchStroke = session != null && !sessionViaDriver
-        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
+        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive && rawBegins > 0, touchStroke, ev)) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -592,6 +595,7 @@ class WebPane(
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
         if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
+        rawBegins++
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
