@@ -86,7 +86,13 @@ class LiveInkLayer(
 
     override fun show(p: Preview) {
         when (p) {
-            is Preview.LiveStroke -> stroke = Stroke(ItemId(-1), 0, p.style, p.points, ItemBounds.strokeBounds(p.points, p.style))
+            is Preview.LiveStroke -> {
+                stroke = Stroke(ItemId(-1), 0, p.style, p.points, ItemBounds.strokeBounds(p.points, p.style))
+                // The e-ink driver draws this stroke itself and [draw] skips it: nothing on screen changed. Redrawing the
+                // view under the pen would make the panel refresh that area over the driver's ink while the pen moves
+                // (visible lag and flicker). The stroke is repainted once, on [clear].
+                if (driverDraws) return
+            }
             is Preview.Ghost -> ghost = p.items
             is Preview.Hidden -> {
                 val c = page?.let(content)

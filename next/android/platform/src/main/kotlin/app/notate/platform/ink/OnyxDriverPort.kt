@@ -178,7 +178,7 @@ class OnyxDriverPort(
             // Legacy openDriverSession: an existing helper gets its rect and raw drawing re-applied (the surface may be new).
             try {
                 OnyxSystemHelper.ignoreSystemSideButton(view)
-                existing.setLimitRect(currentLimit(), currentExclude())
+                existing.setLimitRect(currentLimit(), sdkExclude())
                 existing.openRawDrawing()
                 if (sfRender) existing.setSingleRegionMode()
                 if (sfRender) EpdController.enterScribbleMode(view)
@@ -194,7 +194,7 @@ class OnyxDriverPort(
             val h = if (sfRender) TouchHelper.create(view, true, callback) else TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
-            h.setLimitRect(currentLimit(), currentExclude())
+            h.setLimitRect(currentLimit(), sdkExclude())
             h.openRawDrawing()
             // The legacy canvas (SFTouchRender mode) needs this for fast stroke capture.
             if (sfRender) h.setSingleRegionMode()
@@ -244,6 +244,7 @@ class OnyxDriverPort(
         try {
             if (on) {
                 h.setRawDrawingEnabled(true)
+                screenPosChanged()      // resume() just re-read the view's screen position: remember it for setLimits
                 h.setRawDrawingRenderEnabled(ink != null && !erasing)
                 // Legacy WebDriverPort does this on every switch-on: another pane may have left the pen out of scribble
                 // mode, and the call made in open() can come before the view is attached.
@@ -271,13 +272,15 @@ class OnyxDriverPort(
         this.exclude = exclude.map { Rect(it) }
         val h = helper ?: return
         try {
-            // The driver only picks up a new limit/exclude set when raw drawing restarts. Restart it the way the legacy
-            // arbiter does (switch off, set the rect, switch on). closeRawDrawing/openRawDrawing is avoided: it can leave
-            // the session deaf, which is what the first device test saw (driver=0 strokes).
+            // The SDK applies a new limit/exclude set at once (RawInputReader.setLimitRect passes it straight to the native
+            // reader and to the panel). What it only re-reads on resume() is the view's position on screen, used to turn
+            // digitizer points into view coordinates. So switch raw drawing off and on only when the view moved (split
+            // divider, rotation): the switch pauses the driver's ink and leaves scribble mode for a moment.
+            val moved = screenPosChanged()
             val wasActive = active
-            if (wasActive) h.setRawDrawingEnabled(false)
-            h.setLimitRect(currentLimit(), currentExclude())
-            if (wasActive) {
+            if (wasActive && moved) h.setRawDrawingEnabled(false)
+            h.setLimitRect(currentLimit(), sdkExclude())
+            if (wasActive && moved) {
                 h.setRawDrawingEnabled(true)
                 applyInk()
             }
@@ -285,6 +288,24 @@ class OnyxDriverPort(
             Log.w(TAG, "setLimits failed", t)
         }
     }
+
+    private val screenPos = IntArray(2)
+    private val lastScreenPos = intArrayOf(Int.MIN_VALUE, Int.MIN_VALUE)
+
+    /** True if the view's position on screen differs from the last time this was asked. */
+    private fun screenPosChanged(): Boolean {
+        view.getLocationOnScreen(screenPos)
+        val changed = screenPos[0] != lastScreenPos[0] || screenPos[1] != lastScreenPos[1]
+        lastScreenPos[0] = screenPos[0]
+        lastScreenPos[1] = screenPos[1]
+        return changed
+    }
+
+    /**
+     * The exclusion list as handed to the SDK. `RawInputReader.setExcludeRect` ignores an empty list and keeps the previous
+     * one, so "no exclusion" is sent as a single zero-size rect (it contains no pen point).
+     */
+    private fun sdkExclude(): List<Rect> = currentExclude().ifEmpty { listOf(Rect()) }
 
     /** Never an empty rect: the SDK logs "Empty region detected when mapping" and drops every point for one. */
     private fun currentLimit(): Rect {
