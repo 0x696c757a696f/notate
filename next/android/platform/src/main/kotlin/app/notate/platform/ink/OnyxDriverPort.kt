@@ -138,6 +138,8 @@ class OnyxDriverPort(
     // --- DriverPort -------------------------------------------------------------------------------------
     override fun open() {
         if (helper != null) return
+        // Like the legacy canvas: no session while there is no surface; the pane re-opens when it is created.
+        if (view is android.view.SurfaceView && !view.holder.surface.isValid) return
         try {
             // The editor surface is a plain View, so use the plain form that the legacy web overlay (also a plain View)
             // has always used. The SurfaceView-only "SFTouchRender" mode (create(view, true, ...)) delivered no points here.
@@ -146,6 +148,8 @@ class OnyxDriverPort(
             OnyxSystemHelper.ignoreSystemSideButton(view)
             h.setLimitRect(currentLimit(), exclude)
             h.openRawDrawing()
+            // The legacy canvas (SFTouchRender mode) needs this for fast stroke capture.
+            if (sfRender) h.setSingleRegionMode()
             EpdController.enterScribbleMode(view)
         } catch (t: Throwable) {
             Log.e(TAG, "open failed", t)
@@ -171,7 +175,7 @@ class OnyxDriverPort(
     }
 
     /** Which TouchHelper form the session uses; [reopen] alternates it so a deaf session tries the other one. */
-    var sfRender = false
+    var sfRender = true
         private set
 
     override fun reopen() {

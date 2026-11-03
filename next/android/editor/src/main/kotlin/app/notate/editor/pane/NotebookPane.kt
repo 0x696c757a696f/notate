@@ -131,7 +131,7 @@ class NotebookPane(
 
     // "Low-latency pen" off (Settings): no driver at all, the pen arrives as touch events; takes effect when the document is reopened.
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(canvasView, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(canvasView.penSurface, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val penMode: InputPenMode = InputPenMode.WRITE
     override val takesConstraintFinger: Boolean get() = deps.toolController.baseState().active == ToolKind.SHAPE
@@ -256,6 +256,13 @@ class NotebookPane(
         live.viewportProvider = { viewport }
         live.layoutProvider = { layout }
         canvasView.sizeListener = ::onViewSized
+        canvasView.penSurface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) { if (attached && !released) host.arbiter.reopen(this@NotebookPane) }
+            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                if (attached && !released) host.arbiter.reopen(this@NotebookPane)
+            }
+            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) { if (attached && !released) host.arbiter.closeSession(this@NotebookPane) }
+        })
         if (Capability.PAGES in capabilities && editor.meta.value.kind != DocKind.WEB) {
             canvasView.addButtonLabel = context.getString(R.string.add_page_button)
             canvasView.addCardHint = context.getString(R.string.add_page_hint)
