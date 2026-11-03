@@ -62,7 +62,20 @@ class OnyxDriverPort(
 
     override fun debugStatus(): String =
         "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries " +
-            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote] now:${regionNote()}"
+            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote] now:${regionNote()}" + sdkState()
+
+    private var sdkDumpAt = 0L
+    private var sdkDump = ""
+
+    /** Reflection dump of the TouchHelper, refreshed every 2 s, for the HUD. */
+    private fun sdkState(): String {
+        val now = System.currentTimeMillis()
+        if (now - sdkDumpAt > 2000) {
+            sdkDumpAt = now
+            sdkDump = "\nsdk: " + SdkIntrospect.dump(helper)
+        }
+        return sdkDump
+    }
 
     /** Every SDK callback goes through here first, so `cb=0` means none of the eight methods was ever called. */
     private fun seen(name: String) {
