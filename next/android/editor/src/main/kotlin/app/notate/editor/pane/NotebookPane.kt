@@ -618,12 +618,34 @@ class NotebookPane(
         // The driver reports its own points; touch events only feed palm rejection. Two exceptions: a stroke that began from touch
         // events goes on that way, and a pen that came down on an unfocused pane has opened the driver just now, too late for this stroke.
         val touchStroke = session != null && !sessionViaDriver
-        // A driver that has never delivered a stroke is not trusted: until it does, touch events ink (nothing may swallow a pen).
+        // Per stroke: a driver that is not trusted (never delivered, or missed the last stroke) leaves it to touch events, and a
+        // trusted one gets a short window to take it before the touch events do (PenSourceGate: nothing may swallow a pen).
         if (ev is PenEvent.Down) {
             touchDowns++
             if (touchDowns <= LOG_FIRST) deps.logger.i(TAG, "pen down (touch) driverActive=$driverActive rawBegins=$rawBegins")
         }
-        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive && rawBegins > 0, touchStroke, ev)) return
+        val driverStroke = session != null && sessionViaDriver
+        val now = SystemClock.uptimeMillis()
+        for (e in penGate.onTouch(ev, driverActive, touchStroke, driverStroke, now)) inkFromTouch(e)
+        armPenGate()
+    }
+
+    /** Held touch events for a stroke the driver should have taken (see [PenSourceGate]); fires at the gate's deadline. */
+    private val penGate = app.notate.core.input.PenSourceGate()
+    private val penGateRunnable = Runnable {
+        val evs = penGate.onTimeout(SystemClock.uptimeMillis())
+        if (evs.isNotEmpty()) deps.logger.i(TAG, "driver missed a stroke: inked from touch (fallbacks=${penGate.fallbacks})")
+        for (e in evs) inkFromTouch(e)
+        armPenGate()
+    }
+
+    private fun armPenGate() {
+        main.removeCallbacks(penGateRunnable)
+        penGate.deadline?.let { main.postAtTime(penGateRunnable, it) }
+    }
+
+    private fun inkFromTouch(ev: PenEvent) {
+        if (released) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -642,18 +664,21 @@ class NotebookPane(
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
         rawBegins++
         if (rawBegins <= LOG_FIRST) deps.logger.i(TAG, "pen down (driver) eraser=$eraser")
-        if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
+        val accepted = penGate.onRawBegin(SystemClock.uptimeMillis(), session != null && !sessionViaDriver)
+        armPenGate()
+        if (!accepted) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
 
     override fun onRawMove(batch: List<RawPoint>) {
-        if (session == null || !sessionViaDriver || batch.isEmpty()) return
+        if (penGate.ignoringDriver || session == null || !sessionViaDriver || batch.isEmpty()) return
         val last = batch.last()
         movePen(batch.map { InkPoint(0f, 0f, it.pressure, it.tiltX, it.tiltY, it.tMs) }, last.x, last.y, batch.map { it.x to it.y })
     }
 
     override fun onRawEnd(p: RawPoint, eraser: Boolean) {
+        if (!penGate.onRawEnd()) return
         if (session != null && !sessionViaDriver) return
         endPen(p.x, p.y, p.tMs, p.pressure)
         host.onDriverStroke(false, SystemClock.uptimeMillis())
@@ -665,6 +690,9 @@ class NotebookPane(
     }
 
     override fun onDriverDeactivated() {
+        // A stroke held for the driver is the touch events' now.
+        main.removeCallbacks(penGateRunnable)
+        for (e in penGate.flush()) inkFromTouch(e)
         // The driver was switched off mid-stroke and will never report its end: keep what was written.
         if (session != null && sessionViaDriver) endPen(lastLocalX, lastLocalY, lastPoint?.tMs ?: 0L, 0f)
     }
@@ -1415,7 +1443,7 @@ class NotebookPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "level=${Viewport.levelFor(viewport.scale)} zoom=${"%.2f".format(viewport.zoom)}",
             "tiles fresh=${(cov * 100).toInt()}% inFlight=$inFlight",
-            "pen strokes: driver=$rawBegins touch=$touchDowns inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes",
+            "pen strokes: driver=$rawBegins touch=$touchDowns trusted=${penGate.trusted} fallbacks=${penGate.fallbacks} inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes",
             "last pen: $penNote",
             "driver: ${driver.debugStatus()}",
             "up->model=${lastUpToModelMs}ms up->disk=${lastUpToDiskMs}ms",
