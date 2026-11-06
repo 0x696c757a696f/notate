@@ -17,6 +17,7 @@ class SettingsTest {
         assertThat(s.penButton.value).isEqualTo(PenButton.ERASER)
         assertThat(s.holdShapeMs.value).isEqualTo(600)
         assertThat(s.driverInk.value).isTrue()
+        assertThat(s.webPenSurface.value).isTrue()
         assertThat(s.pageLayout.value).isEqualTo(PageLayoutMode.CONTINUOUS)
         assertThat(s.gcEvery.value).isEqualTo(0)
         assertThat(s.toolbarPos.value).isEqualTo(ToolbarPos.TOP)

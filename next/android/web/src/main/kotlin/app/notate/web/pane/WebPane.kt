@@ -105,8 +105,21 @@ class WebPane(
     private val factory = ToolSessionFactory()
 
     // --- views ---
-    private val webView = WebView(context)
+    /** Replaced when its renderer process dies ([onRendererGone]). */
+    private var webView = WebView(context)
+    private val body = FrameLayout(context)
     private val overlay = InkOverlayView(context)
+    /**
+     * Transparent surface over the page that only the Onyx pen driver uses, as the note canvas does (TouchHelper in
+     * SFTouchRender + single-region mode on a SurfaceView). It draws nothing and takes no touches; null = the driver runs
+     * on the ink overlay (a plain View), the earlier form, kept for comparison (Settings → Pen surface on web pages).
+     */
+    private val penSurface: android.view.SurfaceView? =
+        if (deps.settings.webPenSurface.value) android.view.SurfaceView(context).apply {
+            setZOrderOnTop(true)
+            holder.setFormat(android.graphics.PixelFormat.TRANSPARENT)
+            isFocusable = false
+        } else null
     private val live = LiveInkLayer(overlay, density) { editor.content(it) }.also { it.paintHiddenWhite = false }
     private val bar = PaneBar(
         context, onPrevious = { stepChapter(-1) }, onNext = { stepChapter(1) }, onContents = { showContents() },
@@ -126,7 +139,7 @@ class WebPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
 
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(overlay, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(penSurface ?: overlay, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val consumesFingers: Boolean = false
 
@@ -170,7 +183,7 @@ class WebPane(
         private set
     private val loc = IntArray(2)
 
-    private val bridge: WebBridge
+    private var bridge: WebBridge
     private val client: SandboxClient
 
     // --- pen state ---
@@ -221,29 +234,38 @@ class WebPane(
             listener = this,
             layoutWidthCss = { lockedWidthCss },
         )
-        webView.apply {
-            webViewClient = client
-            overScrollMode = View.OVER_SCROLL_NEVER
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            setBackgroundColor(Color.WHITE)
-            setOnScrollChangeListener { _, _, _, _, _ -> onContentMoved() }
-            // A finger on the page (tap an answer, scroll, play an animation) wakes it up; see [updateFreeze].
-            setOnTouchListener { _, ev ->
-                if (ev.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_FINGER) thaw(FINGER_THAW_MS)
-                false
-            }
-        }
-        WebTimers.register(this, webView)
-        WebSandbox.configure(webView.settings, docSettings)
+        setUpWebView(webView)
         appliedJs = docSettings.javascript
         appliedZoom = docSettings.textZoom
         appliedReduce = docSettings.reduceMotion
         appliedPenMode = docSettings.penMode
 
-        val body = FrameLayout(context)
         body.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         body.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        penSurface?.let { surface ->
+            body.addView(surface, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                // As NotebookPane: the driver session lives on the surface, so it is reopened once per new surface or real
+                // size change. A surface that never received a buffer may not be recognised by the driver: post a clear one.
+                private var surfaceW = -1
+                private var surfaceH = -1
+                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                    clearFrame(holder)
+                    val f = holder.surfaceFrame
+                    surfaceW = f.width(); surfaceH = f.height()
+                    if (attached && !released) host.arbiter.reopen(this@WebPane)
+                }
+                override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                    clearFrame(holder)
+                    if (w == surfaceW && h == surfaceH) return
+                    surfaceW = w; surfaceH = h
+                    if (attached && !released) host.arbiter.reopen(this@WebPane)
+                }
+                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                    if (attached && !released) host.arbiter.closeSession(this@WebPane)
+                }
+            })
+        }
         body.addView(banner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         banner.setOnClickListener {
             current?.let { dismissedBanners.add(it.id) }
@@ -312,6 +334,60 @@ class WebPane(
             host.claimPen(this)
             updateMode()
         }
+    }
+
+    private fun setUpWebView(v: WebView) {
+        v.apply {
+            webViewClient = client
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(Color.WHITE)
+            setOnScrollChangeListener { _, _, _, _, _ -> onContentMoved() }
+            // A finger on the page (tap an answer, scroll, play an animation) wakes it up; see [updateFreeze].
+            setOnTouchListener { _, ev ->
+                if (ev.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_FINGER) thaw(FINGER_THAW_MS)
+                false
+            }
+        }
+        WebTimers.register(this, v)
+        WebSandbox.configure(v.settings, docSettings)
+    }
+
+    private val rendererDeaths = ArrayDeque<Long>()
+
+    /**
+     * The page's renderer process died (crash, or killed for memory): a WebView in that state can only be destroyed. Like
+     * the legacy web reader, keep the ink (it is in the document already; a stroke under way ends here), drop the dead
+     * WebView and load the chapter again at the same place in a new one. A page that kills its renderer again and again
+     * (twice within a minute) is not reloaded a third time: the pane stays blank with a message instead of looping.
+     */
+    private fun recoverRenderer() {
+        if (released) return
+        if (session != null) endPen(lastLocalX, lastLocalY, lastPoint?.tMs ?: 0L, 0f)
+        val page = current
+        val css = runCatching { scrollYCss() }.getOrDefault(0f)
+        val zoom = zoomFactor()
+        persistViewState()
+        WebTimers.unregister(this)
+        bridge.release()
+        body.removeView(webView)
+        runCatching { webView.destroy() }
+        val now = SystemClock.uptimeMillis()
+        while (rendererDeaths.isNotEmpty() && now - rendererDeaths.first() > RENDERER_DEATH_WINDOW_MS) rendererDeaths.removeFirst()
+        rendererDeaths.addLast(now)
+        webView = WebView(context)
+        paneFrozen = false
+        setUpWebView(webView)
+        bridge = WebBridge(webView, this)
+        body.addView(webView, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        updateFreeze()
+        if (rendererDeaths.size > MAX_RENDERER_DEATHS) {
+            Toast.makeText(context, R.string.web_page_crashed_again, Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(context, R.string.web_page_crashed, Toast.LENGTH_SHORT).show()
+        if (page != null) showChapter(page, null, css, zoom)
     }
 
     private fun showChapter(page: PageInfo, fragment: String?, restoreCssY: Float?, zoom: Float = 1f) {
@@ -455,7 +531,7 @@ class WebPane(
 
     override fun onRendererGone() {
         main.post {
-            if (!released) Toast.makeText(context, R.string.web_page_crashed, Toast.LENGTH_LONG).show()
+            recoverRenderer()
         }
     }
 
@@ -507,6 +583,7 @@ class WebPane(
     // new chapter wakes it.
 
     private var pageSettled = false
+    private var paneFrozen = false
     private var thawUntil = 0L
     private val settleRunnable = Runnable { pageSettled = true; updateFreeze() }
     private val freezeCheck = Runnable { updateFreeze() }
@@ -528,6 +605,14 @@ class WebPane(
         if (released) return
         val now = SystemClock.uptimeMillis()
         val frozen = !interactive && pageSettled && current != null && now >= thawUntil
+        // Per pane: WebView.onPause (animations, best effort) and the page's own animations paused through the bridge, so
+        // a page freezes even while another web pane (Interact mode, being touched) keeps the process-wide timers running.
+        // All panes frozen: WebTimers also pauses the timers of every WebView (layout, parsing, JavaScript).
+        if (frozen != paneFrozen) {
+            paneFrozen = frozen
+            runCatching { if (frozen) webView.onPause() else webView.onResume() }
+            bridge.setFrozen(frozen)
+        }
         WebTimers.want(this, frozen)
         main.removeCallbacks(freezeCheck)
         if (!frozen && now < thawUntil) main.postDelayed(freezeCheck, thawUntil - now)
@@ -1133,6 +1218,15 @@ class WebPane(
         showChapter(page, null, WebViewTransform.ptToCss(s.scrollYPt), s.zoom)
     }
 
+    private fun clearFrame(holder: android.view.SurfaceHolder) {
+        val c = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(c) }
+        }
+    }
+
     override fun debugLines(): List<String> {
         val a = host.arbiter
         val reasons = BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) }
@@ -1142,8 +1236,8 @@ class WebPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "driver: ${driver.debugStatus()}",
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
-            "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
-            "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes frozen=${WebTimers.isPaused} settled=$pageSettled",
+            "pen view=${if (penSurface != null) "surface" else "overlay"} mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
+            "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes frozen=pane:$paneFrozen all:${WebTimers.isPaused} settled=$pageSettled",
             "pen source: driver strokes=$rawBegins trusted=${penGate.trusted} fallbacks=${penGate.fallbacks}",
         )
     }
@@ -1166,6 +1260,8 @@ class WebPane(
 
     private companion object {
         const val TAG = "WebPane"
+        const val MAX_RENDERER_DEATHS = 2
+        const val RENDERER_DEATH_WINDOW_MS = 60_000L
         const val POLL_MS = 50L
         /** After a driver stroke with the pen still hovering (or no hover reported): wait this long before the refresh. */
         const val HOVER_QUIET_MS = 3000L

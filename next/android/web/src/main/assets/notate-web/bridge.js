@@ -3,7 +3,8 @@
 //     the words it was written on (a fixed-layout page keeps its own viewport and reports it),
 //  2. finds the element that really scrolls the page and reports its scroll position and the content size, so ink follows
 //     documents whose body (not the window) scrolls,
-//  3. optionally turns animation and smooth scrolling off (reduce motion).
+//  3. optionally turns animation and smooth scrolling off (reduce motion),
+//  4. pauses the page's running animations while the pane is frozen for writing (setFrozen).
 // The element rule must stay in sync with ScrollCandidate.pick in :core:web.
 (function () {
   if (window.__notate) return;
@@ -97,6 +98,20 @@
       'animation-iteration-count:1!important;transition-duration:0.001s!important;transition-delay:0s!important;' +
       'scroll-behavior:auto!important}';
     (document.head || document.documentElement).appendChild(s);
+  };
+
+  // Write mode freezes this page alone (the process-wide WebView timer pause needs every open web pane to agree): its
+  // running animations (CSS animations and transitions, element.animate) are paused, and only those are resumed later.
+  var frozenAnims = null;
+  N.setFrozen = function (on) {
+    if (on) {
+      if (frozenAnims || !document.getAnimations) return;
+      frozenAnims = document.getAnimations().filter(function (a) { return a.playState === 'running'; });
+      frozenAnims.forEach(function (a) { try { a.pause(); } catch (e) {} });
+    } else if (frozenAnims) {
+      frozenAnims.forEach(function (a) { try { if (a.playState === 'paused') a.play(); } catch (e) {} });
+      frozenAnims = null;
+    }
   };
 
   window.addEventListener('scroll', function (ev) {
