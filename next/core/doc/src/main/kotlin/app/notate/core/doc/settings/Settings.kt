@@ -55,6 +55,8 @@ class Settings(private val kv: KeyValueStore) {
     /** 0 = off. */
     val holdShapeMs = intPref("hold_shape_ms", 600, setOf(0, 400, 600, 900))
     val driverInk = boolPref("driver_ink", true)
+    /** Web pages run the pen driver on a transparent SurfaceView, like notebooks; false = on the ink overlay view. */
+    val webPenSurface = boolPref("web_pen_surface", true)
     val pageLayout = enumPref("page_layout", PageLayoutMode.CONTINUOUS)
     /** Full refresh every N page turns; 0 = off. */
     val gcEvery = intPref("gc_every", 0, setOf(0, 5, 10, 20))

@@ -152,6 +152,7 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
             600 to stringResource(R.string.settings_ms, 600), 900 to stringResource(R.string.settings_ms, 900),
         ))
         Toggle(R.string.settings_driver_ink, settings.driverInk, R.string.settings_driver_ink_hint)
+        Toggle(R.string.settings_web_pen_surface, settings.webPenSurface, R.string.settings_web_pen_surface_hint)
 
         Group(R.string.settings_group_display)
         Choice(R.string.settings_page_layout, settings.pageLayout, listOf(

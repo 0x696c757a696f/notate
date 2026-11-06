@@ -107,6 +107,17 @@ class WebPane(
     // --- views ---
     private val webView = WebView(context)
     private val overlay = InkOverlayView(context)
+    /**
+     * Transparent surface over the page that only the Onyx pen driver uses, as the note canvas does (TouchHelper in
+     * SFTouchRender + single-region mode on a SurfaceView). It draws nothing and takes no touches; null = the driver runs
+     * on the ink overlay (a plain View), the earlier form, kept for comparison (Settings → Pen surface on web pages).
+     */
+    private val penSurface: android.view.SurfaceView? =
+        if (deps.settings.webPenSurface.value) android.view.SurfaceView(context).apply {
+            setZOrderOnTop(true)
+            holder.setFormat(android.graphics.PixelFormat.TRANSPARENT)
+            isFocusable = false
+        } else null
     private val live = LiveInkLayer(overlay, density) { editor.content(it) }.also { it.paintHiddenWhite = false }
     private val bar = PaneBar(
         context, onPrevious = { stepChapter(-1) }, onNext = { stepChapter(1) }, onContents = { showContents() },
@@ -126,7 +137,7 @@ class WebPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
 
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(overlay, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(penSurface ?: overlay, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val consumesFingers: Boolean = false
 
@@ -244,6 +255,30 @@ class WebPane(
         val body = FrameLayout(context)
         body.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         body.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        penSurface?.let { surface ->
+            body.addView(surface, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                // As NotebookPane: the driver session lives on the surface, so it is reopened once per new surface or real
+                // size change. A surface that never received a buffer may not be recognised by the driver: post a clear one.
+                private var surfaceW = -1
+                private var surfaceH = -1
+                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                    clearFrame(holder)
+                    val f = holder.surfaceFrame
+                    surfaceW = f.width(); surfaceH = f.height()
+                    if (attached && !released) host.arbiter.reopen(this@WebPane)
+                }
+                override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                    clearFrame(holder)
+                    if (w == surfaceW && h == surfaceH) return
+                    surfaceW = w; surfaceH = h
+                    if (attached && !released) host.arbiter.reopen(this@WebPane)
+                }
+                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                    if (attached && !released) host.arbiter.closeSession(this@WebPane)
+                }
+            })
+        }
         body.addView(banner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         banner.setOnClickListener {
             current?.let { dismissedBanners.add(it.id) }
@@ -1133,6 +1168,15 @@ class WebPane(
         showChapter(page, null, WebViewTransform.ptToCss(s.scrollYPt), s.zoom)
     }
 
+    private fun clearFrame(holder: android.view.SurfaceHolder) {
+        val c = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(c) }
+        }
+    }
+
     override fun debugLines(): List<String> {
         val a = host.arbiter
         val reasons = BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) }
@@ -1142,7 +1186,7 @@ class WebPane(
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
             "driver: ${driver.debugStatus()}",
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
-            "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
+            "pen view=${if (penSurface != null) "surface" else "overlay"} mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
             "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes frozen=${WebTimers.isPaused} settled=$pageSettled",
             "pen source: driver strokes=$rawBegins trusted=${penGate.trusted} fallbacks=${penGate.fallbacks}",
         )
