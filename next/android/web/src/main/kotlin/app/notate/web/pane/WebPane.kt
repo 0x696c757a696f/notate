@@ -636,7 +636,7 @@ class WebPane(
 
     private val driverActive: Boolean get() = driver !== NoDriverPort && host.arbiter.isDriverActive(this)
 
-    /** Strokes the driver has delivered. Until it delivers one, a driver that is "active" may be deaf, so touch events keep inking. */
+    /** Strokes the driver has begun (debug HUD); which source inks a stroke is [penGate]'s call. */
     private var rawBegins = 0
 
     override fun onPen(ev: PenEvent) {
@@ -647,7 +647,28 @@ class WebPane(
         }
         // See NotebookPane.onPen: a touch-driven stroke goes on that way, and so does the first stroke after a focus switch.
         val touchStroke = session != null && !sessionViaDriver
-        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive && rawBegins > 0, touchStroke, ev)) return
+        val driverStroke = session != null && sessionViaDriver
+        val now = SystemClock.uptimeMillis()
+        for (e in penGate.onTouch(ev, driverActive, touchStroke, driverStroke, now)) inkFromTouch(e)
+        armPenGate()
+    }
+
+    /** Held touch events for a stroke the driver should have taken (see [PenSourceGate]); fires at the gate's deadline. */
+    private val penGate = app.notate.core.input.PenSourceGate()
+    private val penGateRunnable = Runnable {
+        val evs = penGate.onTimeout(SystemClock.uptimeMillis())
+        if (evs.isNotEmpty()) deps.logger.i(TAG, "driver missed a stroke: inked from touch (fallbacks=${penGate.fallbacks})")
+        for (e in evs) inkFromTouch(e)
+        armPenGate()
+    }
+
+    private fun armPenGate() {
+        main.removeCallbacks(penGateRunnable)
+        penGate.deadline?.let { main.postAtTime(penGateRunnable, it) }
+    }
+
+    private fun inkFromTouch(ev: PenEvent) {
+        if (released) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -664,19 +685,22 @@ class WebPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
-        if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
         rawBegins++
+        val accepted = penGate.onRawBegin(SystemClock.uptimeMillis(), session != null && !sessionViaDriver)
+        armPenGate()
+        if (!accepted) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
 
     override fun onRawMove(batch: List<RawPoint>) {
-        if (session == null || !sessionViaDriver || batch.isEmpty()) return
+        if (penGate.ignoringDriver || session == null || !sessionViaDriver || batch.isEmpty()) return
         val last = batch.last()
         movePen(batch.map { InkPoint(0f, 0f, it.pressure, it.tiltX, it.tiltY, it.tMs) }, last.x, last.y, batch.map { it.x to it.y })
     }
 
     override fun onRawEnd(p: RawPoint, eraser: Boolean) {
+        if (!penGate.onRawEnd()) return
         if (session != null && !sessionViaDriver) return
         endPen(p.x, p.y, p.tMs, p.pressure)
         host.onDriverStroke(false, SystemClock.uptimeMillis())
@@ -687,6 +711,9 @@ class WebPane(
     }
 
     override fun onDriverDeactivated() {
+        // A stroke held for the driver is the touch events' now.
+        main.removeCallbacks(penGateRunnable)
+        for (e in penGate.flush()) inkFromTouch(e)
         // The driver was switched off mid-stroke and will never report its end: keep what was written.
         if (session != null && sessionViaDriver) endPen(lastLocalX, lastLocalY, lastPoint?.tMs ?: 0L, 0f)
     }
@@ -1117,6 +1144,7 @@ class WebPane(
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
             "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
             "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes frozen=${WebTimers.isPaused} settled=$pageSettled",
+            "pen source: driver strokes=$rawBegins trusted=${penGate.trusted} fallbacks=${penGate.fallbacks}",
         )
     }
 
