@@ -79,8 +79,20 @@ WebDocActivity
 | 联网 | **关** | 关闭时所有外部请求返回 403，外链被拦截；开启需二次确认 |
 | 文件访问 | 禁止 | `allowFileAccess` / `allowContentAccess` / file URL 跨域全部关闭 |
 | 权限 | 拒绝 | 摄像头、麦克风、定位请求一律拒绝；不允许弹窗 / 新窗口 |
-| 原生接口 | 无 | 不注入任何 `addJavascriptInterface` |
+| 原生接口 | 无（旧版） | 旧版 `app/` 不注入任何 `addJavascriptInterface`；Notate Next 见下文 |
 | 渲染进程崩溃 | 隔离 | `onRenderProcessGone` 保存笔记后关闭阅读器，不拖垮整个应用 |
+
+### Notate Next（`next/android/web`）的差异
+
+- **原生接口**：Notate Next 注册了一个 `NotateBridge`（`WebBridge.kt` + `assets/notate-web/bridge.js`），只用于让墨迹层跟随页面：
+  `onScroll(x, y, contentWidth, contentHeight)`、`onLayout(innerWidth, fixed)`、`onNavigate(hash)`。参数只有数字和截断到 512 字符的字符串，
+  不读写任何数据、不打开文件或网络。`addJavascriptInterface` 对页面的所有 frame 可见（允许联网时也包括外域 iframe），
+  因此接口只做无害的位置上报；非有限数值被丢弃、尺寸有上限，调用在主线程上合并（每种调用最多一个排队），页面高频调用不会堵塞 UI。
+  主框架永远不能离开文档自己的 `https://<id>.webdoc.notate/` 源。
+- **渲染进程崩溃**：笔迹已在文档数据库中；丢弃失效的 WebView，新建一个并在原位置重新加载本章。一分钟内崩溃超过两次则不再重载，只提示。
+- **书写时冻结**：每个窗格各自冻结（`WebView.onPause` + 暂停页面正在运行的动画）；所有网页窗格都冻结时再用 `pauseTimers()`
+  （它对进程内所有 WebView 生效）。所以分屏时一边保持交互，另一边仍能冻结动画（但其 JS 定时器继续运行）。
+- **大文件**：主文档只读取前 64 KiB 来写入固定 viewport，其余部分直接从文件流式传输，文件大小不限。
 
 ### 兼容性检查
 
