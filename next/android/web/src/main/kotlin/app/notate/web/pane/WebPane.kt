@@ -605,12 +605,13 @@ class WebPane(
         if (released) return
         val now = SystemClock.uptimeMillis()
         val frozen = !interactive && pageSettled && current != null && now >= thawUntil
-        // Per pane: WebView.onPause (animations, best effort) and the page's own animations paused through the bridge, so
-        // a page freezes even while another web pane (Interact mode, being touched) keeps the process-wide timers running.
-        // All panes frozen: WebTimers also pauses the timers of every WebView (layout, parsing, JavaScript).
+        // Per pane: the page's own animations paused through the bridge, so a page freezes even while another web pane
+        // (Interact mode, being touched) keeps the process-wide timers running. All panes frozen: WebTimers also pauses the
+        // timers of every WebView (layout, parsing, JavaScript).
+        // Not WebView.onPause(): Chromium then treats the page as hidden and drops its rendered tiles, so the finger that
+        // thaws it (onResume) had to wait for the whole page to be drawn again before the scroll moved (scrolling lag).
         if (frozen != paneFrozen) {
             paneFrozen = frozen
-            runCatching { if (frozen) webView.onPause() else webView.onResume() }
             bridge.setFrozen(frozen)
         }
         WebTimers.want(this, frozen)
