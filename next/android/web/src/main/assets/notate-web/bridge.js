@@ -78,8 +78,12 @@
     B.onScroll(inner ? e.scrollLeft : 0, inner ? e.scrollTop : 0, w, h);
   }
 
-  var repick = 0;
+  var repick = 0, lastActivity = 0;
   function onMutation() {
+    // Tell the pane the page is still building itself (math typesetting, lazy content), at most twice a second: it waits
+    // for the page to go quiet before freezing it for writing.
+    var now = Date.now();
+    if (B && B.onActivity && now - lastActivity > 500) { lastActivity = now; B.onActivity(); }
     if (repick) return;
     // Script-driven pages mutate all the time; look for a new scroller only when the current one stopped being it.
     repick = setTimeout(function () { repick = 0; if (!stillValid(N.el)) N.el = pick(); schedule(); }, 400);

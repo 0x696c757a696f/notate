@@ -77,6 +77,7 @@ import app.notate.web.sandbox.SandboxClient
 import app.notate.web.sandbox.WebSandbox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.drop
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -288,6 +289,7 @@ class WebPane(
         scope.launch { deps.toolController.state.collect { onToolChanged(it.preset()) } }
         scope.launch { deps.toolController.selections.collect { onToolPicked(it) } }
         scope.launch { deps.settings.driverInk.collect { updateDriverInk() } }
+        scope.launch { deps.settings.webFreeze.drop(1).collect { updateFreeze() } }
         scope.launch {
             try {
                 outline = handle.readOutline()
@@ -414,6 +416,7 @@ class WebPane(
         fitScale = if (percent > 0) percent / 100f * density else 0f
         if (percent > 0) webView.setInitialScale(max(1, (percent * zoom).roundToInt()))
         val url = WebOrigin.urlFor(docId, Uri.encode(bg.href, "/")) + (fragment?.let { "#" + Uri.encode(it) } ?: "")
+        busySince = 0L  // a new page gets its own time to settle
         pageBusy()      // a frozen WebView would not even parse the new page
         webView.loadUrl(url)
         updateBar()
@@ -537,6 +540,10 @@ class WebPane(
 
     // --- WebBridge.Listener ---
 
+    override fun onPageActivity() {
+        if (!pageSettled) pageBusy()    // still building itself (typesetting, lazy content): push the freeze back
+    }
+
     override fun onScrolled() {
         if (!pageSettled) pageBusy()    // still loading/laying out: push the freeze back
         onContentMoved()
@@ -585,16 +592,24 @@ class WebPane(
     private var pageSettled = false
     private var paneFrozen = false
     private var thawUntil = 0L
-    private val settleRunnable = Runnable { pageSettled = true; updateFreeze() }
+    private val settleRunnable = Runnable { pageSettled = true; busySince = 0L; updateFreeze() }
     private val freezeCheck = Runnable { updateFreeze() }
 
     /** The page may change (loading, layout reports): wait for it to stay quiet before freezing again. */
     private fun pageBusy() {
+        val now = SystemClock.uptimeMillis()
+        if (pageSettled || busySince == 0L) busySince = now
         pageSettled = false
         main.removeCallbacks(settleRunnable)
-        main.postDelayed(settleRunnable, SETTLE_MS)
+        // Wait for SETTLE_MS of quiet, but not forever: a page that animates or polls without end is frozen after
+        // MAX_BUSY_MS anyway (that is what freezing is for). A page that typesets math for a few seconds is no longer
+        // frozen half-drawn, which looked like a hung page until a finger touched it.
+        val left = MAX_BUSY_MS - (now - busySince)
+        main.postDelayed(settleRunnable, SETTLE_MS.coerceAtMost(left.coerceAtLeast(0L)))
         updateFreeze()
     }
+
+    private var busySince = 0L
 
     private fun thaw(forMs: Long) {
         thawUntil = max(thawUntil, SystemClock.uptimeMillis() + forMs)
@@ -604,7 +619,7 @@ class WebPane(
     private fun updateFreeze() {
         if (released) return
         val now = SystemClock.uptimeMillis()
-        val frozen = !interactive && pageSettled && current != null && now >= thawUntil
+        val frozen = deps.settings.webFreeze.value && !interactive && pageSettled && current != null && now >= thawUntil
         // Per pane: the page's own animations paused through the bridge, so a page freezes even while another web pane
         // (Interact mode, being touched) keeps the process-wide timers running. All panes frozen: WebTimers also pauses the
         // timers of every WebView (layout, parsing, JavaScript).
@@ -1276,6 +1291,8 @@ class WebPane(
         const val RESTORE_FINAL_MS = 800L
         /** The page must stay quiet this long after loading before it is frozen for writing. */
         const val SETTLE_MS = 1500L
+        /** Longest a busy page is left running in Write mode before it is frozen anyway. */
+        const val MAX_BUSY_MS = 15_000L
         /** A finger on the page keeps it live this long after the last touch. */
         const val FINGER_THAW_MS = 5000L
         const val RELOAD_WIDTH_FRACTION = 0.05f

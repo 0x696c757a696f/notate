@@ -60,6 +60,11 @@ class Settings(private val kv: KeyValueStore) {
      * default until a device test shows it helps: with it on, web panes scrolled slowly and stopped updating (2026-11-10).
      */
     val webPenSurface = boolPref("web_pen_surface", false)
+    /**
+     * Freeze web pages (timers and animations) in Write mode once they have gone quiet. Off by default: it helps pen
+     * latency on animated pages, but frozen pages looked hung on the device (2026-11-10); stability first.
+     */
+    val webFreeze = boolPref("web_freeze", false)
     val pageLayout = enumPref("page_layout", PageLayoutMode.CONTINUOUS)
     /** Full refresh every N page turns; 0 = off. */
     val gcEvery = intPref("gc_every", 0, setOf(0, 5, 10, 20))
