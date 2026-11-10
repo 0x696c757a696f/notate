@@ -18,6 +18,8 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
         fun onScrolled()
         fun onLayoutReported(widthCss: Float, fixed: Boolean)
         fun onHashChanged(hash: String)
+        /** Main thread. The page changed its DOM (it is still building itself); at most a few times a second. */
+        fun onPageActivity() {}
     }
 
     @Volatile var innerX = 0f
@@ -32,6 +34,7 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
     private val scrollPending = java.util.concurrent.atomic.AtomicBoolean(false)
     private val layoutPending = java.util.concurrent.atomic.AtomicBoolean(false)
     private val hashPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val activityPending = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var layoutReport: Pair<Float, Boolean>? = null
     @Volatile private var hashReport: String? = null
 
@@ -59,6 +62,11 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
                 layoutPending.set(false)
                 layoutReport?.let { listener.onLayoutReported(it.first, it.second) }
             }
+        }
+
+        @JavascriptInterface
+        fun onActivity() {
+            if (activityPending.compareAndSet(false, true)) webView.post { activityPending.set(false); listener.onPageActivity() }
         }
 
         @JavascriptInterface
