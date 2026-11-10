@@ -77,6 +77,7 @@ import app.notate.web.sandbox.SandboxClient
 import app.notate.web.sandbox.WebSandbox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.drop
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -288,6 +289,7 @@ class WebPane(
         scope.launch { deps.toolController.state.collect { onToolChanged(it.preset()) } }
         scope.launch { deps.toolController.selections.collect { onToolPicked(it) } }
         scope.launch { deps.settings.driverInk.collect { updateDriverInk() } }
+        scope.launch { deps.settings.webFreeze.drop(1).collect { updateFreeze() } }
         scope.launch {
             try {
                 outline = handle.readOutline()
@@ -617,7 +619,7 @@ class WebPane(
     private fun updateFreeze() {
         if (released) return
         val now = SystemClock.uptimeMillis()
-        val frozen = !interactive && pageSettled && current != null && now >= thawUntil
+        val frozen = deps.settings.webFreeze.value && !interactive && pageSettled && current != null && now >= thawUntil
         // Per pane: the page's own animations paused through the bridge, so a page freezes even while another web pane
         // (Interact mode, being touched) keeps the process-wide timers running. All panes frozen: WebTimers also pauses the
         // timers of every WebView (layout, parsing, JavaScript).
