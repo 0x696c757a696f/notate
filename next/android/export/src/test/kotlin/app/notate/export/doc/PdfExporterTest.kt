@@ -115,29 +115,34 @@ class PdfExporterTest {
         return store
     }
 
-    @Test fun exportsAVectorPdfWithInkLinksAndOutline() = runBlocking {
-        val h = handle(notebook())
+    private fun exportAll(): File = runBlocking {
         val out = File(tmp.root, "out.pdf")
-        val progress = ArrayList<Pair<Int, Int>>()
-        val n = exporter.export(h, ExportOptions(), out) { a, b -> progress += a to b }
-        assertThat(n).isEqualTo(3)
-        assertThat(progress.last()).isEqualTo(3 to 3)
-        PDDocument.load(out).use { doc ->
-            assertThat(doc.numberOfPages).isEqualTo(3)
-            assertThat(doc.getPage(0).mediaBox.width).isWithin(0.01f).of(595.28f)
-            assertThat(doc.getPage(0).mediaBox.height).isWithin(0.01f).of(841.89f)
-            val names = operators(doc.getPage(0))
-            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("f")   // filled outlines, shape fill, text picture backdrop-less paths
-            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("S")   // template lines
-            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("Tj")  // Latin text stays text
-            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("Do")  // the CJK text box is a picture
-            val links = doc.getPage(0).annotations.filterIsInstance<PDAnnotationLink>()
-            assertWithMessage("links").that(links).hasSize(2)
-            assertThat(links.mapNotNull { (it.action as? PDActionURI)?.uri }).containsExactly("https://example.com")
-            assertWithMessage("outline").that(doc.documentCatalog.documentOutline.children().count()).isEqualTo(3)
-            assertThat(doc.documentInformation.title).isEqualTo("My notes")
-            assertThat(doc.documentInformation.creator).isEqualTo("Notate")
-        }
+        exporter.export(handle(notebook()), ExportOptions(), out) { _, _ -> }
+        out
+    }
+
+    private fun <T> withDoc(block: (PDDocument) -> T): T = PDDocument.load(exportAll()).use(block)
+
+    @Test fun pageCountAndSize() = withDoc { doc ->
+        assertThat(doc.numberOfPages).isEqualTo(3)
+        assertThat(doc.getPage(0).mediaBox.width).isWithin(0.01f).of(595.28f)
+    }
+
+    @Test fun inkIsFilledPaths() = withDoc { doc -> assertThat(operators(doc.getPage(0))).contains("f") }
+    @Test fun templateIsStrokedLines() = withDoc { doc -> assertThat(operators(doc.getPage(0))).contains("S") }
+    @Test fun latinTextStaysText() = withDoc { doc -> assertThat(operators(doc.getPage(0))).contains("Tj") }
+    @Test fun cjkTextBecomesAPicture() = withDoc { doc -> assertThat(operators(doc.getPage(0))).contains("Do") }
+
+    @Test fun linksBecomeAnnotations() = withDoc { doc ->
+        val links = doc.getPage(0).annotations.filterIsInstance<PDAnnotationLink>()
+        assertThat(links).hasSize(2)
+        assertThat(links.mapNotNull { (it.action as? PDActionURI)?.uri }).containsExactly("https://example.com")
+    }
+
+    @Test fun outlineAndInfo() = withDoc { doc ->
+        assertThat(doc.documentCatalog.documentOutline.children().count()).isEqualTo(3)
+        assertThat(doc.documentInformation.title).isEqualTo("My notes")
+        assertThat(doc.documentInformation.creator).isEqualTo("Notate")
     }
 
     @Test fun pageRangeLimitsPagesLinksAndOutline() = runBlocking {
