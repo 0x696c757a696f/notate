@@ -3,6 +3,10 @@ package app.notate.web.pane
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.core.content.FileProvider
 import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
@@ -50,6 +54,11 @@ import app.notate.core.model.ViewState
 import app.notate.core.model.WebDocSettings
 import app.notate.core.model.edit.Edit
 import app.notate.core.store.OutlineEntry
+import app.notate.core.web.ChapterNotes
+import app.notate.core.web.ChapterTextSearch
+import app.notate.core.web.NotesToc
+import app.notate.core.web.WebNotesJson
+import app.notate.core.web.WebExportPlan
 import app.notate.core.web.WebLayoutLock
 import app.notate.core.web.WebLayoutMath
 import app.notate.core.web.WebOrigin
@@ -72,11 +81,21 @@ import app.notate.platform.ink.OnyxDriverPort
 import app.notate.platform.ink.RawPenSink
 import app.notate.platform.ink.RawPoint
 import app.notate.web.R
+import app.notate.web.export.WebExporter
+import app.notate.web.find.WebFindBar
 import app.notate.web.layout.WebBridge
 import app.notate.web.sandbox.SandboxClient
 import app.notate.web.sandbox.WebSandbox
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+import kotlin.coroutines.resume
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -133,6 +152,10 @@ class WebPane(
         setPadding(context.dp(12), context.dp(8), context.dp(12), context.dp(8))
         visibility = View.GONE
     }
+    private val findBar = WebFindBar(
+        context, onQuery = ::onFindQuery, onStep = { webView.findNext(it) },
+        onAllChapters = ::onFindAllChapters, onClose = ::closeFind,
+    ).apply { visibility = View.GONE }
     private val root = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     override val view: View get() = root
 
@@ -169,6 +192,17 @@ class WebPane(
     private var lastKind: ToolKind? = null
     private var appliedPenMode: PenMode = PenMode.WRITE
     private var loadedPaneWidthPx = 0
+
+    // --- find, export (R4-3) ---
+    private var findAllChapters = false
+    private var pendingFind: String? = null
+    private var findJob: Job? = null
+    private val findRunnable = Runnable { runChapterSearch() }
+    @Volatile private var exporting = false
+    private var exportJob: Job? = null
+    private var pageLoaded: CompletableDeferred<Unit>? = null
+    private var lastSaveAt = 0L
+    private var nextVisualState = 1L
 
     @Volatile private var lockedWidthCss = 0f
     private var fitScale = 0f
@@ -272,6 +306,8 @@ class WebPane(
             updateBanner()
         }
         root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(PaneBar.HEIGHT_DP)))
+        root.addView(findBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(WebFindBar.HEIGHT_DP)))
+        webView.setFindListener { active, total, done -> if (done) findBar.setCount(active + 1, total) }
         root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         overlay.sizeListener = ::onBodySized
 
@@ -284,6 +320,7 @@ class WebPane(
             }
         }
         scope.launch { editor.pages.collect { onPagesChanged() } }
+        scope.launch { handle.save.state.collect { if (it is app.notate.core.doc.save.SaveState.Clean) lastSaveAt = deps.clock.now() } }
         scope.launch { editor.meta.collect { onMetaChanged() } }
         scope.launch { deps.toolController.state.collect { onToolChanged(it.preset()) } }
         scope.launch { deps.toolController.selections.collect { onToolPicked(it) } }
@@ -516,6 +553,11 @@ class WebPane(
     }
 
     override fun onPageFinished(url: String) {
+        pageLoaded?.complete(Unit)
+        pendingFind?.let { q ->
+            pendingFind = null
+            main.postDelayed({ if (!released) webView.findAllAsync(q) }, FIND_AFTER_LOAD_MS)
+        }
         pageBusy()      // freeze once it stays quiet: scripts (math, images) usually finish right after load
         bridge.inject(lockedWidthCss, docSettings.reduceMotion)
         main.removeCallbacks(restoreRunnable)
@@ -604,7 +646,7 @@ class WebPane(
     private fun updateFreeze() {
         if (released) return
         val now = SystemClock.uptimeMillis()
-        val frozen = !interactive && pageSettled && current != null && now >= thawUntil
+        val frozen = !interactive && !exporting && pageSettled && current != null && now >= thawUntil
         // Per pane: the page's own animations paused through the bridge, so a page freezes even while another web pane
         // (Interact mode, being touched) keeps the process-wide timers running. All panes frozen: WebTimers also pauses the
         // timers of every WebView (layout, parsing, JavaScript).
@@ -666,6 +708,7 @@ class WebPane(
     }
 
     private fun restoreScroll(final: Boolean) {
+        if (exporting) return
         val y = pendingRestoreY
         if (y != null) {
             val s = webScale()
@@ -1060,6 +1103,9 @@ class WebPane(
         MenuEntry(context.getString(R.string.web_contents)) { showContents() },
         MenuEntry(context.getString(R.string.web_reading_options)) { showReadingOptions() },
         MenuEntry(context.getString(R.string.web_clear_page)) { clearPage() },
+        MenuEntry(context.getString(R.string.web_find_in_document)) { showFind() },
+        MenuEntry(context.getString(R.string.web_export_annotations)) { showExportOptions() },
+        MenuEntry(context.getString(R.string.web_compat_check)) { showCompatibility() },
     )
 
     private fun popupText(text: CharSequence) = PopupUi.text(context, text)
@@ -1185,12 +1231,363 @@ class WebPane(
     }
 
     // ---------------------------------------------------------------------------------------------------------
+    // Find in document (R4-3)
+    // ---------------------------------------------------------------------------------------------------------
+
+    private fun showFind() {
+        findBar.visibility = View.VISIBLE
+        findBar.focusField()
+        if (findBar.query.isNotBlank()) webView.findAllAsync(findBar.query)
+    }
+
+    private fun closeFind() {
+        findBar.visibility = View.GONE
+        main.removeCallbacks(findRunnable)
+        findJob?.cancel()
+        pendingFind = null
+        webView.clearMatches()
+        host.dismissPopup()
+    }
+
+    private fun onFindQuery(q: String) {
+        main.removeCallbacks(findRunnable)
+        if (q.isBlank()) {
+            webView.clearMatches()
+            findBar.setCount(0, 0)
+            return
+        }
+        webView.findAllAsync(q)
+        if (findAllChapters) main.postDelayed(findRunnable, FIND_DEBOUNCE_MS)
+    }
+
+    private fun onFindAllChapters(on: Boolean) {
+        findAllChapters = on
+        if (on) runChapterSearch() else host.dismissPopup()
+    }
+
+    /** Searches the text of every chapter file (off the main thread) and lists the chapters that match. */
+    private fun runChapterSearch() {
+        val q = findBar.query.trim()
+        if (q.isEmpty() || !findAllChapters) return
+        findJob?.cancel()
+        val list = chapters()
+        val root = File(handle.dir, "assets/web")
+        findJob = scope.launch {
+            val hits = withContext(deps.dispatchers.io) {
+                list.mapNotNull { ch ->
+                    val file = WebResourcePaths.resolve(root, hrefOf(ch)) ?: return@mapNotNull null
+                    if (file.length() > MAX_SEARCH_BYTES) return@mapNotNull null
+                    val text = try { file.readText(Charsets.UTF_8) } catch (e: java.io.IOException) { return@mapNotNull null }
+                    ChapterTextSearch.search(hrefOf(ch), text, q)?.let { ch to it }
+                }
+            }
+            if (!released && findBar.visibility == View.VISIBLE) showFindResults(hits, q)
+        }
+    }
+
+    private fun showFindResults(hits: List<Pair<PageInfo, app.notate.core.web.ChapterHits>>, q: String) {
+        val col = PopupUi.column(context)
+        if (hits.isEmpty()) col.addView(popupText(context.getString(R.string.web_find_results_none)))
+        val all = chapters()
+        for ((ch, h) in hits) {
+            val index = all.indexOfFirst { it.id == ch.id }
+            val name = outline.firstOrNull { it.page == ch.id }?.title?.takeIf { it.isNotBlank() }
+                ?: context.getString(R.string.web_untitled_chapter, index + 1)
+            val open = {
+                host.dismissPopup()
+                if (ch.id == current?.id) {
+                    webView.findAllAsync(q)
+                } else {
+                    pendingFind = q
+                    showChapter(ch, null, null)
+                }
+            }
+            col.addView(
+                PopupUi.button(context, context.getString(R.string.web_find_result_fmt, name, h.count), open).apply {
+                    gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                    minWidth = context.dp(280)
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(48)),
+            )
+            for (snippet in h.snippets) {
+                col.addView(
+                    PopupUi.text(context, snippet, 13f).apply {
+                        setPadding(context.dp(16), context.dp(2), context.dp(8), context.dp(6))
+                        setOnClickListener { open() }
+                    },
+                    LinearLayout.LayoutParams(context.dp(300), ViewGroup.LayoutParams.WRAP_CONTENT),
+                )
+            }
+        }
+        host.showPopup(null, android.widget.ScrollView(context).apply { addView(col) }, Placement.CENTER)
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Export (R4-3)
+    // ---------------------------------------------------------------------------------------------------------
+
+    private enum class ExportKind { PDF_CHAPTER, PDF_ALL, JSON }
+
+    private fun showExportOptions() {
+        val col = PopupUi.column(context)
+        fun option(label: Int, kind: ExportKind) {
+            col.addView(
+                PopupUi.button(context, context.getString(label)) {
+                    host.dismissPopup()
+                    startExport(kind)
+                }.apply {
+                    gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                    minWidth = context.dp(260)
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, context.dp(48)),
+            )
+        }
+        option(R.string.web_export_pdf_chapter, ExportKind.PDF_CHAPTER)
+        option(R.string.web_export_pdf_all, ExportKind.PDF_ALL)
+        option(R.string.web_export_json, ExportKind.JSON)
+        host.showPopup(null, col, Placement.CENTER)
+    }
+
+    private fun startExport(kind: ExportKind) {
+        if (exportJob?.isActive == true || current == null) return
+        val status = popupText(context.getString(R.string.web_export_preparing))
+        val col = PopupUi.column(context)
+        col.addView(status, LinearLayout.LayoutParams(context.dp(280), ViewGroup.LayoutParams.WRAP_CONTENT))
+        col.addView(
+            PopupUi.button(context, context.getString(R.string.web_cancel)) {
+                exportJob?.cancel()
+                host.dismissPopup()
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END },
+        )
+        host.showPopup(null, col, Placement.CENTER)
+        exportJob = scope.launch {
+            try {
+                val file = try {
+                    handle.save.flush()
+                    when (kind) {
+                        ExportKind.PDF_CHAPTER -> exportPdf(listOfNotNull(current), status, all = false)
+                        ExportKind.PDF_ALL -> exportPdf(chaptersWithNotes(), status, all = true)
+                        ExportKind.JSON -> exportJson()
+                    }
+                } finally {
+                    host.dismissPopup()
+                }
+                if (file != null) share(file, if (kind == ExportKind.JSON) "application/json" else "application/pdf")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                deps.logger.e(TAG, "Export failed", e)
+                if (!released) Toast.makeText(context, R.string.web_export_failed, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private suspend fun chaptersWithNotes(): List<PageInfo> =
+        chapters().filter { editor.ensureLoaded(it.id).size > 0 }
+
+    private fun exportsDir(): File {
+        val dir = File(context.filesDir, "notate/exports").also { it.mkdirs() }
+        val cutoff = System.currentTimeMillis() - EXPORT_KEEP_MS
+        dir.listFiles()?.filter { it.isFile && it.lastModified() < cutoff }?.forEach { it.delete() }
+        return dir
+    }
+
+    private fun exportName(suffix: String, ext: String): File =
+        File(exportsDir(), WebExporter.safeFileName(editor.meta.value.title) + suffix + "." + ext)
+
+    /** Renders [list] to a PDF as seen on screen. The pane is busy meanwhile and returns to where it was. */
+    private suspend fun exportPdf(list: List<PageInfo>, status: TextView, all: Boolean): File? {
+        if (list.isEmpty()) {
+            Toast.makeText(context, R.string.web_export_nothing, Toast.LENGTH_SHORT).show()
+            return null
+        }
+        if (overlay.width <= 0 || overlay.height <= 0) return null
+        val origin = current
+        val originCss = scrollYCss()
+        val originZoom = zoomFactor()
+        val out = exportName(if (all) "-notes" else "-" + (chapters().indexOfFirst { it.id == list[0].id } + 1), "pdf")
+        persistViewState()
+        exporting = true
+        host.arbiter.block(this, BlockReason.EXPORT, true)
+        try {
+            WebExporter(exportHost, deps.dispatchers.io).exportPdf(list, editor.meta.value.title, out) { done, total ->
+                status.text = context.getString(R.string.web_export_progress, (done + 1).coerceAtMost(total), total)
+            }
+            return out
+        } finally {
+            host.arbiter.block(this, BlockReason.EXPORT, false)
+            viewStateLocked = true
+            exporting = false
+            pageLoaded = null
+            if (origin != null && !released) showChapter(origin, null, originCss, originZoom)
+        }
+    }
+
+    private val exportHost = object : WebExporter.Host {
+        override suspend fun load(page: PageInfo): WebExporter.Geometry? {
+            val loaded = CompletableDeferred<Unit>()
+            pageLoaded = loaded
+            showChapter(page, null, null)
+            if (withTimeoutOrNull(LOAD_TIMEOUT_MS) { loaded.await() } == null) return null
+            pageLoaded = null
+            try {
+                editor.ensureLoaded(page.id)
+            } catch (e: Exception) {
+                deps.logger.e(TAG, "Loading chapter ink failed", e)
+            }
+            // The page counts as laid out once two reports 500 ms apart agree (scripts keep growing some pages), at most 5 s.
+            var previous = -1
+            var waited = 0L
+            while (waited < STABLE_MAX_MS) {
+                delay(STABLE_INTERVAL_MS)
+                waited += STABLE_INTERVAL_MS
+                val now = contentHeightPx()
+                if (WebExportPlan.heightStable(previous, now)) break
+                previous = now
+            }
+            val pxPerPt = transform().pxPerPt
+            if (webView.width <= 0 || webView.height <= 0 || pxPerPt <= 0f) return null
+            return WebExporter.Geometry(contentHeightPx(), webView.width, webView.height, pxPerPt)
+        }
+
+        override suspend fun capture(page: PageInfo, scrollYPx: Int): WebExporter.Capture? {
+            val scale = webScale()
+            bridge.scrollToCss(scrollYPx / scale, scale)
+            awaitVisualState()
+            delay(SCROLL_SETTLE_MS)
+            syncViewport()
+            val w = webView.width
+            val h = webView.height
+            if (w <= 0 || h <= 0) return null
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            canvas.drawColor(Color.WHITE)
+            webView.draw(canvas)
+            overlay.drawContent(canvas, viewport, page.id)
+            return WebExporter.Capture(bmp, transform().scrollYPx.roundToInt())
+        }
+    }
+
+    private fun contentHeightPx(): Int = (max(bridge.contentHeightCss, webView.contentHeight.toFloat()) * webScale()).roundToInt()
+
+    private suspend fun awaitVisualState() {
+        withTimeoutOrNull(VISUAL_STATE_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                webView.postVisualStateCallback(nextVisualState++, object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        if (cont.isActive) cont.resume(Unit)
+                    }
+                })
+            }
+        }
+    }
+
+    /** Notes data: every chapter that has handwriting, with the contents list, as JSON. */
+    private suspend fun exportJson(): File? {
+        val notes = ArrayList<ChapterNotes>()
+        for (ch in chapters()) {
+            val content = editor.ensureLoaded(ch.id)
+            if (content.size > 0) notes += ChapterNotes(hrefOf(ch), (ch.background as Background.Web).layoutWidthCss, content.all().toList())
+        }
+        if (notes.isEmpty()) {
+            Toast.makeText(context, R.string.web_export_nothing, Toast.LENGTH_SHORT).show()
+            return null
+        }
+        val depth = HashMap<Long, Int>()
+        val toc = outline.map { e ->
+            val d = (e.parentId?.let { depth[it] } ?: -1) + 1
+            depth[e.id] = d
+            val href = chapters().firstOrNull { it.id == e.page }?.let { hrefOf(it) + (e.anchor?.let { a -> "#$a" } ?: "") }
+            NotesToc(e.title, href, d)
+        }
+        val json = WebNotesJson.build(editor.meta.value.title, toc, notes)
+        val out = exportName("-notes", "json")
+        withContext(deps.dispatchers.io) { out.writeText(json) }
+        return out
+    }
+
+    private fun share(file: File, mime: String) {
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", file)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType(mime)
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .putExtra(Intent.EXTRA_SUBJECT, file.nameWithoutExtension)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(
+            Intent.createChooser(send, context.getString(R.string.web_export_share))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION),
+        )
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Compatibility check and diagnostics (R4-3)
+    // ---------------------------------------------------------------------------------------------------------
+
+    private fun showCompatibility() {
+        scope.launch {
+            val web = docSettings
+            val pkg = WebView.getCurrentWebViewPackage()
+            fun used(bit: Int) = when {
+                !web.javascript -> "n/a (JavaScript off)"
+                (bridge.features and bit) != 0 -> "used"
+                else -> "not used"
+            }
+            val lines = ArrayList<String>()
+            lines += "WebView: " + (pkg?.let { it.packageName + " " + it.versionName } ?: "unknown")
+            lines += "JavaScript: " + if (web.javascript) "on" else "off"
+            lines += "Network: " + if (web.network) "on" else "off"
+            lines += "Service Worker: " + used(WebBridge.FEATURE_SERVICE_WORKER)
+            lines += "WebGL: " + used(WebBridge.FEATURE_WEBGL)
+            lines += "WebAssembly: " + used(WebBridge.FEATURE_WASM)
+            lines += "ES modules: " + used(WebBridge.FEATURE_MODULES)
+            lines += "Blocked external requests: ${client.blockedRequests}"
+            val failed = client.failedResources
+            lines += "Missing resources: ${failed.size}"
+            failed.forEach { lines += "  $it" }
+            if ((context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) lines += inkDiagnostics()
+            val col = PopupUi.column(context)
+            for (l in lines) {
+                col.addView(PopupUi.text(context, l, 14f), LinearLayout.LayoutParams(context.dp(320), ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            col.addView(
+                PopupUi.button(context, context.getString(R.string.web_compat_close)) { host.dismissPopup() },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END },
+            )
+            host.showPopup(null, android.widget.ScrollView(context).apply { addView(col) }, Placement.CENTER)
+        }
+    }
+
+    /** Debug builds only: what the ink layer holds for this chapter and how it is wired. */
+    private suspend fun inkDiagnostics(): List<String> {
+        val page = current ?: return listOf("Ink diagnostics: no chapter")
+        val inMemory = editor.content(page.id)?.size ?: 0
+        val onDisk = try {
+            withContext(deps.dispatchers.io) { handle.countStoredItems(page.id) }
+        } catch (e: Exception) {
+            -1
+        }
+        val a = host.arbiter
+        val reasons = BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) }
+        val bg = page.background as Background.Web
+        val saved = if (lastSaveAt == 0L) "never" else "${(deps.clock.now() - lastSaveAt) / 1000} s ago"
+        return listOf(
+            "— Ink diagnostics —",
+            "Objects in memory: $inMemory, on disk: $onDisk",
+            "Save queue: ${handle.save.state.value}, last clean $saved",
+            "Driver: active=${a.isDriverActive(this)} suspended=${a.isSuspended(this)} blocked=${reasons.joinToString().ifEmpty { "-" }}",
+            "webScale=${"%.2f".format(webScale())} layoutWidthCss=${bg.layoutWidthCss.roundToInt()} pane=${(overlay.width / density).roundToInt()} css px",
+            "layoutGen=${bg.layoutGen}",
+        )
+    }
+
+    // ---------------------------------------------------------------------------------------------------------
     // View state, lifecycle
     // ---------------------------------------------------------------------------------------------------------
 
     override fun saveViewState(): ViewState? {
         val page = current ?: return null
-        if (viewStateLocked || overlay.width == 0) return null
+        if (viewStateLocked || exporting || overlay.width == 0) return null
         val t = transform()
         return ViewState(
             page.id, zoomFactor(), WebViewTransform.cssToPt(t.scrollXPx / t.scale), WebViewTransform.cssToPt(t.scrollYPx / t.scale),
@@ -1201,6 +1598,7 @@ class WebPane(
     /** Writes the reading position into the metadata (not undoable; the save queue merges these writes). */
     private fun persistViewState() {
         main.removeCallbacks(saveViewRunnable)
+        if (exporting) return
         val state = saveViewState() ?: return
         val meta: DocumentMeta = editor.meta.value
         if (meta.view != state) editor.apply(Edit.SetMeta(meta, meta.copy(view = state)), undoable = false)
@@ -1249,6 +1647,8 @@ class WebPane(
         cancelPen()
         released = true
         main.removeCallbacksAndMessages(null)
+        exportJob?.cancel()
+        findJob?.cancel()
         deps.epd.releaseFast(FAST_OWNER)
         deps.epd.releaseFast(INK_OWNER)
         host.arbiter.detach(this)
@@ -1279,6 +1679,15 @@ class WebPane(
         /** A finger on the page keeps it live this long after the last touch. */
         const val FINGER_THAW_MS = 5000L
         const val RELOAD_WIDTH_FRACTION = 0.05f
+        const val FIND_DEBOUNCE_MS = 400L
+        const val FIND_AFTER_LOAD_MS = 400L
+        const val MAX_SEARCH_BYTES = 8L * 1024 * 1024
+        const val EXPORT_KEEP_MS = 7L * 24 * 3600 * 1000
+        const val LOAD_TIMEOUT_MS = 15_000L
+        const val STABLE_INTERVAL_MS = 500L
+        const val STABLE_MAX_MS = 5_000L
+        const val SCROLL_SETTLE_MS = 80L
+        const val VISUAL_STATE_TIMEOUT_MS = 1_000L
         const val BOUNDS_PAD_DP = 6f
         const val DEFAULT_WIDTH_PT = 1.134f
         const val FAST_OWNER = "web-pane-finger"

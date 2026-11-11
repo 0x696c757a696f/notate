@@ -41,18 +41,20 @@ class InkOverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         val vp = viewport
-        val pg = page
-        val c = pg?.let(content)
-        if (c != null && vp.widthPx > 0) {
-            val s = vp.scale
-            canvas.save()
-            canvas.scale(s, s)
-            canvas.translate(-vp.scrollX, -vp.scrollY)
-            val hidden = live?.hiddenIds.orEmpty()
-            for (item in c.query(vp.visibleDocRect())) if (item.id !in hidden) renderer.draw(canvas, item, paints)
-            canvas.restore()
-        }
+        drawContent(canvas, vp, page, live?.hiddenIds.orEmpty())
         val l = layout
         if (l != null) live?.draw(canvas, vp, l)
+    }
+
+    /** Draws the stored objects of [pg] that [vp] shows onto [canvas]; also used to lay ink over a page capture for export. */
+    fun drawContent(canvas: Canvas, vp: Viewport, pg: PageId?, hidden: Set<app.notate.core.model.ItemId> = emptySet()) {
+        val c = pg?.let(content) ?: return
+        if (vp.widthPx <= 0) return
+        val s = vp.scale
+        canvas.save()
+        canvas.scale(s, s)
+        canvas.translate(-vp.scrollX, -vp.scrollY)
+        for (item in c.query(vp.visibleDocRect())) if (item.id !in hidden) renderer.draw(canvas, item, paints)
+        canvas.restore()
     }
 }

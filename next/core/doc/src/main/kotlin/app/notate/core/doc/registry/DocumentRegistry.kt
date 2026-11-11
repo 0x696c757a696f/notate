@@ -40,6 +40,9 @@ class DocumentHandle internal constructor(
     /** The file of an asset, or null when unknown. */
     fun assetFile(id: app.notate.core.model.AssetId): java.io.File? = store.assetFile(id)
 
+    /** Number of objects of [page] on disk (diagnostics; reads them all, call off the main thread). */
+    suspend fun countStoredItems(page: app.notate.core.model.PageId): Int = store.readItems(page).size
+
     suspend fun readOutline(): List<app.notate.core.store.OutlineEntry> = store.readOutline()
 }
 
