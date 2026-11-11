@@ -103,4 +103,20 @@ class ViewportTest {
         val extra = v.panBy(0f, -1_000_000f, single, extraBottomPt = 120f).scrollY
         assertThat(extra - plain).isEqualTo(120f)
     }
+
+    @Test fun fitRectCentersAndShowsWholeRect() {
+        val r = app.notate.core.geometry.Rect(1000f, -500f, 1400f, -200f)
+        val v = vp().fitRect(r, marginPx = 20f)
+        val vis = v.visibleDocRect()
+        assertThat(vis.contains(r)).isTrue()
+        assertThat(vis.center.x).isWithin(1e-2f).of(r.center.x)
+        assertThat(vis.center.y).isWithin(1e-2f).of(r.center.y)
+    }
+
+    @Test fun fitRectDoesNotBlowUpTinyContentAndKeepsEmptyUnchanged() {
+        val tiny = app.notate.core.geometry.Rect(0f, 0f, 2f, 2f)
+        assertThat(vp().fitRect(tiny, 20f).zoom).isEqualTo(2f)
+        val v = vp(5f, 6f, 1.3f)
+        assertThat(v.fitRect(app.notate.core.geometry.Rect.EMPTY, 20f)).isEqualTo(v)
+    }
 }

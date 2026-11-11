@@ -45,6 +45,9 @@ interface ToolbarActions {
     /** The Zoom button was pressed: open ([on]) or close the zoom window of the focused pane. Returns why it cannot be opened, or null. */
     fun onZoomToggled(on: Boolean): String? = null
 
+    /** The Fit button was pressed: show all content of the focused pane's page (fit width on fixed pages). Returns why it cannot, or null. */
+    fun onFitContent(): String? = null
+
     /** The Image button was tapped: pick a picture and place it on the page. */
     fun onInsertImage() {}
 
@@ -87,6 +90,7 @@ class ToolbarView(
     private val more: ToolButton
     private val rulerDef: Def
     private val zoomDef: Def
+    private val fitDef: Def
     private var zoomOn = false
     private var zoomReason: String? = null
     private var guide: GuideKind? = null
@@ -139,6 +143,9 @@ class ToolbarView(
             ).show()
         }
         zoomDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom) { toggleZoom() }
+        fitDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_center_focus, R.string.tool_fit_content) {
+            actions.onFitContent()?.let { Tooltip.show(fitDef.button, it) }
+        }
         tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand)
         hScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
@@ -266,7 +273,7 @@ class ToolbarView(
     fun render(state: ToolState, force: Boolean = false) {
         if (!force && state == last) return
         last = state
-        for (d in tools) d.button.isSelected = if (d === zoomDef) zoomOn else if (d.kind == null) guide != null else d.kind == state.active
+        for (d in tools) d.button.isSelected = if (d === fitDef) false else if (d === zoomDef) zoomOn else if (d.kind == null) guide != null else d.kind == state.active
         middle.removeAllViews()
         val o = ToolbarOptions(context, middle, controller, popups, xdpi, gridAvailable)
         when (state.active) {

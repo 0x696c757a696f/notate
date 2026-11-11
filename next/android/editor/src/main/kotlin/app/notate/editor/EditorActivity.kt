@@ -365,6 +365,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         chrome.toolbar.setZoomBlocked(p.zoomUnavailableReason())
     }
 
+    override fun onFitContent(): String? = if (pane?.fitContent() == true) null else getString(R.string.unavailable_here)
+
     override fun onZoomToggled(on: Boolean): String? {
         val p = pane ?: return null
         if (!on) {

@@ -113,6 +113,19 @@ class DocumentEditor(
         }
     }
 
+    /**
+     * Bounding box of everything on [page] (page coordinates, pt), or null when the page is empty. Stored items plus anything
+     * edited in memory; an item erased but not yet saved still counts, so the box can be slightly generous.
+     */
+    suspend fun contentBounds(page: PageId): Rect? {
+        val stored = withContext(io) { store.pageBounds(page) }
+        return withContext(main) {
+            val mem = contents[page]?.all()?.map { it.bounds }?.reduceOrNull { a, b -> a.union(b) }
+            val all = if (stored == null) mem else if (mem == null) stored else stored.union(mem)
+            all?.takeIf { !it.isEmpty }
+        }
+    }
+
     private fun covers(c: PageContent, whiteboard: Boolean, region: Rect?): Boolean {
         val lr = c.loadedRegion ?: return true
         if (!whiteboard) return true

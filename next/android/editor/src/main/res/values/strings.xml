@@ -10,6 +10,7 @@
     <string name="tool_ruler">Ruler</string>
     <string name="tool_protractor">Protractor</string>
     <string name="tool_zoom">Zoom window</string>
+    <string name="tool_fit_content">Fit to content</string>
     <string name="zoom_back">Move left</string>
     <string name="zoom_forward">Move right</string>
     <string name="zoom_new_line">New line</string>

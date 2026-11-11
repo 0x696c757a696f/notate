@@ -79,8 +79,10 @@ class ThumbnailStore(
         val disk: Bitmap? = if (useDisk) withContext(io) { readDisk(info) } else null
         val bmp: Bitmap = disk ?: run {
             val wasLoaded = editor.content(id) != null
-            val content = editor.ensureLoaded(id)
-            val rendered = renderer.render(editor.pages.value.firstOrNull { it.id == id } ?: info, content, widthPx)
+            val page = editor.pages.value.firstOrNull { it.id == id } ?: info
+            val view = if (page.height == null) ThumbnailRenderer.whiteboardView(editor.contentBounds(id), page.width) else null
+            val content = editor.ensureLoaded(id, view)
+            val rendered = renderer.render(page, content, widthPx, view)
             if (!wasLoaded) editor.evict(id)
             rendered
         }

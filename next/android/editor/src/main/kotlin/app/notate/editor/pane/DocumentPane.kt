@@ -36,6 +36,9 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
     fun setLayoutMode(mode: PageLayoutMode) {}
 
+    /** Shows everything on the page in view: all content on an infinite canvas, the full width on a fixed page. False when unsupported. */
+    fun fitContent(): Boolean = false
+
     /** Called by the window when the save queue went idle after a change (debug timings). */
     fun onSaveIdle(nowUptime: Long) {}
 
