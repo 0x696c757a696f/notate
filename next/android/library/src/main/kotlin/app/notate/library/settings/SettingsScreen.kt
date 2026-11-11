@@ -194,6 +194,7 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
                 ToolbarTool.SHAPE -> R.string.settings_show_shape
                 ToolbarTool.TEXT -> R.string.settings_show_text
                 ToolbarTool.IMAGE -> R.string.settings_show_image
+                ToolbarTool.INSERT_SPACE -> R.string.settings_show_insert_space
                 ToolbarTool.RULER -> R.string.settings_show_ruler
                 ToolbarTool.ZOOM -> R.string.settings_show_zoom
                 ToolbarTool.HAND -> R.string.settings_show_hand
