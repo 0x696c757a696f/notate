@@ -71,7 +71,10 @@ class ShapeDragSession(private val preset: ToolPreset, private val ctx: ToolCont
         raw = Vec2(p.x, p.y)
         p1 = target(p.x, p.y)
         val s = if (hypot(p1.x - p0.x, p1.y - p0.y) < MIN_DRAG_PT) null else shape()
-        if (s != null && editor.content(ctx.page) != null) editor.apply(Edit.Items(ctx.page, emptyList(), listOf(s)))
+        if (s != null && editor.content(ctx.page) != null) {
+            editor.apply(Edit.Items(ctx.page, emptyList(), listOf(s)))
+            ctx.selection?.selectQuick(ctx.page, s.id)
+        }
         ctx.preview.clear()
     }
 
