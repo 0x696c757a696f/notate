@@ -221,4 +221,19 @@ class PdfExporterTest {
         map(180).let { assertThat(it.u(30f, 40f)).isEqualTo(170f); assertThat(it.v(30f, 40f)).isEqualTo(40f) }
         map(270).let { assertThat(it.u(30f, 40f)).isEqualTo(160f); assertThat(it.v(30f, 40f)).isEqualTo(370f) }
     }
+
+    @Test fun diagHelveticaLoads() { assertThat(com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA).isNotNull() }
+    @Test fun diagHelveticaEncodes() { assertThat(com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA.encode("Hello world")).isNotEmpty() }
+    @Test fun diagHelveticaWidth() { assertThat(com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA.getStringWidth("Hello world")).isGreaterThan(0f) }
+    @Test fun diagLayoutHasLines() {
+        val l = app.notate.render.image.TextLayouts.build("Hello world", 14f, false, 250f, TextAlign.LEFT, 0xFF000000.toInt())
+        assertThat(l.lineCount).isEqualTo(1)
+    }
+    @Test fun diagTextOnlyPageHasTj() {
+        val store = FakeDocStore(meta(id.value, DocKind.NOTEBOOK, "T"), listOf(page(1)))
+        add(store, 1, text(5, "Hello world"))
+        val out = File(tmp.root, "t.pdf")
+        runBlocking { exporter.export(handle(store), ExportOptions(), out) { _, _ -> } }
+        PDDocument.load(out).use { assertThat(operators(it.getPage(0))).contains("Tj") }
+    }
 }
