@@ -28,6 +28,9 @@
             android:name="app.notate.LegacyImportActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation" />
+        <activity
+            android:name="app.notate.RestoreActivity"
+            android:exported="false" />
         <service
             android:name="app.notate.LegacyImportService"
             android:exported="false"
@@ -70,6 +73,7 @@
                 <data android:pathPattern=".*\\.htm" />
                 <data android:pathPattern=".*\\.xhtml" />
                 <data android:pathPattern=".*\\.zip" />
+                <data android:pathPattern=".*\\.notate" />
             </intent-filter>
             <!-- PDFs (R3-1): "Open with" and "Share". -->
             <intent-filter>

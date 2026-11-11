@@ -36,6 +36,10 @@ interface DocStore : java.io.Closeable {
     suspend fun writeOutline(entries: List<OutlineEntry>)
     /** Deletes assets that no page or item refers to; call when the document closes. Default: nothing to clean. */
     suspend fun vacuumAssets() {}
+    /** Writes a consistent single-file copy of `doc.db` (no WAL) to [target]; used by `.notate` packages and backups. */
+    suspend fun snapshot(target: File): Unit = throw UnsupportedOperationException("snapshot")
+    /** Paths (relative to [dir]) of every file or folder recorded in the asset table, e.g. `assets/ab12.pdf`, `assets/web/`. */
+    suspend fun assetPaths(): List<String> = emptyList()
 }
 
 interface DocStoreFactory {

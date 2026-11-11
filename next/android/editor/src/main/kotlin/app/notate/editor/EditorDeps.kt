@@ -53,6 +53,8 @@ class EditorDeps(
     val libraryStore: (() -> LibraryStore)? = null,
     /** An intent that brings the bookshelf to the front (the editor module cannot see `:next:app`). */
     val libraryIntent: ((Context) -> Intent)? = null,
+    /** A document failed to open: show the app's "couldn't be opened" dialog over [Context] and return true; false falls back to a toast. */
+    val onOpenFailed: ((Context, DocId) -> Boolean)? = null,
 )
 
 /** Creates the pane that shows a document of some kind. */

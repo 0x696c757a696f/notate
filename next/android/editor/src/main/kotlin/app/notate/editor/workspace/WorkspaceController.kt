@@ -330,7 +330,7 @@ class WorkspaceController(
             throw e
         } catch (e: Exception) {
             deps.logger.e(TAG, "Opening $id failed", e)
-            listener.onMessage(context.getString(R.string.picker_open_failed))
+            if (deps.onOpenFailed?.invoke(context, id) != true) listener.onMessage(context.getString(R.string.picker_open_failed))
             return null
         }
         if (shutDown) {
