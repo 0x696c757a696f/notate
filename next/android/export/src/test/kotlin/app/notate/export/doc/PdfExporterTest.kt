@@ -35,6 +35,7 @@ import app.notate.core.testing.meta
 import app.notate.core.testing.page
 import app.notate.core.testing.stroke
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.contentstream.operator.Operator
 import com.tom_roush.pdfbox.cos.COSNumber
@@ -126,14 +127,14 @@ class PdfExporterTest {
             assertThat(doc.getPage(0).mediaBox.width).isWithin(0.01f).of(595.28f)
             assertThat(doc.getPage(0).mediaBox.height).isWithin(0.01f).of(841.89f)
             val names = operators(doc.getPage(0))
-            assertThat(names).contains("f")   // filled outlines, shape fill, text picture backdrop-less paths
-            assertThat(names).contains("S")   // template lines
-            assertThat(names).contains("Tj")  // Latin text stays text
-            assertThat(names).contains("Do")  // the CJK text box is a picture
+            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("f")   // filled outlines, shape fill, text picture backdrop-less paths
+            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("S")   // template lines
+            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("Tj")  // Latin text stays text
+            assertWithMessage("operators on page 1: " + names.distinct()).that(names).contains("Do")  // the CJK text box is a picture
             val links = doc.getPage(0).annotations.filterIsInstance<PDAnnotationLink>()
-            assertThat(links).hasSize(2)
+            assertWithMessage("links").that(links).hasSize(2)
             assertThat(links.mapNotNull { (it.action as? PDActionURI)?.uri }).containsExactly("https://example.com")
-            assertThat(doc.documentCatalog.documentOutline.children().count()).isEqualTo(3)
+            assertWithMessage("outline").that(doc.documentCatalog.documentOutline.children().count()).isEqualTo(3)
             assertThat(doc.documentInformation.title).isEqualTo("My notes")
             assertThat(doc.documentInformation.creator).isEqualTo("Notate")
         }
@@ -169,13 +170,14 @@ class PdfExporterTest {
 
     @Test fun infiniteCanvasIsCroppedToItsContent() = runBlocking {
         val store = FakeDocStore(meta(id.value, DocKind.NOTEBOOK, "Board"), listOf(page(1, height = null)))
-        add(store, 1, stroke(1, points = floatArrayOf(1000f, 1000f, 1200f, 1100f)))
+        val s = stroke(1, points = floatArrayOf(1000f, 1000f, 1200f, 1100f))
+        add(store, 1, s)
         val out = File(tmp.root, "board.pdf")
         exporter.export(handle(store), ExportOptions(), out) { _, _ -> }
         PDDocument.load(out).use { doc ->
             val box = doc.getPage(0).mediaBox
-            assertThat(box.width).isWithin(2f).of(200f + 72f)
-            assertThat(box.height).isWithin(2f).of(100f + 72f)
+            assertWithMessage("box " + box).that(box.width).isWithin(0.5f).of(s.bounds.width + 72f)
+            assertWithMessage("box " + box).that(box.height).isWithin(0.5f).of(s.bounds.height + 72f)
         }
     }
 
