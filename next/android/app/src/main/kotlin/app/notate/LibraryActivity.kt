@@ -54,6 +54,7 @@ class LibraryActivity : ComponentActivity() {
                         onOpenDocument = { id -> open(vm, id) },
                         onSettings = { startActivity(SettingsActivity.intent(this@LibraryActivity)) },
                         onExportNotate = notateExport::start,
+                        onExport = { id, title -> startActivity(ExportActivity.intent(this@LibraryActivity, id, title)) },
                         onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
                         extraAdd = listOfNotNull(
                             continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },

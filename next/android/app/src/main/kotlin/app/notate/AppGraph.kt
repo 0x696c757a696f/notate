@@ -35,6 +35,8 @@ import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.thumb.ThumbnailRenderer
 import app.notate.export.legacy.LegacyImporter
 import app.notate.export.pkg.BackupEngine
+import app.notate.export.doc.PdfExporter
+import app.notate.export.doc.PngExporter
 import app.notate.export.pkg.PackageExporter
 import app.notate.export.pkg.PackageImporter
 import app.notate.export.legacy.LegacyLocalMigrator
@@ -129,6 +131,17 @@ class AppGraph(
     /** Writes documents as `.notate` packages (Export…, backups). */
     val packageExporter = PackageExporter(docStoreFactory, { libraryStore }, paths::docDir, { registry.flushAll() }, dispatchers.io, clock::now)
 
+    /** Export… of notebooks and annotated PDFs as PDF / PNG (R3-2). */
+    val pdfExporter = PdfExporter(dispatchers.io)
+    val pngExporter = PngExporter(
+        backgrounds = { h ->
+            BackgroundRendererSet().also { set ->
+                if (h.editor.meta.value.kind == DocKind.PDF) set.registerPdf(pdfBackgrounds.create(h::assetFile).renderer)
+            }
+        },
+        io = dispatchers.io,
+    )
+
     /** Reads `.notate` packages (Import Notate file, restore). */
     val packageImporter = PackageImporter(
         docs = docStoreFactory, library = { libraryStore }, docDir = paths::docDir,
@@ -187,6 +200,7 @@ class AppGraph(
             workspaceStore = { workspaceStore },
             libraryStore = { libraryStore },
             onOpenFailed = OpenFailedDialog::show,
+            onExport = { ctx, id, page -> ctx.startActivity(ExportActivity.intent(ctx, id, null, page)) },
             libraryIntent = { ctx ->
                 android.content.Intent(ctx, LibraryActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             },

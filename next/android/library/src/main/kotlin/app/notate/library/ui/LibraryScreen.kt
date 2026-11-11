@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.notate.core.doc.library.LibraryLocation
 import app.notate.core.model.DocId
+import app.notate.core.model.DocKind
 import app.notate.library.LibraryDialog
 import app.notate.library.LibraryViewModel
 import app.notate.library.R
@@ -47,6 +48,7 @@ fun LibraryScreen(
     onSidebarLongClick: () -> Unit = {},
     extraAdd: List<Pair<String, () -> Unit>> = emptyList(),
     onExportNotate: ((id: DocId, title: String) -> Unit)? = null,
+    onExport: ((id: DocId, title: String) -> Unit)? = null,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val dialog by vm.dialog.collectAsStateWithLifecycle()
@@ -83,7 +85,7 @@ fun LibraryScreen(
             if (sidebar) Sidebar(state, vm::open, onSettings)
             Column(Modifier.weight(1f)) {
                 if (state.location == LibraryLocation.Trash) TrashBanner(state.documents.isNotEmpty()) { vm.show(LibraryDialog.EmptyTrash) }
-                Box(Modifier.weight(1f)) { Shelf(vm, covers, state, onOpenDocument, onExportNotate) }
+                Box(Modifier.weight(1f)) { Shelf(vm, covers, state, onOpenDocument, onExportNotate, onExport) }
                 if (state.selecting) SelectionBar(state, vm)
             }
         }
@@ -112,6 +114,7 @@ private fun FailedBanner(onDismiss: () -> Unit) {
 private fun Shelf(
     vm: LibraryViewModel, covers: CoverLoader, state: app.notate.core.doc.library.LibraryUiState, onOpen: (DocId) -> Unit,
     onExportNotate: ((DocId, String) -> Unit)?,
+    onExport: ((DocId, String) -> Unit)? = null,
 ) {
     val now = remember(state.documents) { System.currentTimeMillis() }
     var menuFor by remember { mutableStateOf<String?>(null) }
@@ -164,6 +167,7 @@ private fun Shelf(
                             MenuItem(stringResource(R.string.menu_move), onClick = close { vm.show(LibraryDialog.MoveTo(setOf(d.id))) })
                             MenuItem(stringResource(R.string.menu_tags), onClick = close { vm.show(LibraryDialog.Tags(setOf(d.id))) })
                             MenuItem(stringResource(R.string.menu_duplicate), onClick = close { vm.duplicate(listOf(d.id)) })
+                            if (onExport != null && d.kind != DocKind.WEB) MenuItem(stringResource(R.string.menu_export_pdf_png), onClick = close { onExport(d.id, d.title) })
                             if (onExportNotate != null) MenuItem(stringResource(R.string.menu_export_notate), onClick = close { onExportNotate(d.id, d.title) })
                             MenuItem(stringResource(if (d.pinned) R.string.menu_unpin else R.string.menu_pin), onClick = close { vm.togglePin(d.id) })
                             MenuItem(stringResource(R.string.menu_trash), onClick = close { vm.trash(listOf(d.id)) })

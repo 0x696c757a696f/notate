@@ -44,6 +44,9 @@ class DocumentHandle internal constructor(
     suspend fun countStoredItems(page: app.notate.core.model.PageId): Int = store.readItems(page).size
 
     suspend fun readOutline(): List<app.notate.core.store.OutlineEntry> = store.readOutline()
+
+    /** Every stored object of [page] ordered by (layer, order); flush [save] first to include pending edits (export). */
+    suspend fun readItems(page: app.notate.core.model.PageId): List<app.notate.core.model.Item> = store.readItems(page)
 }
 
 class FlushFailure(val id: DocId, val error: Throwable)

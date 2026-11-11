@@ -443,6 +443,10 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         if (p != null && h != null && (Capability.OUTLINE in p.capabilities || hasBookmarks)) {
             items += MenuEntry(getString(R.string.more_outline)) { openOutline() }
         }
+        val export = deps.onExport
+        if (export != null && p != null && h != null && h.editor.meta.value.kind != DocKind.WEB) {
+            items += MenuEntry(getString(R.string.more_export)) { export(this, h.id, p.currentPage) }
+        }
         items += MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) }
         items += MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() }
         items += pane?.moreEntries() ?: emptyList()
