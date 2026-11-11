@@ -103,6 +103,9 @@ class NotebookPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
     private val live = LiveInkLayer(canvasView, density) { editor.content(it) }
 
+    /** PDF background of this document (null for other kinds or when the app gave none). */
+    private val pdf = if (handle.editor.meta.value.kind == DocKind.PDF) deps.pdfBackgrounds?.create(handle::assetFile) else null
+
     /** Page offsets on the document plane for cross-page selection moves. */
     private val geometry = object : PageGeometry {
         override fun origin(page: PageId): Vec2 = layout.frameOf(page).let { Vec2(it.l, it.t) }
@@ -117,7 +120,7 @@ class NotebookPane(
 
     private val images = ImageCache(AssetFiles { handle.assetFile(it) }, onLoaded = { a -> main.post { onImageLoaded(a) } })
     private val cache = TileCache(TileCache.defaultMaxBytes((context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).memoryClass))
-    private val rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache(), images))
+    private val rasterizer = TileRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache(), images), pdf?.tiles)
     private val tileSource = object : TileSource {
         override fun pageInfo(page: PageId): PageInfo? = editor.pages.value.firstOrNull { it.id == page }
         override fun content(page: PageId): PageContent? = editor.content(page)
@@ -1134,6 +1137,17 @@ class NotebookPane(
         scheduleEndFinger(PAGE_TURN_SETTLE_MS)
     }
 
+    override fun goToPage(page: PageId, yPt: Float?) {
+        if (yPt == null || layoutMode == PageLayoutMode.SINGLE) return goToPage(page)
+        if (layout.indexOf(page) < 0) layout = buildLayout()
+        if (layout.indexOf(page) < 0 || viewport.widthPx == 0 || released) return
+        addCard = false
+        beginFinger()
+        val top = layout.frameOf(page).t + yPt - GO_TO_MARGIN_DP * density / viewport.scale
+        setViewport(panned(0f, 0f, viewport.copy(scrollY = top)), delayTiles = false)
+        scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+    }
+
     /** Settings → Full refresh every N page turns (single-page mode): every Nth turn ends with a full refresh. */
     private fun countPageTurn() {
         val n = deps.settings.gcEvery.value
@@ -1488,6 +1502,7 @@ class NotebookPane(
         zoomScheduler.cancelAll()
         host.arbiter.detach(this)
         cache.clear()
+        pdf?.tiles?.cache?.clear()
     }
 
     private companion object {

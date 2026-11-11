@@ -58,6 +58,7 @@ class LibraryActivity : ComponentActivity() {
                         extraAdd = listOfNotNull(
                             continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
                         ) + listOf(
+                            getString(R.string.import_pdf) to { startActivity(ImportActivity.pickPdfIntent(this@LibraryActivity)) },
                             getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
                             getString(R.string.import_notate_file) to { startActivity(ImportActivity.pickPackageIntent(this@LibraryActivity)) },
                             getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },

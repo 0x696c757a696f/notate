@@ -27,6 +27,8 @@ import app.notate.platform.log.AndroidLogger
 import app.notate.platform.prefs.PrefsKeyValueStore
 import app.notate.platform.sql.AndroidSqlDriverFactory
 import app.notate.platform.thread.DispatcherSet
+import app.notate.pdf.PdfBackgrounds
+import app.notate.pdf.PdfImporter
 import app.notate.render.ink.GeometryCache
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
@@ -85,6 +87,21 @@ class AppGraph(
         logger = logger,
         paneWidthDp = { app.resources.displayMetrics.let { it.widthPixels / it.density } },
     )
+
+    /** Imports PDFs as documents (R3-1). */
+    val pdfImporter = PdfImporter(
+        context = app,
+        stagingRoot = paths.cacheDir,
+        docDir = paths::docDir,
+        docs = docStoreFactory,
+        libraryProvider = { libraryStore },
+        clock = clock,
+        io = dispatchers.io,
+        logger = logger,
+    )
+
+    /** PDF page backgrounds for every open PDF document; the PDF thread owns the renderers. */
+    val pdfBackgrounds = PdfBackgrounds(dispatchers.pdf)
 
     val registry = DocumentRegistry(
         opener = object : DocumentOpener {
@@ -166,6 +183,7 @@ class AppGraph(
             paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
             openSettings = { ctx -> ctx.startActivity(SettingsActivity.intent(ctx)) },
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
+            pdfBackgrounds = pdfBackgrounds,
             workspaceStore = { workspaceStore },
             libraryStore = { libraryStore },
             onOpenFailed = OpenFailedDialog::show,
