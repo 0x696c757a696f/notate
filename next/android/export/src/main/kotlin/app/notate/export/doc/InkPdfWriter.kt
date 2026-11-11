@@ -152,12 +152,11 @@ internal class InkPdfWriter(
         val layout = TextLayouts.build(t.text, t.fontSizePt, t.bold, t.frame.width, t.align, t.color)
         val font = if (t.bold) PDType1Font.HELVETICA_BOLD else PDType1Font.HELVETICA
         // Without a usable layout (no line information) the text is split at newlines only.
-        val measured = layout.lineCount > 0
-        val lines = if (isLatin(t.text)) {
-            if (measured) (0 until layout.lineCount).map { i ->
-                layout.text.subSequence(layout.getLineStart(i), layout.getLineEnd(i)).toString().trimEnd('\n', '\r')
-            } else t.text.split('\n')
-        } else null
+        val fromLayout = (0 until layout.lineCount).map { i ->
+            layout.text.subSequence(layout.getLineStart(i), layout.getLineEnd(i)).toString().trimEnd('\n', '\r')
+        }
+        val measured = fromLayout.any { it.isNotEmpty() }
+        val lines = if (isLatin(t.text)) (if (measured) fromLayout else t.text.split('\n')) else null
         if (lines == null || lines.any { runCatching { font.encode(it) }.isFailure }) return textAsPicture(cs, t, layout)
 
         cs.saveGraphicsState()
