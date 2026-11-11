@@ -45,6 +45,13 @@ class ToolButton(context: Context, icon: Int, val label: String, size: Int = 48)
         applyTint()
     }
 
+    /** Makes the button a [size] dp square (padding keeps the icon at [ICON_DP]); for the toolbar's size setting. */
+    fun resize(size: Int) {
+        val pad = dp((size - ICON_DP) / 2)
+        setPadding(pad, pad, pad, pad)
+        layoutParams = android.widget.LinearLayout.LayoutParams(dp(size), dp(size))
+    }
+
     fun onClick(block: () -> Unit): ToolButton { action = block; return this }
 
     /** Replaces the tooltip by [block] for an available button (e.g. the Axes kind chooser). */

@@ -21,6 +21,8 @@ class SettingsTest {
         assertThat(s.pageLayout.value).isEqualTo(PageLayoutMode.CONTINUOUS)
         assertThat(s.gcEvery.value).isEqualTo(0)
         assertThat(s.toolbarPos.value).isEqualTo(ToolbarPos.TOP)
+        assertThat(s.toolbarSize.value).isEqualTo(ToolbarSize.REGULAR)
+        assertThat(s.toolbarShow.values.map { it.value }.toSet()).containsExactly(true)
         assertThat(s.defaultTemplate.value).isEqualTo(PageTemplate.DEFAULT)
         assertThat(s.webNetworkDefault.value).isFalse()
         assertThat(s.webJsDefault.value).isTrue()
@@ -67,5 +69,34 @@ class SettingsTest {
         assertThat(t.getJson("pen")).isNull()
         t.putJson("pen", "{\"w\":1}")
         assertThat(t.getJson("pen")).isEqualTo("{\"w\":1}")
+    }
+}
+
+class ToolbarLookTest {
+    @Test fun regularMatchesTheOriginal52And64Dp() {
+        assertThat(ToolbarSize.REGULAR.buttonDp).isEqualTo(48)
+        assertThat(ToolbarSize.REGULAR.barDp).isEqualTo(52)
+        assertThat(ToolbarSize.REGULAR.verticalBarDp).isEqualTo(64)
+    }
+
+    @Test fun sizesGrowAndTheBarAlwaysFitsTheOptionButtons() {
+        val s = ToolbarSize.entries
+        assertThat(s.map { it.buttonDp }).isInOrder()
+        assertThat(s.all { it.barDp > it.buttonDp && it.barDp >= 52 }).isTrue()
+    }
+
+    @Test fun hiddenToolsAndSizePersist() {
+        val kv = InMemoryKeyValueStore()
+        val a = Settings(kv)
+        a.toolbarShow.getValue(ToolbarTool.HAND).set(false)
+        a.toolbarSize.set(ToolbarSize.LARGE)
+        val b = Settings(kv)
+        assertThat(b.toolbarShow.getValue(ToolbarTool.HAND).value).isFalse()
+        assertThat(b.toolbarShow.getValue(ToolbarTool.LASSO).value).isTrue()
+        assertThat(b.toolbarSize.value).isEqualTo(ToolbarSize.LARGE)
+    }
+
+    @Test fun penAndEraserCannotBeHidden() {
+        assertThat(ToolbarTool.entries.map { it.id }).containsNoneOf("pen", "eraser")
     }
 }
