@@ -125,6 +125,21 @@ class SqliteDocStore(
         assets.removeUnused(used, keepWeb = hasWeb)
     }
 
+    /** `VACUUM INTO` (SQLite 3.27+); on older engines checkpoints the WAL and copies the file. */
+    override suspend fun snapshot(target: File): Unit = withContext(io) {
+        target.parentFile?.mkdirs()
+        target.delete()
+        try {
+            driver.execute("VACUUM INTO ?", target.path)
+        } catch (e: Exception) {
+            target.delete()
+            driver.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            File(dir, SqliteDocStoreFactory.DB_NAME).copyTo(target, overwrite = true)
+        }
+    }
+
+    override suspend fun assetPaths(): List<String> = withContext(io) { driver.query("SELECT path FROM asset") { it.string(0)!! } }
+
     override fun close() {
         try {
             if (!readOnly) driver.execute("PRAGMA wal_checkpoint(TRUNCATE)")

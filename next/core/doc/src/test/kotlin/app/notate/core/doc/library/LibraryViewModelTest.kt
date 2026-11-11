@@ -77,7 +77,7 @@ class LibraryViewModelTest {
         val physics = c.createFolder("Physics")
         c.openFolder(physics.id)
         create("Lecture 1")
-        assertThat(await { it.documents.size == 1 }.currentFolder?.name).isEqualTo("Physics")
+        assertThat(await { it.documents.size == 1 && it.currentFolder != null }.currentFolder?.name).isEqualTo("Physics")
         c.up()
         assertThat(await { it.location == LibraryLocation.Folder(null) }.documents).isEmpty()
         // Same title is free at the top level because folders are separate namespaces.

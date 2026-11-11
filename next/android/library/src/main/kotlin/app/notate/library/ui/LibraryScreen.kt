@@ -46,6 +46,7 @@ fun LibraryScreen(
     onSettings: (() -> Unit)? = null,
     onSidebarLongClick: () -> Unit = {},
     extraAdd: List<Pair<String, () -> Unit>> = emptyList(),
+    onExportNotate: ((id: DocId, title: String) -> Unit)? = null,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val dialog by vm.dialog.collectAsStateWithLifecycle()
@@ -82,7 +83,7 @@ fun LibraryScreen(
             if (sidebar) Sidebar(state, vm::open, onSettings)
             Column(Modifier.weight(1f)) {
                 if (state.location == LibraryLocation.Trash) TrashBanner(state.documents.isNotEmpty()) { vm.show(LibraryDialog.EmptyTrash) }
-                Box(Modifier.weight(1f)) { Shelf(vm, covers, state, onOpenDocument) }
+                Box(Modifier.weight(1f)) { Shelf(vm, covers, state, onOpenDocument, onExportNotate) }
                 if (state.selecting) SelectionBar(state, vm)
             }
         }
@@ -108,7 +109,10 @@ private fun FailedBanner(onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun Shelf(vm: LibraryViewModel, covers: CoverLoader, state: app.notate.core.doc.library.LibraryUiState, onOpen: (DocId) -> Unit) {
+private fun Shelf(
+    vm: LibraryViewModel, covers: CoverLoader, state: app.notate.core.doc.library.LibraryUiState, onOpen: (DocId) -> Unit,
+    onExportNotate: ((DocId, String) -> Unit)?,
+) {
     val now = remember(state.documents) { System.currentTimeMillis() }
     var menuFor by remember { mutableStateOf<String?>(null) }
     val trash = state.location == LibraryLocation.Trash
@@ -160,6 +164,7 @@ private fun Shelf(vm: LibraryViewModel, covers: CoverLoader, state: app.notate.c
                             MenuItem(stringResource(R.string.menu_move), onClick = close { vm.show(LibraryDialog.MoveTo(setOf(d.id))) })
                             MenuItem(stringResource(R.string.menu_tags), onClick = close { vm.show(LibraryDialog.Tags(setOf(d.id))) })
                             MenuItem(stringResource(R.string.menu_duplicate), onClick = close { vm.duplicate(listOf(d.id)) })
+                            if (onExportNotate != null) MenuItem(stringResource(R.string.menu_export_notate), onClick = close { onExportNotate(d.id, d.title) })
                             MenuItem(stringResource(if (d.pinned) R.string.menu_unpin else R.string.menu_pin), onClick = close { vm.togglePin(d.id) })
                             MenuItem(stringResource(R.string.menu_trash), onClick = close { vm.trash(listOf(d.id)) })
                         }

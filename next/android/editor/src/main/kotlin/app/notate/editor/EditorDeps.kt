@@ -20,6 +20,7 @@ import app.notate.core.store.library.LibraryStore
 import app.notate.core.workspace.WorkspaceStore
 import app.notate.platform.device.DeviceInfo
 import app.notate.platform.thread.DispatcherSet
+import app.notate.render.tile.PdfBackgroundFactory
 import kotlinx.coroutines.CoroutineScope
 
 /** Everything the editor needs from the app's dependency graph (the editor module cannot see `:next:app`). */
@@ -42,6 +43,8 @@ class EditorDeps(
     /** Opens the Settings screen (a separate activity of the app); Back returns to the editor. */
     val openSettings: (Context) -> Unit = {},
     val thumbsDir: ((DocId) -> java.io.File)? = null,
+    /** Draws PDF page backgrounds (implemented by `:next:pdf`); null = PDF pages show white. */
+    val pdfBackgrounds: PdfBackgroundFactory? = null,
     /** Ink clipboard shared by every pane and document of the process (one [EditorDeps] per process). */
     val clipboard: InkClipboard = InkClipboard(),
     /** Saves and restores the open tabs; null keeps them in memory only. Resolved off the main thread (it opens `library.db`). */
@@ -50,6 +53,8 @@ class EditorDeps(
     val libraryStore: (() -> LibraryStore)? = null,
     /** An intent that brings the bookshelf to the front (the editor module cannot see `:next:app`). */
     val libraryIntent: ((Context) -> Intent)? = null,
+    /** A document failed to open: show the app's "couldn't be opened" dialog over [Context] and return true; false falls back to a toast. */
+    val onOpenFailed: ((Context, DocId) -> Boolean)? = null,
 )
 
 /** Creates the pane that shows a document of some kind. */

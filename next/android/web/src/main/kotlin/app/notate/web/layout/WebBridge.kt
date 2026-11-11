@@ -8,7 +8,9 @@ import kotlin.math.roundToInt
 /**
  * Glue between a document's WebView and `assets/notate-web/bridge.js`: fixes the layout width and reports how far the page's
  * real scroller has moved and how big the content is. What the page can call takes numbers and short strings only, because
- * the page controls the caller.
+ * the page controls the caller. `addJavascriptInterface` exposes the object to every frame of the page (an iframe from
+ * another origin too, when the document may use the network), so nothing here reads or writes data: the calls only move
+ * the ink layer. Calls are coalesced: however fast a page calls, at most one of each kind waits on the main thread.
  */
 class WebBridge(private val webView: WebView, private val listener: Listener) {
     interface Listener {
@@ -29,22 +31,36 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
 
     @Volatile var features = 0
         private set
+    private val scrollPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val layoutPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val hashPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var layoutReport: Pair<Float, Boolean>? = null
+    @Volatile private var hashReport: String? = null
 
     inner class JsApi {
         @JavascriptInterface
         fun onScroll(x: Float, y: Float, contentWidth: Float, contentHeight: Float) {
             if (!x.isFinite() || !y.isFinite() || !contentWidth.isFinite() || !contentHeight.isFinite()) return
+            val w = contentWidth.coerceIn(0f, MAX_CSS)
+            val h = contentHeight.coerceIn(0f, MAX_CSS)
+            // The page reports after every DOM mutation, resize and scroll event; most reports change nothing. Each report
+            // makes the pane resync (and a real move pauses the pen driver), so pass on only actual changes.
+            if (x == innerX && y == innerY && w == contentWidthCss && h == contentHeightCss) return
             innerX = x
             innerY = y
-            contentWidthCss = contentWidth.coerceIn(0f, MAX_CSS)
-            contentHeightCss = contentHeight.coerceIn(0f, MAX_CSS)
-            webView.post { listener.onScrolled() }
+            contentWidthCss = w
+            contentHeightCss = h
+            if (scrollPending.compareAndSet(false, true)) webView.post { scrollPending.set(false); listener.onScrolled() }
         }
 
         @JavascriptInterface
         fun onLayout(innerWidth: Float, fixed: Boolean) {
             if (!innerWidth.isFinite() || innerWidth <= 0f) return
-            webView.post { listener.onLayoutReported(innerWidth, fixed) }
+            layoutReport = innerWidth.coerceAtMost(MAX_CSS) to fixed
+            if (layoutPending.compareAndSet(false, true)) webView.post {
+                layoutPending.set(false)
+                layoutReport?.let { listener.onLayoutReported(it.first, it.second) }
+            }
         }
 
         /** Bit set of features the page used: 1 service worker, 2 WebGL, 4 WebAssembly, 8 ES modules. */
@@ -55,8 +71,11 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
 
         @JavascriptInterface
         fun onNavigate(hash: String?) {
-            val h = (hash ?: "").take(512)
-            webView.post { listener.onHashChanged(h) }
+            hashReport = (hash ?: "").take(512)
+            if (hashPending.compareAndSet(false, true)) webView.post {
+                hashPending.set(false)
+                listener.onHashChanged(hashReport ?: "")
+            }
         }
     }
 
@@ -76,7 +95,12 @@ class WebBridge(private val webView: WebView, private val listener: Listener) {
         if (webView.settings.javaScriptEnabled) webView.evaluateJavascript("window.__notate&&__notate.setReduceMotion($on)", null)
     }
 
-    /** Page content scroll in device px: the WebView's own plus an inner scroller's. */
+    /** Pauses (or resumes) the page's running animations: the per-pane part of freezing a page while writing. */
+    fun setFrozen(on: Boolean) {
+        if (webView.settings.javaScriptEnabled) webView.evaluateJavascript("window.__notate&&__notate.setFrozen($on)", null)
+    }
+
+        /** Page content scroll in device px: the WebView's own plus an inner scroller's. */
     fun scrollXPx(scale: Float): Float = webView.scrollX + innerX * scale
 
     fun scrollYPx(scale: Float): Float = webView.scrollY + innerY * scale

@@ -91,9 +91,19 @@ class SandboxClient(
         }
         val width = layoutWidthCss()
         if (range == null && mainFrame && width > 0f && (mime == "text/html" || mime == "application/xhtml+xml")) {
-            val locked = WebHtml.injectViewport(file.readBytes(), Math.round(width))
-            headers["Content-Length"] = locked.size.toString()
-            return WebResourceResponse(mime, encoding, 200, "OK", headers, ByteArrayInputStream(locked))
+            // Only the start of the page is read (where <head> is); the rest streams from the file, whatever its size.
+            val input = file.inputStream().buffered()
+            val locked = try {
+                WebHtml.injectViewportStream(input, length, Math.round(width))
+            } catch (e: java.io.IOException) {
+                input.close()
+                null
+            }
+            if (locked != null) {
+                headers["Content-Length"] = locked.second.toString()
+                return WebResourceResponse(mime, encoding, 200, "OK", headers, locked.first)
+            }
+            input.close()
         }
         if (range == null) {
             headers["Content-Length"] = length.toString()

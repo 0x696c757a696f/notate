@@ -28,6 +28,7 @@ import app.notate.editor.popup.PenSettingsPopup
 import app.notate.editor.popup.PopupHost
 import app.notate.editor.popup.WidthPopup
 import app.notate.editor.ui.Ink
+import app.notate.editor.ui.Tooltip
 import app.notate.editor.ui.dp
 
 /** What the toolbar asks of its window. */
@@ -40,6 +41,9 @@ interface ToolbarActions {
 
     /** The ruler / protractor button changed what the focused pane shows: [kind] null = hidden. */
     fun onGuideChanged(kind: GuideKind?) {}
+
+    /** The Zoom button was pressed: open ([on]) or close the zoom window of the focused pane. Returns why it cannot be opened, or null. */
+    fun onZoomToggled(on: Boolean): String? = null
 
     /** The Image button was tapped: pick a picture and place it on the page. */
     fun onInsertImage() {}
@@ -82,6 +86,9 @@ class ToolbarView(
     private val split: ToolButton
     private val more: ToolButton
     private val rulerDef: Def
+    private val zoomDef: Def
+    private var zoomOn = false
+    private var zoomReason: String? = null
     private var guide: GuideKind? = null
     private var lastGuide = GuideKind.RULER
     private var caps: Set<Capability> = Capability.entries.toSet()
@@ -99,10 +106,12 @@ class ToolbarView(
     init {
         val left = LinearLayout(context).apply { orientation = HORIZONTAL }
         leftGroup = left
-        fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int): Def {
+        fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int, toggle: (() -> Unit)? = null): Def {
             val name = context.getString(label)
             val b = ToolButton(context, icon, name).onClick {
-                if (kind == null) {
+                if (toggle != null) {
+                    toggle()
+                } else if (kind == null) {
                     setGuide(if (guide == null) lastGuide else null, notify = true)
                 } else if (kind == ToolKind.IMAGE) {
                     actions.onInsertImage()          // a one-shot action, not a mode
@@ -129,7 +138,7 @@ class ToolbarView(
                 ),
             ).show()
         }
-        tool(ToolKind.ZOOM_WINDOW, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom)
+        zoomDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom) { toggleZoom() }
         tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand)
         hScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
@@ -200,7 +209,36 @@ class ToolbarView(
         val active = controller.baseState().active
         val def = tools.firstOrNull { it.kind == active }
         if (def != null && def.cap !in caps && Capability.PEN in caps) controller.select(ToolKind.PEN)
+        if (zoomOn && Capability.ZOOM_WINDOW !in caps) zoomOn = false
+        applyZoomReason()
         render(controller.baseState(), force = true)
+    }
+
+    private fun toggleZoom() {
+        val want = !zoomOn
+        val why = actions.onZoomToggled(want)
+        if (why != null) {
+            Tooltip.show(zoomDef.button, why)
+            return
+        }
+        setZoomOn(want)
+    }
+
+    /** The focused pane's zoom window is open (or not): the Zoom button shows it. */
+    fun setZoomOn(on: Boolean) {
+        if (zoomOn == on) return
+        zoomOn = on
+        last?.let { render(it, force = true) }
+    }
+
+    /** Greys the Zoom button with [reason] (e.g. the page in view is a whiteboard); null makes it available again. */
+    fun setZoomBlocked(reason: String?) {
+        zoomReason = reason
+        applyZoomReason()
+    }
+
+    private fun applyZoomReason() {
+        zoomDef.button.reason = if (zoomDef.cap !in caps) capReason else zoomReason
     }
 
     /** Shows which guide the focused pane has up ([kind] null = none) without telling the window. */
@@ -228,7 +266,7 @@ class ToolbarView(
     fun render(state: ToolState, force: Boolean = false) {
         if (!force && state == last) return
         last = state
-        for (d in tools) d.button.isSelected = if (d.kind == null) guide != null else d.kind == state.active
+        for (d in tools) d.button.isSelected = if (d === zoomDef) zoomOn else if (d.kind == null) guide != null else d.kind == state.active
         middle.removeAllViews()
         val o = ToolbarOptions(context, middle, controller, popups, xdpi, gridAvailable)
         when (state.active) {

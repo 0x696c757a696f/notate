@@ -37,6 +37,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.StateFlow
+import android.text.format.DateUtils
+import app.notate.core.doc.settings.BackupFreq
 import app.notate.core.doc.settings.FingerMode
 import app.notate.core.doc.settings.Handedness
 import app.notate.core.doc.settings.PenButton
@@ -62,6 +65,19 @@ interface SettingsHost {
 
     /** Opens the flow that copies notes from the old Notate app into this library. */
     fun importFromOldNotate()
+
+    /** Name of the chosen backup folder; null when none is set. */
+    val backupFolder: StateFlow<String?>
+    val backupStatus: StateFlow<BackupStatus>
+
+    /** Opens the system folder picker for the backup folder. */
+    fun pickBackupFolder()
+
+    /** Starts a backup now (keeps running when the screen is left). */
+    fun backUpNow()
+
+    /** Opens the restore flow (pick a backup folder, choose notebooks). */
+    fun restoreFromBackup()
 
     /** Lines for the full-screen ink diagnostics page (device facts and recent log lines). */
     fun diagnosticLines(): List<String>
@@ -152,6 +168,7 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
             600 to stringResource(R.string.settings_ms, 600), 900 to stringResource(R.string.settings_ms, 900),
         ))
         Toggle(R.string.settings_driver_ink, settings.driverInk, R.string.settings_driver_ink_hint)
+        Toggle(R.string.settings_web_pen_surface, settings.webPenSurface, R.string.settings_web_pen_surface_hint)
 
         Group(R.string.settings_group_display)
         Choice(R.string.settings_page_layout, settings.pageLayout, listOf(
@@ -175,6 +192,9 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
 
         Group(R.string.settings_group_import)
         Row2(stringResource(R.string.settings_import_old), null) { host.importFromOldNotate() }
+
+        Group(R.string.settings_group_backup)
+        BackupRows(settings, host)
 
         Group(R.string.settings_group_search)
         Toggle(R.string.settings_ocr, settings.ocrEnabled, R.string.settings_ocr_hint)
@@ -266,4 +286,26 @@ private fun Toggle(title: Int, pref: Pref<Boolean>, hint: Int? = null) {
             ),
         )
     }
+}
+
+/** Backup folder, schedule, "Back up now" with its status line, and Restore (04 §9). */
+@Composable
+private fun BackupRows(settings: Settings, host: SettingsHost) {
+    val folder by host.backupFolder.collectAsStateWithLifecycle()
+    val status by host.backupStatus.collectAsStateWithLifecycle()
+    Row2(stringResource(R.string.settings_backup_folder), folder ?: stringResource(R.string.settings_backup_not_set)) { host.pickBackupFolder() }
+    Choice(R.string.settings_backup_auto, settings.backupFreq, listOf(
+        BackupFreq.OFF to stringResource(R.string.settings_off), BackupFreq.DAILY to stringResource(R.string.settings_backup_daily),
+        BackupFreq.WEEKLY to stringResource(R.string.settings_backup_weekly),
+    ))
+    val line = when {
+        status.running -> stringResource(R.string.settings_backup_running, status.done, status.total)
+        status.lastError != null -> stringResource(R.string.settings_backup_failed, status.lastError!!)
+        status.lastAt != null -> stringResource(
+            R.string.settings_backup_last, DateUtils.getRelativeTimeSpanString(status.lastAt!!, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString(),
+        )
+        else -> stringResource(R.string.settings_backup_never)
+    }
+    Row2(stringResource(R.string.settings_backup_now), line, onClick = if (folder != null && !status.running) ({ host.backUpNow() }) else null)
+    Row2(stringResource(R.string.settings_backup_restore), null) { host.restoreFromBackup() }
 }

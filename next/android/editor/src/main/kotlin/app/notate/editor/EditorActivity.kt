@@ -51,6 +51,8 @@ import app.notate.editor.ui.dp
 import app.notate.render.ink.GeometryCache
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
+import app.notate.editor.outline.OutlineHost
+import app.notate.editor.outline.OutlineOverlay
 import app.notate.render.thumb.ThumbnailRenderer
 import app.notate.core.input.BlockReason
 import app.notate.editor.debug.DebugHud
@@ -90,6 +92,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private val pageActions: PageActions? get() = controller.current?.pageActions
     private lateinit var splitLayout: SplitPaneLayout
     private var gridOverlay: PageGridOverlay? = null
+    private var outlineOverlay: OutlineOverlay? = null
     private var bindJob: Job? = null
     private var workspaceStore: app.notate.core.workspace.WorkspaceStore? = null
     private val ready = CompletableDeferred<Unit>()
@@ -169,6 +172,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         chrome.onFocusChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         hud = DebugHud(this) { hudLines() }
         chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (deps.device.isOnyx) app.notate.platform.device.OnyxRuntime.enterScribbleScheme(this)
         setContentView(chrome)
         scope.launch {
             combine(controller.workspace, controller.saveStates, controller.closing) { ws, st, cl -> Triple(ws, st, cl) }
@@ -279,6 +283,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val reason = if (kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
         chrome.toolbar.bind(new.pane.capabilities, getString(reason))
         chrome.toolbar.showGuide(new.pane.guideKind)
+        refreshZoomButton()
         arbiter.block(BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
         val h = new.handle
         bindJob = scope.launch {
@@ -351,7 +356,27 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
-    override fun onPageChanged(index: Int, count: Int) = Unit      // each pane's own indicator follows it (GatedHost)
+    override fun onPageChanged(index: Int, count: Int) = refreshZoomButton()      // each pane's own indicator follows it (GatedHost)
+
+    override fun onZoomWindowChanged(open: Boolean) = refreshZoomButton()
+
+    /** The Zoom button follows the focused pane: lit while its window is open, grey on a whiteboard page. */
+    private fun refreshZoomButton() {
+        if (!::chrome.isInitialized || !::controller.isInitialized) return
+        val p = pane ?: return
+        chrome.toolbar.setZoomOn(p.zoomWindowOpen)
+        chrome.toolbar.setZoomBlocked(p.zoomUnavailableReason())
+    }
+
+    override fun onZoomToggled(on: Boolean): String? {
+        val p = pane ?: return null
+        if (!on) {
+            p.setZoomWindowOpen(false)
+            return null
+        }
+        p.zoomUnavailableReason()?.let { return it }
+        return if (p.setZoomWindowOpen(true)) null else getString(R.string.unavailable_here)
+    }
 
     // --- Toolbar --------------------------------------------------------------------------------------------
 
@@ -414,6 +439,10 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
             items += MenuEntry((if (single) "" else "✓ ") + getString(R.string.more_continuous)) { p.setLayoutMode(PageLayoutMode.CONTINUOUS) }
             items += MenuEntry((if (single) "✓ " else "") + getString(R.string.more_single_page)) { p.setLayoutMode(PageLayoutMode.SINGLE) }
         }
+        val hasBookmarks = h?.editor?.pages?.value?.any { it.bookmarked } == true
+        if (p != null && h != null && (Capability.OUTLINE in p.capabilities || hasBookmarks)) {
+            items += MenuEntry(getString(R.string.more_outline)) { openOutline() }
+        }
         items += MenuEntry(getString(R.string.more_focus_mode)) { chrome.setFocusMode(true) }
         items += MenuEntry(getString(R.string.more_refresh_screen)) { refreshScreen() }
         items += pane?.moreEntries() ?: emptyList()
@@ -433,9 +462,54 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     private fun thumbnails(s: PaneSession): ThumbnailStore = s.thumbs ?: ThumbnailStore(
         s.handle.editor,
-        ThumbnailRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), deps.dispatchers.render),
+        ThumbnailRenderer(thumbnailBackgrounds(s.handle), InkRenderer(GeometryCache()), deps.dispatchers.render),
         deps.thumbsDir?.invoke(s.handle.id), s.scope, deps.dispatchers.io, deps.logger,
     ).also { s.thumbs = it }
+
+    /** Paper renderer plus, for PDFs, the PDF page renderer, so thumbnails show the page content. */
+    private fun thumbnailBackgrounds(h: DocumentHandle): BackgroundRendererSet = BackgroundRendererSet().also { set ->
+        if (h.editor.meta.value.kind == DocKind.PDF) deps.pdfBackgrounds?.create(h::assetFile)?.let { set.registerPdf(it.renderer) }
+    }
+
+    // --- Outline --------------------------------------------------------------------------------------------
+
+    private fun openOutline() {
+        val h = handle ?: return
+        if (outlineOverlay != null) return
+        chrome.popups.dismiss()
+        scope.launch {
+            val rows = try {
+                h.readOutline()
+            } catch (e: Exception) {
+                deps.logger.e(TAG, "Reading the outline failed", e)
+                emptyList()
+            }
+            if (outlineOverlay != null || isDestroyed) return@launch
+            val overlay = OutlineOverlay(
+                this@EditorActivity, rows, h.editor.pages.value,
+                object : OutlineHost {
+                    override fun onJump(page: PageId, yPt: Float?) {
+                        closeOutline()
+                        pane?.goToPage(page, yPt)
+                    }
+
+                    override fun onClose() = closeOutline()
+                },
+            )
+            outlineOverlay = overlay
+            chrome.paneArea.addView(overlay, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            arbiter.block(BlockReason.PAGE_GRID, true)
+            deps.epd.refresh(chrome.paneArea, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+        }
+    }
+
+    private fun closeOutline() {
+        val overlay = outlineOverlay ?: return
+        outlineOverlay = null
+        chrome.paneArea.removeView(overlay)
+        arbiter.block(BlockReason.PAGE_GRID, false)
+        deps.epd.refresh(chrome.paneArea, EpdMode.GU, null, EpdTiming.AFTER_DRAW)
+    }
 
     private fun openPageGrid() {
         val session = controller.current ?: return
@@ -475,7 +549,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     }
 
     private fun hitsPageUi(ev: MotionEvent): Boolean {
-        if (gridOverlay != null) return true
+        if (gridOverlay != null || outlineOverlay != null) return true
         if (splitLayout.hitsDivider(ev.x, ev.y)) return true
         val loc = IntArray(2)
         for (s in controller.displayed) {
@@ -504,6 +578,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         when {
             chrome.popups.isShowing -> chrome.popups.dismiss()
             gridOverlay != null -> closePageGrid()
+            outlineOverlay != null -> closeOutline()
             else -> super.onBackPressed()
         }
     }
@@ -581,7 +656,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private fun hudLines(): List<String> {
         val p = pane ?: return listOf("(no pane)")
         val save = handle?.save?.state?.value
-        return p.debugLines() + "save=$save" + "touch: ${recentFingers.joinToString(" | ").ifEmpty { "-" }}"
+        return p.debugLines() + "save=$save" + "touch: ${recentFingers.joinToString(" | ").ifEmpty { "-" }}" +
+            app.notate.platform.log.SdkLogTail.lines()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -600,6 +676,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         main.removeCallbacksAndMessages(null)
         gridOverlay?.release()
         gridOverlay = null
+        outlineOverlay = null
         // Written on the app scope because this window's scope ends with it; the last state must still reach the disk.
         controller.shutdown()
         val last = controller.workspace.value

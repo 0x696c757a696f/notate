@@ -10,6 +10,13 @@
     <string name="tool_ruler">Ruler</string>
     <string name="tool_protractor">Protractor</string>
     <string name="tool_zoom">Zoom window</string>
+    <string name="zoom_back">Move left</string>
+    <string name="zoom_forward">Move right</string>
+    <string name="zoom_new_line">New line</string>
+    <string name="zoom_smaller">Smaller magnification</string>
+    <string name="zoom_larger">Larger magnification</string>
+    <string name="zoom_close">Close zoom window</string>
+    <string name="unavailable_whiteboard">Not available on whiteboards</string>
     <string name="tool_hand">Hand</string>
 
     <string name="action_undo">Undo</string>
@@ -143,6 +150,12 @@
     <string name="template_engineering">Engineering</string>
     <string name="template_cornell">Cornell</string>
     <string name="template_isometric">Isometric</string>
+    <string name="more_outline">Outline</string>
+    <string name="outline_title">Outline</string>
+    <string name="outline_bookmarks">Bookmarks</string>
+    <string name="outline_done">Done</string>
+    <string name="outline_page">Page %d</string>
+    <string name="outline_empty">This document has no outline or bookmarks.</string>
 
     <string name="sel_cut">Cut</string>
     <string name="sel_copy">Copy</string>

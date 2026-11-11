@@ -26,7 +26,8 @@
     <string name="web_clear_page">Clear notes on this page</string>
     <string name="web_clear_confirm">Erase all handwriting on this page?</string>
     <string name="web_clear">Erase</string>
-    <string name="web_page_crashed">The page stopped working. Use More → Refresh screen to try again.</string>
+    <string name="web_page_crashed">The page stopped working and was reloaded. Your ink is kept.</string>
+    <string name="web_page_crashed_again">The page keeps crashing, so it was not reloaded. Your ink is kept. Reopen the document to try again.</string>
     <string name="web_export_annotations">Export annotations…</string>
     <string name="web_export_pdf_chapter">PDF: this chapter</string>
     <string name="web_export_pdf_all">PDF: all chapters with notes</string>

@@ -3,12 +3,14 @@
 //     the words it was written on (a fixed-layout page keeps its own viewport and reports it),
 //  2. finds the element that really scrolls the page and reports its scroll position and the content size, so ink follows
 //     documents whose body (not the window) scrolls,
-//  3. optionally turns animation and smooth scrolling off (reduce motion).
+//  3. optionally turns animation and smooth scrolling off (reduce motion),
+//  4. pauses the page's running animations while the pane is frozen for writing (setFrozen).
 // The element rule must stay in sync with ScrollCandidate.pick in :core:web.
 (function () {
   if (window.__notate) return;
   var B = window.NotateBridge;
   var N = (window.__notate = { el: null, width: 0, reduce: false });
+  var WALK_MAX = 2000;
 
   // Feature detection for the compatibility check (R4-3): remember what the page tries to use. Bits match WebBridge.FEATURE_*.
   var F = 0;
@@ -55,15 +57,33 @@
     var root = rootEl();
     if (overflows(root)) return root;
     var vp = window.innerWidth * window.innerHeight, best = null, bestArea = 0;
-    var list = document.body ? document.body.querySelectorAll('*') : [];
-    for (var i = 0; i < list.length && i < 600; i++) {
-      var e = list[i], oy = getComputedStyle(e).overflowY;
-      if (oy !== 'auto' && oy !== 'scroll' && oy !== 'overlay') continue;
+    if (!document.body) return root;
+    // A bounded walk in document order: querySelectorAll('*') would first build a list of the whole tree (huge for pages
+    // full of formulas or SVG). The subtrees of svg/math and of elements too small to be the page scroller are skipped:
+    // a scroller inside them could not cover a quarter of the viewport either.
+    var w = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: function (e) {
+        var t = e.localName;
+        if (t === 'svg' || t === 'math' || t === 'script' || t === 'style' || t === 'template') return NodeFilter.FILTER_REJECT;
+        if (e.clientWidth * e.clientHeight < vp * 0.25 && e.getClientRects().length) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    for (var i = 0, e; i < WALK_MAX && (e = w.nextNode()); i++) {
       if (!overflows(e)) continue;
+      var oy = getComputedStyle(e).overflowY;
+      if (oy !== 'auto' && oy !== 'scroll' && oy !== 'overlay') continue;
       var area = e.clientWidth * e.clientHeight;
       if (area >= vp * 0.25 && area > bestArea) { best = e; bestArea = area; }
     }
     return best || root;
+  }
+
+  /** The scroller found last is still the one: the root scrolls, or the inner scroller is in the page and still scrolls. */
+  function stillValid(e) {
+    var root = rootEl();
+    if (overflows(root)) return e === root;
+    return !!e && e !== root && e.isConnected && overflows(e);
   }
 
   var raf = 0;
@@ -83,7 +103,8 @@
   var repick = 0;
   function onMutation() {
     if (repick) return;
-    repick = setTimeout(function () { repick = 0; N.el = pick(); schedule(); }, 400);
+    // Script-driven pages mutate all the time; look for a new scroller only when the current one stopped being it.
+    repick = setTimeout(function () { repick = 0; if (!stillValid(N.el)) N.el = pick(); schedule(); }, 400);
   }
 
   N.setLayout = lockWidth;
@@ -99,6 +120,20 @@
       'animation-iteration-count:1!important;transition-duration:0.001s!important;transition-delay:0s!important;' +
       'scroll-behavior:auto!important}';
     (document.head || document.documentElement).appendChild(s);
+  };
+
+  // Write mode freezes this page alone (the process-wide WebView timer pause needs every open web pane to agree): its
+  // running animations (CSS animations and transitions, element.animate) are paused, and only those are resumed later.
+  var frozenAnims = null;
+  N.setFrozen = function (on) {
+    if (on) {
+      if (frozenAnims || !document.getAnimations) return;
+      frozenAnims = document.getAnimations().filter(function (a) { return a.playState === 'running'; });
+      frozenAnims.forEach(function (a) { try { a.pause(); } catch (e) {} });
+    } else if (frozenAnims) {
+      frozenAnims.forEach(function (a) { try { if (a.playState === 'paused') a.play(); } catch (e) {} });
+      frozenAnims = null;
+    }
   };
 
   window.addEventListener('scroll', function (ev) {

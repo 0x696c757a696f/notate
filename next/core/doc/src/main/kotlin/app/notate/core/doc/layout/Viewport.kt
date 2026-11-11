@@ -47,7 +47,7 @@ data class Viewport(
      * Moves the content by ([dxPx], [dyPx]) screen pixels (finger drag: content follows the finger, so the scroll
      * position decreases) and clamps to [layout]. Pages narrower than the viewport are centered; the vertical range is
      * `[−margin, total + [extraBottomPt] − visibleHeight + margin]` with margin = [DocumentLayout.gapPt]; [extraBottomPt] makes room for
-     * the "Add page" button below the last page (continuous mode only). Documents with a whiteboard page
+     * the "Add page" button below the last page or for the zoom window that covers the bottom of the pane. Documents with a whiteboard page
      * are not clamped. In SINGLE mode the range is that of the page nearest to the viewport center.
      */
     fun panBy(dxPx: Float, dyPx: Float, layout: DocumentLayout, extraBottomPt: Float = 0f): Viewport {
@@ -62,7 +62,7 @@ data class Viewport(
             loX = 0f; hiX = layout.maxWidth; loY = 0f; hiY = layout.totalHeight + extraBottomPt
         } else {
             val f = layout.frameAt(layout.nearestIndex(scrollX + visW / 2f, scrollY + visH / 2f))
-            loX = f.l; hiX = f.r; loY = f.t; hiY = f.b
+            loX = f.l; hiX = f.r; loY = f.t; hiY = f.b + extraBottomPt
         }
         return copy(scrollX = clampAxis(nx, loX, hiX, visW, m), scrollY = clampAxis(ny, loY, hiY, visH, m))
     }

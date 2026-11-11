@@ -10,7 +10,7 @@ class DriverInkPolicyTest {
         DriverInkPolicy.forPen(InkStyle(pen, color, w), px)
 
     @Test fun strokeMapping() {
-        assertThat(ink(PenType.BALLPOINT).stroke).isEqualTo(DriverStroke.FOUNTAIN)
+        assertThat(ink(PenType.BALLPOINT).stroke).isEqualTo(DriverStroke.PENCIL)
         assertThat(ink(PenType.FOUNTAIN).stroke).isEqualTo(DriverStroke.FOUNTAIN)
         assertThat(ink(PenType.FINELINER).stroke).isEqualTo(DriverStroke.PENCIL)
         assertThat(ink(PenType.PENCIL).stroke).isEqualTo(DriverStroke.PENCIL)
@@ -26,7 +26,8 @@ class DriverInkPolicyTest {
     }
 
     @Test fun widthScalesAndHasFloor() {
-        assertThat(ink(PenType.BALLPOINT, w = 1.2f, px = 3f).widthPx).isWithin(1e-5f).of(3.6f)
+        assertThat(ink(PenType.FINELINER, w = 1.2f, px = 3f).widthPx).isWithin(1e-5f).of(3.6f)
+        assertThat(ink(PenType.BALLPOINT, w = 1.2f, px = 3f).widthPx).isWithin(1e-5f).of(3.6f * 0.88f)
         assertThat(ink(PenType.BALLPOINT, w = 0.1f, px = 1f).widthPx).isEqualTo(1f)
     }
 }

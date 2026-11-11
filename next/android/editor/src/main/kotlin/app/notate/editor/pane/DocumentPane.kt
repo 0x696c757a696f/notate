@@ -33,6 +33,9 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Scrolls (continuous) or flips (single page) to [page]. */
     fun goToPage(page: PageId) {}
 
+    /** Like [goToPage], then scrolls so that [yPt] (page pt from the page top) is near the top of the pane; [yPt] null = page top. */
+    fun goToPage(page: PageId, yPt: Float?) = goToPage(page)
+
     /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
     fun setLayoutMode(mode: PageLayoutMode) {}
 
@@ -53,6 +56,15 @@ interface DocumentPane : PaneTarget, InkSurface {
 
     /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
     fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
+
+    /** True while the zoom writing window is open in this pane. */
+    val zoomWindowOpen: Boolean get() = false
+
+    /** Why the zoom window cannot be opened now (e.g. the page is a whiteboard), or null when it can. */
+    fun zoomUnavailableReason(): String? = null
+
+    /** Opens or closes the zoom writing window; false when it cannot be opened. */
+    fun setZoomWindowOpen(open: Boolean): Boolean = false
 
     /** The ruler or protractor this pane shows, or null. */
     val guideKind: app.notate.core.ink.guide.GuideKind? get() = null
@@ -99,6 +111,9 @@ interface PaneHost {
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** The zoom window of the pane opened or closed (the toolbar's Zoom button follows). */
+    fun onZoomWindowChanged(open: Boolean) {}
 
     /** A link in the pane points at [page] of another document: open it (a tab) and show that page. */
     fun openDocumentAt(doc: app.notate.core.model.DocId, page: PageId) {}

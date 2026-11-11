@@ -52,6 +52,12 @@ class LiveInkLayer(
     var paintHiddenWhite: Boolean = true
 
     var viewportProvider: () -> Viewport = { Viewport(0f, 0f, 1f, 1f, 0, 0) }
+
+    /** A second place that shows the same gesture: [viewport] has its origin at ([offsetX], [offsetY]) of the host view (zoom window). */
+    class Projection(val viewport: Viewport, val offsetX: Float, val offsetY: Float)
+
+    /** The zoom writing window's projection while it is open, else null; invalidations cover it, too. */
+    var projectionProvider: () -> Projection? = { null }
     var layoutProvider: () -> DocumentLayout? = { null }
 
     private class Entry(val page: PageId, val item: Item, val hide: Boolean, val clip: Boolean = true)
@@ -80,7 +86,13 @@ class LiveInkLayer(
 
     override fun show(p: Preview) {
         when (p) {
-            is Preview.LiveStroke -> stroke = Stroke(ItemId(-1), 0, p.style, p.points, ItemBounds.strokeBounds(p.points, p.style))
+            is Preview.LiveStroke -> {
+                stroke = Stroke(ItemId(-1), 0, p.style, p.points, ItemBounds.strokeBounds(p.points, p.style))
+                // The e-ink driver draws this stroke itself and [draw] skips it: nothing on screen changed. Redrawing the
+                // view under the pen would make the panel refresh that area over the driver's ink while the pen moves
+                // (visible lag and flicker). The stroke is repainted once, on [clear].
+                if (driverDraws) return
+            }
             is Preview.Ghost -> ghost = p.items
             is Preview.Hidden -> {
                 val c = page?.let(content)
@@ -100,11 +112,17 @@ class LiveInkLayer(
             ghost.forEach { overlay.add(Entry(pg, it, hide = false, clip = !unclippedGhost)) }
             stroke?.let { overlay.add(Entry(pg, it, hide = false)) }
         }
+        // A stroke the driver inked is on the panel already and nothing else of this gesture is visible: no redraw now.
+        val quiet = driverDraws && ghost.isEmpty() && hidden.isEmpty() && lasso == null && cursorRadius < 0f
         hidden.clear()
         ghost = emptyList()
         stroke = null
         lasso = null
         cursorRadius = -1f
+        if (quiet) {
+            lastBounds = Rect.EMPTY
+            return
+        }
         invalidateChanged()
     }
 
@@ -116,6 +134,12 @@ class LiveInkLayer(
         lasso = null
         cursorRadius = -1f
         invalidateChanged()
+    }
+
+    /** Like [releaseOverlay], without a redraw: the caller redraws later (the driver's ink shows the stroke meanwhile). */
+    fun releaseOverlaySilently() {
+        overlay.clear()
+        lastBounds = Rect.EMPTY
     }
 
     /** Drops everything at once: the tiles now show the result. */
@@ -212,10 +236,15 @@ class LiveInkLayer(
         }
         val f = layout.frameOf(pg)
         val vp = viewportProvider()
+        invalidateIn(f, vp, 0f, 0f, both)
+        projectionProvider()?.let { invalidateIn(f, it.viewport, it.offsetX, it.offsetY, both) }
+    }
+
+    private fun invalidateIn(f: Rect, vp: Viewport, ox: Float, oy: Float, r: Rect) {
         val s = vp.scale
         host.invalidate(
-            floor((f.l + both.l - vp.scrollX) * s).toInt() - 2, floor((f.t + both.t - vp.scrollY) * s).toInt() - 2,
-            ceil((f.l + both.r - vp.scrollX) * s).toInt() + 2, ceil((f.t + both.b - vp.scrollY) * s).toInt() + 2,
+            floor((f.l + r.l - vp.scrollX) * s + ox).toInt() - 2, floor((f.t + r.t - vp.scrollY) * s + oy).toInt() - 2,
+            ceil((f.l + r.r - vp.scrollX) * s + ox).toInt() + 2, ceil((f.t + r.b - vp.scrollY) * s + oy).toInt() + 2,
         )
     }
 

@@ -27,11 +27,16 @@ import app.notate.platform.log.AndroidLogger
 import app.notate.platform.prefs.PrefsKeyValueStore
 import app.notate.platform.sql.AndroidSqlDriverFactory
 import app.notate.platform.thread.DispatcherSet
+import app.notate.pdf.PdfBackgrounds
+import app.notate.pdf.PdfImporter
 import app.notate.render.ink.GeometryCache
 import app.notate.render.ink.InkRenderer
 import app.notate.render.paper.BackgroundRendererSet
 import app.notate.render.thumb.ThumbnailRenderer
 import app.notate.export.legacy.LegacyImporter
+import app.notate.export.pkg.BackupEngine
+import app.notate.export.pkg.PackageExporter
+import app.notate.export.pkg.PackageImporter
 import app.notate.export.legacy.LegacyLocalMigrator
 import app.notate.web.WebImporter
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +88,21 @@ class AppGraph(
         paneWidthDp = { app.resources.displayMetrics.let { it.widthPixels / it.density } },
     )
 
+    /** Imports PDFs as documents (R3-1). */
+    val pdfImporter = PdfImporter(
+        context = app,
+        stagingRoot = paths.cacheDir,
+        docDir = paths::docDir,
+        docs = docStoreFactory,
+        libraryProvider = { libraryStore },
+        clock = clock,
+        io = dispatchers.io,
+        logger = logger,
+    )
+
+    /** PDF page backgrounds for every open PDF document; the PDF thread owns the renderers. */
+    val pdfBackgrounds = PdfBackgrounds(dispatchers.pdf)
+
     val registry = DocumentRegistry(
         opener = object : DocumentOpener {
             override suspend fun open(id: DocId): Opened {
@@ -105,6 +125,24 @@ class AppGraph(
         ThumbnailRenderer(BackgroundRendererSet(), InkRenderer(GeometryCache()), dispatchers.render),
         dispatchers, scope, logger,
     )
+
+    /** Writes documents as `.notate` packages (Export…, backups). */
+    val packageExporter = PackageExporter(docStoreFactory, { libraryStore }, paths::docDir, { registry.flushAll() }, dispatchers.io, clock::now)
+
+    /** Reads `.notate` packages (Import Notate file, restore). */
+    val packageImporter = PackageImporter(
+        docs = docStoreFactory, library = { libraryStore }, docDir = paths::docDir,
+        stagingRoot = java.io.File(paths.cacheDir, "package-import"), drivers = sqlDrivers, clock = clock, io = dispatchers.io,
+        exporter = packageExporter, isOpen = registry::isOpen, logger = logger, onImported = { id -> covers.generateNow(id) },
+    )
+
+    val backupEngine = BackupEngine(
+        app.contentResolver, packageExporter, packageImporter, { libraryStore }, sqlDrivers,
+        java.io.File(paths.cacheDir, "backup"), clock, dispatchers.io, logger,
+    )
+
+    /** Settings → Backup: folder, schedule and status. */
+    val backup = BackupController(app, backupEngine, settings, { libraryStore }, scope, clock, logger)
 
     /** Copies old Notate notes into the library (Settings → Import from old Notate…, and the in-place migration). */
     val legacyImporter = LegacyImporter(
@@ -145,8 +183,10 @@ class AppGraph(
             paneFactories = mapOf(DocKind.WEB to WebPaneFactory),
             openSettings = { ctx -> ctx.startActivity(SettingsActivity.intent(ctx)) },
             thumbsDir = { id -> java.io.File(paths.docDir(id), "thumbs") },
+            pdfBackgrounds = pdfBackgrounds,
             workspaceStore = { workspaceStore },
             libraryStore = { libraryStore },
+            onOpenFailed = OpenFailedDialog::show,
             libraryIntent = { ctx ->
                 android.content.Intent(ctx, LibraryActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             },

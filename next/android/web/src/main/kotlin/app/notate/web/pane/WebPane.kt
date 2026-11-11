@@ -124,8 +124,21 @@ class WebPane(
     private val factory = ToolSessionFactory()
 
     // --- views ---
-    private val webView = WebView(context)
+    /** Replaced when its renderer process dies ([onRendererGone]). */
+    private var webView = WebView(context)
+    private val body = FrameLayout(context)
     private val overlay = InkOverlayView(context)
+    /**
+     * Transparent surface over the page that only the Onyx pen driver uses, as the note canvas does (TouchHelper in
+     * SFTouchRender + single-region mode on a SurfaceView). It draws nothing and takes no touches; null = the driver runs
+     * on the ink overlay (a plain View), the earlier form, kept for comparison (Settings → Pen surface on web pages).
+     */
+    private val penSurface: android.view.SurfaceView? =
+        if (deps.settings.webPenSurface.value) android.view.SurfaceView(context).apply {
+            setZOrderOnTop(true)
+            holder.setFormat(android.graphics.PixelFormat.TRANSPARENT)
+            isFocusable = false
+        } else null
     private val live = LiveInkLayer(overlay, density) { editor.content(it) }.also { it.paintHiddenWhite = false }
     private val bar = PaneBar(
         context, onPrevious = { stepChapter(-1) }, onNext = { stepChapter(1) }, onContents = { showContents() },
@@ -149,7 +162,7 @@ class WebPane(
     override val capabilities: Set<Capability> = Capabilities.forKind(handle.editor.meta.value.kind)
 
     override val driver: ConfigurableDriverPort =
-        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(overlay, this, deps.device) else NoDriverPort
+        if (deps.device.hasRawDrawing && deps.settings.driverInk.value) OnyxDriverPort(penSurface ?: overlay, this, deps.device) else NoDriverPort
     override val closesWhenNotOwner: Boolean = true
     override val consumesFingers: Boolean = false
 
@@ -204,7 +217,7 @@ class WebPane(
         private set
     private val loc = IntArray(2)
 
-    private val bridge: WebBridge
+    private var bridge: WebBridge
     private val client: SandboxClient
 
     // --- pen state ---
@@ -229,6 +242,12 @@ class WebPane(
     private var refreshRect: android.graphics.Rect? = null
     private var refreshFirstAt = 0L
     private var refreshAfterDriver = false
+    /** The overlay's last frame lacks committed driver strokes (the driver's ink shows them); redrawn with the refresh. */
+    private var overlayStale = false
+    private var inkedByDriver = 0
+    private var inkedByTouch = 0
+    private var refreshes = 0
+    private var deferOwnCommitUntil = 0L
     private val refreshRunnable = Runnable { tryRefresh() }
     private var fingerBusy = false
     private val endFingerRunnable = Runnable { endFinger() }
@@ -249,23 +268,38 @@ class WebPane(
             listener = this,
             layoutWidthCss = { lockedWidthCss },
         )
-        webView.apply {
-            webViewClient = client
-            overScrollMode = View.OVER_SCROLL_NEVER
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            setBackgroundColor(Color.WHITE)
-            setOnScrollChangeListener { _, _, _, _, _ -> onContentMoved() }
-        }
-        WebSandbox.configure(webView.settings, docSettings)
+        setUpWebView(webView)
         appliedJs = docSettings.javascript
         appliedZoom = docSettings.textZoom
         appliedReduce = docSettings.reduceMotion
         appliedPenMode = docSettings.penMode
 
-        val body = FrameLayout(context)
         body.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         body.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        penSurface?.let { surface ->
+            body.addView(surface, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                // As NotebookPane: the driver session lives on the surface, so it is reopened once per new surface or real
+                // size change. A surface that never received a buffer may not be recognised by the driver: post a clear one.
+                private var surfaceW = -1
+                private var surfaceH = -1
+                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                    clearFrame(holder)
+                    val f = holder.surfaceFrame
+                    surfaceW = f.width(); surfaceH = f.height()
+                    if (attached && !released) host.arbiter.reopen(this@WebPane)
+                }
+                override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                    clearFrame(holder)
+                    if (w == surfaceW && h == surfaceH) return
+                    surfaceW = w; surfaceH = h
+                    if (attached && !released) host.arbiter.reopen(this@WebPane)
+                }
+                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                    if (attached && !released) host.arbiter.closeSession(this@WebPane)
+                }
+            })
+        }
         body.addView(banner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         banner.setOnClickListener {
             current?.let { dismissedBanners.add(it.id) }
@@ -279,7 +313,9 @@ class WebPane(
 
         scope.launch {
             editor.changes.collect {
-                overlay.invalidate()
+                // The driver already shows a stroke it inked: redrawing the overlay now would put a window frame (overlay +
+                // WebView) on the panel between two strokes. The overlay is redrawn with the post-writing refresh instead.
+                if (SystemClock.uptimeMillis() < deferOwnCommitUntil) overlayStale = true else overlay.invalidate()
                 updateBanner()
             }
         }
@@ -337,6 +373,60 @@ class WebPane(
         }
     }
 
+    private fun setUpWebView(v: WebView) {
+        v.apply {
+            webViewClient = client
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(Color.WHITE)
+            setOnScrollChangeListener { _, _, _, _, _ -> onContentMoved() }
+            // A finger on the page (tap an answer, scroll, play an animation) wakes it up; see [updateFreeze].
+            setOnTouchListener { _, ev ->
+                if (ev.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_FINGER) thaw(FINGER_THAW_MS)
+                false
+            }
+        }
+        WebTimers.register(this, v)
+        WebSandbox.configure(v.settings, docSettings)
+    }
+
+    private val rendererDeaths = ArrayDeque<Long>()
+
+    /**
+     * The page's renderer process died (crash, or killed for memory): a WebView in that state can only be destroyed. Like
+     * the legacy web reader, keep the ink (it is in the document already; a stroke under way ends here), drop the dead
+     * WebView and load the chapter again at the same place in a new one. A page that kills its renderer again and again
+     * (twice within a minute) is not reloaded a third time: the pane stays blank with a message instead of looping.
+     */
+    private fun recoverRenderer() {
+        if (released) return
+        if (session != null) endPen(lastLocalX, lastLocalY, lastPoint?.tMs ?: 0L, 0f)
+        val page = current
+        val css = runCatching { scrollYCss() }.getOrDefault(0f)
+        val zoom = zoomFactor()
+        persistViewState()
+        WebTimers.unregister(this)
+        bridge.release()
+        body.removeView(webView)
+        runCatching { webView.destroy() }
+        val now = SystemClock.uptimeMillis()
+        while (rendererDeaths.isNotEmpty() && now - rendererDeaths.first() > RENDERER_DEATH_WINDOW_MS) rendererDeaths.removeFirst()
+        rendererDeaths.addLast(now)
+        webView = WebView(context)
+        paneFrozen = false
+        setUpWebView(webView)
+        bridge = WebBridge(webView, this)
+        body.addView(webView, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        updateFreeze()
+        if (rendererDeaths.size > MAX_RENDERER_DEATHS) {
+            Toast.makeText(context, R.string.web_page_crashed_again, Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(context, R.string.web_page_crashed, Toast.LENGTH_SHORT).show()
+        if (page != null) showChapter(page, null, css, zoom)
+    }
+
     private fun showChapter(page: PageInfo, fragment: String?, restoreCssY: Float?, zoom: Float = 1f) {
         persistViewState()
         current = page
@@ -361,6 +451,7 @@ class WebPane(
         fitScale = if (percent > 0) percent / 100f * density else 0f
         if (percent > 0) webView.setInitialScale(max(1, (percent * zoom).roundToInt()))
         val url = WebOrigin.urlFor(docId, Uri.encode(bg.href, "/")) + (fragment?.let { "#" + Uri.encode(it) } ?: "")
+        pageBusy()      // a frozen WebView would not even parse the new page
         webView.loadUrl(url)
         updateBar()
         updateBanner()
@@ -456,6 +547,7 @@ class WebPane(
     }
 
     override fun onPageStarted(url: String) {
+        pageBusy()
         bridge.reset()
         bridge.inject(lockedWidthCss, docSettings.reduceMotion)
     }
@@ -466,6 +558,7 @@ class WebPane(
             pendingFind = null
             main.postDelayed({ if (!released) webView.findAllAsync(q) }, FIND_AFTER_LOAD_MS)
         }
+        pageBusy()      // freeze once it stays quiet: scripts (math, images) usually finish right after load
         bridge.inject(lockedWidthCss, docSettings.reduceMotion)
         main.removeCallbacks(restoreRunnable)
         main.removeCallbacks(finalRestoreRunnable)
@@ -480,13 +573,16 @@ class WebPane(
 
     override fun onRendererGone() {
         main.post {
-            if (!released) Toast.makeText(context, R.string.web_page_crashed, Toast.LENGTH_LONG).show()
+            recoverRenderer()
         }
     }
 
     // --- WebBridge.Listener ---
 
-    override fun onScrolled() = onContentMoved()
+    override fun onScrolled() {
+        if (!pageSettled) pageBusy()    // still loading/laying out: push the freeze back
+        onContentMoved()
+    }
 
     override fun onLayoutReported(widthCss: Float, fixed: Boolean) {
         val page = current ?: return
@@ -520,6 +616,51 @@ class WebPane(
 
     private fun zoomFactor(): Float = if (fitScale > 0f) (webScale() / fitScale).coerceIn(0.25f, 6f) else 1f
 
+    // ---------------------------------------------------------------------------------------------------------
+    // Freezing the page while writing
+    // ---------------------------------------------------------------------------------------------------------
+    // A live page redraws itself (CSS/JS animations, widgets, script-driven DOM changes). Each redraw is a panel update that
+    // competes with the pen driver, so the driver's ink trails the nib. Like e-ink readers that write on a static page,
+    // the page is frozen ([WebTimers]) in Write mode once it has loaded and gone quiet; a finger on it, Interact mode, or a
+    // new chapter wakes it.
+
+    private var pageSettled = false
+    private var paneFrozen = false
+    private var thawUntil = 0L
+    private val settleRunnable = Runnable { pageSettled = true; updateFreeze() }
+    private val freezeCheck = Runnable { updateFreeze() }
+
+    /** The page may change (loading, layout reports): wait for it to stay quiet before freezing again. */
+    private fun pageBusy() {
+        pageSettled = false
+        main.removeCallbacks(settleRunnable)
+        main.postDelayed(settleRunnable, SETTLE_MS)
+        updateFreeze()
+    }
+
+    private fun thaw(forMs: Long) {
+        thawUntil = max(thawUntil, SystemClock.uptimeMillis() + forMs)
+        updateFreeze()
+    }
+
+    private fun updateFreeze() {
+        if (released) return
+        val now = SystemClock.uptimeMillis()
+        val frozen = !interactive && !exporting && pageSettled && current != null && now >= thawUntil
+        // Per pane: the page's own animations paused through the bridge, so a page freezes even while another web pane
+        // (Interact mode, being touched) keeps the process-wide timers running. All panes frozen: WebTimers also pauses the
+        // timers of every WebView (layout, parsing, JavaScript).
+        // Not WebView.onPause(): Chromium then treats the page as hidden and drops its rendered tiles, so the finger that
+        // thaws it (onResume) had to wait for the whole page to be drawn again before the scroll moved (scrolling lag).
+        if (frozen != paneFrozen) {
+            paneFrozen = frozen
+            bridge.setFrozen(frozen)
+        }
+        WebTimers.want(this, frozen)
+        main.removeCallbacks(freezeCheck)
+        if (!frozen && now < thawUntil) main.postDelayed(freezeCheck, thawUntil - now)
+    }
+
     /** Recomputes how page points map to the overlay and redraws the ink. */
     private fun syncViewport() {
         val w = overlay.width
@@ -530,21 +671,36 @@ class WebPane(
         val vp = Viewport(t.scrollXPx / pxPerPt, t.scrollYPx / pxPerPt, 1f, pxPerPt, w, h)
         viewport = vp
         val cur = current
+        var key: Any = vp
         if (cur != null) {
             // One page that always covers the content and everything visible, so any visible point belongs to it.
             val vis = vp.visibleDocRect()
             val pageW = max(max(cur.width, WebViewTransform.cssToPt(bridge.contentWidthCss)), vis.r)
             val pageH = max(WebViewTransform.cssToPt(max(bridge.contentHeightCss, webView.contentHeight.toFloat())), vis.b)
-            layout = DocumentLayout(listOf(cur.copy(width = pageW, height = pageH)), PageLayoutMode.CONTINUOUS)
+            key = listOf(vp, cur.id, pageW, pageH)
+            if (key != syncedKey) layout = DocumentLayout(listOf(cur.copy(width = pageW, height = pageH)), PageLayoutMode.CONTINUOUS)
         }
         overlay.viewport = vp
         overlay.layout = layout
-        overlay.invalidate()
+        // Pen-down calls this too: redrawing the overlay (and with it the WebView) for an unchanged view would put a window
+        // frame on the panel just as the driver starts inking.
+        if (key != syncedKey) {
+            syncedKey = key
+            overlay.invalidate()
+        }
     }
+
+    private var syncedKey: Any? = null
 
     private fun onContentMoved() {
         if (released) return
+        val before = viewport
         syncViewport()
+        // Only a real scroll or zoom pauses the pen driver. The bridge also reports when the content only grew (images,
+        // fonts, script-driven DOM changes); pausing for those switched the driver off for 700 ms and refreshed the whole
+        // pane while the user was writing, so the strokes in that window fell back to software ink.
+        val vp = viewport
+        if (vp.scrollX == before.scrollX && vp.scrollY == before.scrollY && vp.scale == before.scale) return
         beginFinger()
         scheduleEndFinger()
         main.removeCallbacks(saveViewRunnable)
@@ -609,6 +765,9 @@ class WebPane(
 
     private val driverActive: Boolean get() = driver !== NoDriverPort && host.arbiter.isDriverActive(this)
 
+    /** Strokes the driver has begun (debug HUD); which source inks a stroke is [penGate]'s call. */
+    private var rawBegins = 0
+
     override fun onPen(ev: PenEvent) {
         if (released) return
         if (ev is PenEvent.Hover) {
@@ -617,7 +776,28 @@ class WebPane(
         }
         // See NotebookPane.onPen: a touch-driven stroke goes on that way, and so does the first stroke after a focus switch.
         val touchStroke = session != null && !sessionViaDriver
-        if (!app.notate.core.input.PenRouting.inkFromTouch(driverActive, touchStroke, ev)) return
+        val driverStroke = session != null && sessionViaDriver
+        val now = SystemClock.uptimeMillis()
+        for (e in penGate.onTouch(ev, driverActive, touchStroke, driverStroke, now)) inkFromTouch(e)
+        armPenGate()
+    }
+
+    /** Held touch events for a stroke the driver should have taken (see [PenSourceGate]); fires at the gate's deadline. */
+    private val penGate = app.notate.core.input.PenSourceGate()
+    private val penGateRunnable = Runnable {
+        val evs = penGate.onTimeout(SystemClock.uptimeMillis())
+        if (evs.isNotEmpty()) deps.logger.i(TAG, "driver missed a stroke: inked from touch (fallbacks=${penGate.fallbacks})")
+        for (e in evs) inkFromTouch(e)
+        armPenGate()
+    }
+
+    private fun armPenGate() {
+        main.removeCallbacks(penGateRunnable)
+        penGate.deadline?.let { main.postAtTime(penGateRunnable, it) }
+    }
+
+    private fun inkFromTouch(ev: PenEvent) {
+        if (released) return
         val x = localX(ev.x)
         val y = localY(ev.y)
         when (ev) {
@@ -634,18 +814,22 @@ class WebPane(
     // ---------------------------------------------------------------------------------------------------------
 
     override fun onRawBegin(p: RawPoint, eraser: Boolean) {
-        if (session != null && !sessionViaDriver) return     // the touch events are already inking this stroke
+        rawBegins++
+        val accepted = penGate.onRawBegin(SystemClock.uptimeMillis(), session != null && !sessionViaDriver)
+        armPenGate()
+        if (!accepted) return     // the touch events are already inking this stroke
         host.onDriverStroke(true, SystemClock.uptimeMillis())
         beginPen(p.x, p.y, p.pressure, p.tiltX, p.tiltY, p.tMs, eraser, viaDriver = true)
     }
 
     override fun onRawMove(batch: List<RawPoint>) {
-        if (session == null || !sessionViaDriver || batch.isEmpty()) return
+        if (penGate.ignoringDriver || session == null || !sessionViaDriver || batch.isEmpty()) return
         val last = batch.last()
         movePen(batch.map { InkPoint(0f, 0f, it.pressure, it.tiltX, it.tiltY, it.tMs) }, last.x, last.y, batch.map { it.x to it.y })
     }
 
     override fun onRawEnd(p: RawPoint, eraser: Boolean) {
+        if (!penGate.onRawEnd()) return
         if (session != null && !sessionViaDriver) return
         endPen(p.x, p.y, p.tMs, p.pressure)
         host.onDriverStroke(false, SystemClock.uptimeMillis())
@@ -656,6 +840,9 @@ class WebPane(
     }
 
     override fun onDriverDeactivated() {
+        // A stroke held for the driver is the touch events' now.
+        main.removeCallbacks(penGateRunnable)
+        for (e in penGate.flush()) inkFromTouch(e)
         // The driver was switched off mid-stroke and will never report its end: keep what was written.
         if (session != null && sessionViaDriver) endPen(lastLocalX, lastLocalY, lastPoint?.tMs ?: 0L, 0f)
     }
@@ -689,6 +876,7 @@ class WebPane(
         strokeViewport = vp
         strokePage = page.id
         sessionViaDriver = viaDriver
+        if (viaDriver) inkedByDriver++ else inkedByTouch++
         val preset = deps.toolController.state.value.preset()
         val holdMs = deps.settings.holdShapeMs.value.takeIf { it > 0 }?.toLong()
         val ctx = ToolContext(
@@ -743,9 +931,16 @@ class WebPane(
         val viaDriver = sessionViaDriver
         if (!viaDriver) deps.epd.releaseFast(INK_OWNER)
         restoreEraser()
-        // The result is in the page content already and the overlay draws it: the live picture can go.
-        live.releaseOverlay()
-        overlay.invalidate()
+        // The result is in the page content already and the overlay draws it: the live picture can go. A stroke the driver
+        // inked is on the panel already; the overlay catches up with the post-writing refresh (no frame between strokes).
+        if (live.driverDraws) {
+            live.releaseOverlaySilently()
+            overlayStale = true
+            deferOwnCommitUntil = SystemClock.uptimeMillis() + OWN_COMMIT_WINDOW_MS
+        } else {
+            live.releaseOverlay()
+            overlay.invalidate()
+        }
         updateBanner()
         strokeBounds?.let { afterCommit(it, viaDriver) }
     }
@@ -802,7 +997,12 @@ class WebPane(
         refreshAfterDriver = false
         rect.intersect(0, 0, overlay.width, overlay.height)
         if (rect.isEmpty) return
+        refreshes++
         host.arbiter.block(this, BlockReason.REFRESH, true)
+        if (overlayStale) {
+            overlayStale = false
+            overlay.invalidate()
+        }
         deps.epd.afterDraw(overlay) {
             deps.epd.refresh(overlay, EpdMode.GU, intArrayOf(rect.left, rect.top, rect.right, rect.bottom), EpdTiming.NOW)
             host.arbiter.block(this, BlockReason.REFRESH, false)
@@ -810,12 +1010,19 @@ class WebPane(
     }
 
     private fun onHover(ev: PenEvent.Hover) {
-        if (refreshRect == null || !refreshAfterDriver) return
-        val waited = SystemClock.uptimeMillis() - refreshFirstAt
-        when {
-            ev.exit -> armRefresh(0L)
-            waited < REFRESH_MAX_MS -> armRefresh(HOVER_QUIET_MS)
+        // The pen is over the page right after a scroll: end the scroll's driver pause now instead of after the settle
+        // delay, so the driver is back before the nib lands. Otherwise a stroke started inside that window is written
+        // through touch events from start to end (the lag after scrolling).
+        if (fingerBusy && !ev.exit) {
+            main.removeCallbacks(endFingerRunnable)
+            endFinger()
         }
+        if (refreshRect == null || !refreshAfterDriver) return
+        // While the pen hovers the user is still writing: the refresh pauses the driver, so a stroke started during it
+        // would go through touch events and the ink would stall. Wait until the pen has been away for a while (as the legacy
+        // canvas: 2 s after hover exit, cancelled by any hover). Lifting the pen between two words is a short hover exit, so
+        // refreshing at once on exit paused the driver right under the next word's first stroke.
+        if (ev.exit) armRefresh(HOVER_EXIT_REFRESH_MS) else armRefresh(HOVER_QUIET_MS)
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -830,6 +1037,7 @@ class WebPane(
     }
 
     private fun updateMode() {
+        updateFreeze()
         val on = interactive
         host.arbiter.block(this, BlockReason.INTERACT_MODE, on)
         host.arbiter.block(this, BlockReason.READ_ONLY, docSettings.penMode == PenMode.READ_ONLY)
@@ -839,6 +1047,7 @@ class WebPane(
     }
 
     private fun onMetaChanged() {
+        thaw(SETTLE_MS)
         val web = docSettings
         if (web.penMode != appliedPenMode) {
             appliedPenMode = web.penMode
@@ -1408,6 +1617,15 @@ class WebPane(
         showChapter(page, null, WebViewTransform.ptToCss(s.scrollYPt), s.zoom)
     }
 
+    private fun clearFrame(holder: android.view.SurfaceHolder) {
+        val c = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(c) }
+        }
+    }
+
     override fun debugLines(): List<String> {
         val a = host.arbiter
         val reasons = BlockReason.entries.filter { a.isBlockedBy(it) || a.isBlockedBy(this, it) }
@@ -1415,8 +1633,11 @@ class WebPane(
         return listOf(
             "owner=${a.isOwner(this)} active=${a.isDriverActive(this)} suspended=${a.isSuspended(this)}",
             "blocked=${reasons.joinToString().ifEmpty { "-" }}",
+            "driver: ${driver.debugStatus()}",
             "web scale=${"%.2f".format(t.scale)} scroll=${t.scrollXPx.roundToInt()},${t.scrollYPx.roundToInt()} layout=${lockedWidthCss.roundToInt()}css",
-            "mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
+            "pen view=${if (penSurface != null) "surface" else "overlay"} mode=${docSettings.penMode} js=${docSettings.javascript} net=${docSettings.network}",
+            "inked: driver=$inkedByDriver touch=$inkedByTouch refreshes=$refreshes frozen=pane:$paneFrozen all:${WebTimers.isPaused} settled=$pageSettled",
+            "pen source: driver strokes=$rawBegins trusted=${penGate.trusted} fallbacks=${penGate.fallbacks}",
         )
     }
 
@@ -1431,6 +1652,7 @@ class WebPane(
         deps.epd.releaseFast(FAST_OWNER)
         deps.epd.releaseFast(INK_OWNER)
         host.arbiter.detach(this)
+        WebTimers.unregister(this)
         bridge.release()
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
@@ -1439,13 +1661,23 @@ class WebPane(
 
     private companion object {
         const val TAG = "WebPane"
+        const val MAX_RENDERER_DEATHS = 2
+        const val RENDERER_DEATH_WINDOW_MS = 60_000L
         const val POLL_MS = 50L
-        const val HOVER_QUIET_MS = 400L
-        const val REFRESH_MAX_MS = 1500L
+        /** After a driver stroke with the pen still hovering (or no hover reported): wait this long before the refresh. */
+        const val HOVER_QUIET_MS = 3000L
+        /** After the pen left the screen: the legacy canvas's delay before the post-writing refresh. */
+        const val HOVER_EXIT_REFRESH_MS = 2000L
+        /** A content change this soon after a driver stroke's pen-up is that stroke's own commit. */
+        const val OWN_COMMIT_WINDOW_MS = 300L
         const val FINGER_SETTLE_MS = 700L
         const val VIEW_STATE_DELAY_MS = 1000L
         const val RESTORE_FIRST_MS = 150L
         const val RESTORE_FINAL_MS = 800L
+        /** The page must stay quiet this long after loading before it is frozen for writing. */
+        const val SETTLE_MS = 1500L
+        /** A finger on the page keeps it live this long after the last touch. */
+        const val FINGER_THAW_MS = 5000L
         const val RELOAD_WIDTH_FRACTION = 0.05f
         const val FIND_DEBOUNCE_MS = 400L
         const val FIND_AFTER_LOAD_MS = 400L

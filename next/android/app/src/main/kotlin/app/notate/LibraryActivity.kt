@@ -33,6 +33,7 @@ import kotlinx.coroutines.withContext
  */
 class LibraryActivity : ComponentActivity() {
     private val graph get() = NotateApp.graph
+    private val notateExport = NotateFileExport(this)
 
     /** Title of the tab that had the focus when the editor last ran; null when no tabs are stored. */
     private val continueTitle = mutableStateOf<String?>(null)
@@ -52,11 +53,14 @@ class LibraryActivity : ComponentActivity() {
                         covers = covers,
                         onOpenDocument = { id -> open(vm, id) },
                         onSettings = { startActivity(SettingsActivity.intent(this@LibraryActivity)) },
+                        onExportNotate = notateExport::start,
                         onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
                         extraAdd = listOfNotNull(
                             continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
                         ) + listOf(
+                            getString(R.string.import_pdf) to { startActivity(ImportActivity.pickPdfIntent(this@LibraryActivity)) },
                             getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
+                            getString(R.string.import_notate_file) to { startActivity(ImportActivity.pickPackageIntent(this@LibraryActivity)) },
                             getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },
                         ) + if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),
                     )
