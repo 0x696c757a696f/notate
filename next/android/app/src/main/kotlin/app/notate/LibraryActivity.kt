@@ -56,6 +56,7 @@ class LibraryActivity : ComponentActivity() {
                         extraAdd = listOfNotNull(
                             continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
                         ) + listOf(
+                            getString(R.string.import_pdf) to { startActivity(ImportActivity.pickPdfIntent(this@LibraryActivity)) },
                             getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
                             getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },
                         ) + if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),

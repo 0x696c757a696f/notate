@@ -9,6 +9,16 @@
     <string name="import_book">Import EPUB or HTML</string>
     <string name="import_folder">Import HTML folder</string>
     <string name="create_test_notebook">Create 50-page test notebook</string>
+    <string name="create_failed">Could not create the notebook.</string>
+    <plurals name="pages">
+        <item quantity="one">%d page</item>
+        <item quantity="other">%d pages</item>
+    </plurals>
+    <string name="import_pdf_progress">Importing… %1$d / %2$d</string>
+    <string name="import_cancel">Cancel</string>
+    <string name="import_pdf_password">This PDF is password-protected. Remove the password and import again.</string>
+    <string name="import_pdf_unreadable">This file couldn\'t be opened as a PDF.</string>
+    <string name="import_pdf">Import PDF</string>
     <string name="share_logs_subject">Notate logs</string>
     <string name="share_crash_subject">Notate crash report</string>
     <string name="crash_dialog_title">Notate closed unexpectedly</string>

@@ -5,6 +5,8 @@ import android.content.pm.ApplicationInfo
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import android.content.ComponentCallbacks2
+import app.notate.pdf.PdfSupport
 import app.notate.platform.device.DeviceProbe
 import app.notate.platform.device.OnyxRuntime
 import app.notate.platform.fs.AppPaths
@@ -27,6 +29,7 @@ class NotateApp : Application() {
         // raw pen driver opens without error but reports no point (the HUD's `raw=` value shows the mapping).
         if (DeviceProbe.isOnyxBuild()) OnyxRuntime.init(this)
         ThreadChecks.enabled = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        PdfSupport.init(this)
         val paths = AppPaths(this)
         val logger = AndroidLogger(paths.logDir)
         val device = DeviceProbe.probe(this)
@@ -42,6 +45,12 @@ class NotateApp : Application() {
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             TrashPurgeWorker.UNIQUE_NAME, ExistingPeriodicWorkPolicy.KEEP, PeriodicWorkRequestBuilder<TrashPurgeWorker>(1, TimeUnit.DAYS).build(),
         )
+    }
+
+    /** Low memory: drop the PDF background tiles (they are re-rendered when scrolled to). */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) runCatching { graph }.getOrNull()?.pdfBackgrounds?.trimMemory()
     }
 
     companion object {
