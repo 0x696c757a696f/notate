@@ -8,11 +8,15 @@ android {
 dependencies {
     implementation(project(":next:render"))
     implementation(project(":next:platform"))
+    implementation("app.notate.core:geometry")
     implementation("app.notate.core:model")
+    implementation("app.notate.core:ink")
+    implementation("app.notate.core:doc")
     implementation("app.notate.core:store")
     implementation("app.notate.core:legacy")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     testImplementation("app.notate.core:testing")
     testImplementation("junit:junit:4.13.2")

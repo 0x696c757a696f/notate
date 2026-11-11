@@ -28,6 +28,13 @@
             android:name="app.notate.LegacyImportActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation" />
+        <!-- Export… sheet (R3-2): PDF / PNG of a notebook or annotated PDF; opened from the editor and the bookshelf. -->
+        <activity
+            android:name="app.notate.ExportActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity
             android:name="app.notate.RestoreActivity"
             android:exported="false" />

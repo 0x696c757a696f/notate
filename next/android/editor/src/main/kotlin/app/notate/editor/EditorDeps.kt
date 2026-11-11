@@ -15,6 +15,7 @@ import app.notate.core.doc.tools.ToolController
 import app.notate.core.input.EpdScheduler
 import app.notate.core.model.Clock
 import app.notate.core.model.DocId
+import app.notate.core.model.PageId
 import app.notate.core.model.log.Logger
 import app.notate.core.store.library.LibraryStore
 import app.notate.core.workspace.WorkspaceStore
@@ -55,6 +56,8 @@ class EditorDeps(
     val libraryIntent: ((Context) -> Intent)? = null,
     /** A document failed to open: show the app's "couldn't be opened" dialog over [Context] and return true; false falls back to a toast. */
     val onOpenFailed: ((Context, DocId) -> Boolean)? = null,
+    /** More → "Export…": opens the export sheet for a document and the page being viewed (the editor cannot see `:next:export`). */
+    val onExport: ((Context, DocId, PageId?) -> Unit)? = null,
 )
 
 /** Creates the pane that shows a document of some kind. */

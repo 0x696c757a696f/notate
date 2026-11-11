@@ -43,6 +43,7 @@
     <string name="menu_tags">Tags…</string>
     <string name="menu_duplicate">Duplicate</string>
     <string name="menu_export_notate">Export as Notate file…</string>
+    <string name="menu_export_pdf_png">Export as PDF or PNG…</string>
     <string name="menu_pin">Pin</string>
     <string name="menu_unpin">Unpin</string>
     <string name="menu_trash">Move to Trash</string>
