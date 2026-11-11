@@ -169,6 +169,7 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         chrome.onFocusChanged = { controller.displayed.forEach { it.pane.refreshExcludes() } }
         hud = DebugHud(this) { hudLines() }
         chrome.paneArea.addView(hud, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (deps.device.isOnyx) app.notate.platform.device.OnyxRuntime.enterScribbleScheme(this)
         setContentView(chrome)
         scope.launch {
             combine(controller.workspace, controller.saveStates, controller.closing) { ws, st, cl -> Triple(ws, st, cl) }
@@ -278,6 +279,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         val kind = new.handle.editor.meta.value.kind
         val reason = if (kind == DocKind.WEB) R.string.unavailable_books else R.string.unavailable_here
         chrome.toolbar.bind(new.pane.capabilities, getString(reason))
+        chrome.toolbar.showGuide(new.pane.guideKind)
+        refreshZoomButton()
         arbiter.block(BlockReason.WINDOW_UNFOCUSED, !hasWindowFocus())
         val h = new.handle
         bindJob = scope.launch {
@@ -350,7 +353,27 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
 
     override fun onDriverStroke(begin: Boolean, timeMs: Long) = dispatcher.onDriverStroke(begin, timeMs)
 
-    override fun onPageChanged(index: Int, count: Int) = Unit      // each pane's own indicator follows it (GatedHost)
+    override fun onPageChanged(index: Int, count: Int) = refreshZoomButton()      // each pane's own indicator follows it (GatedHost)
+
+    override fun onZoomWindowChanged(open: Boolean) = refreshZoomButton()
+
+    /** The Zoom button follows the focused pane: lit while its window is open, grey on a whiteboard page. */
+    private fun refreshZoomButton() {
+        if (!::chrome.isInitialized || !::controller.isInitialized) return
+        val p = pane ?: return
+        chrome.toolbar.setZoomOn(p.zoomWindowOpen)
+        chrome.toolbar.setZoomBlocked(p.zoomUnavailableReason())
+    }
+
+    override fun onZoomToggled(on: Boolean): String? {
+        val p = pane ?: return null
+        if (!on) {
+            p.setZoomWindowOpen(false)
+            return null
+        }
+        p.zoomUnavailableReason()?.let { return it }
+        return if (p.setZoomWindowOpen(true)) null else getString(R.string.unavailable_here)
+    }
 
     // --- Toolbar --------------------------------------------------------------------------------------------
 
@@ -392,6 +415,10 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
                 MenuEntry(getString(if (horizontal) R.string.split_close_right else R.string.split_close_bottom)) { controller.closePane(right = true) },
             ),
         ).show()
+    }
+
+    override fun onGuideChanged(kind: app.notate.core.ink.guide.GuideKind?) {
+        controller.current?.pane?.setGuide(kind)
     }
 
     override fun onMore(anchor: View) {
@@ -576,7 +603,8 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
     private fun hudLines(): List<String> {
         val p = pane ?: return listOf("(no pane)")
         val save = handle?.save?.state?.value
-        return p.debugLines() + "save=$save" + "touch: ${recentFingers.joinToString(" | ").ifEmpty { "-" }}"
+        return p.debugLines() + "save=$save" + "touch: ${recentFingers.joinToString(" | ").ifEmpty { "-" }}" +
+            app.notate.platform.log.SdkLogTail.lines()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

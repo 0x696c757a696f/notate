@@ -85,7 +85,10 @@ internal class GatedHost(private val outer: PaneHost, private val rectsFor: (Vie
     override fun onPageChanged(index: Int, count: Int) {
         indicator?.setPage(index, count)
         onPage?.invoke(index, count)
+        if (active && focused) outer.onPageChanged(index, count)
     }
+
+    override fun onZoomWindowChanged(open: Boolean) { if (active && focused) outer.onZoomWindowChanged(open) }
     override fun onFocusModeRequested() { if (active) outer.onFocusModeRequested() }
     override fun openDocumentAt(doc: app.notate.core.model.DocId, page: app.notate.core.model.PageId) = outer.openDocumentAt(doc, page)
 

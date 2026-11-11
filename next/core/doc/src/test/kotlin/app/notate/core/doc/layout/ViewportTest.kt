@@ -95,4 +95,12 @@ class ViewportTest {
         val extra = v.panBy(0f, -1_000_000f, layout, extraBottomPt = 80f).scrollY
         assertThat(extra - plain).isEqualTo(80f)
     }
+
+    @Test fun extraBottomPtExtendsSinglePageScrollRangeToo() {
+        val single = DocumentLayout(listOf(page(1, height = 800f)).map { it.copy(width = 300f) }, PageLayoutMode.SINGLE)
+        val v = vp(sx = 0f, sy = 100f, zoom = 1f)
+        val plain = v.panBy(0f, -1_000_000f, single).scrollY
+        val extra = v.panBy(0f, -1_000_000f, single, extraBottomPt = 120f).scrollY
+        assertThat(extra - plain).isEqualTo(120f)
+    }
 }

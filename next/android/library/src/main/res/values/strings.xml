@@ -139,6 +139,8 @@
     <string name="settings_hold_shape">Hold to draw shapes</string>
     <string name="settings_ms">%1$d ms</string>
     <string name="settings_driver_ink">Low-latency pen (Boox)</string>
+    <string name="settings_web_pen_surface">Pen surface on web pages</string>
+    <string name="settings_web_pen_surface_hint">Experimental: web pages use the same pen surface as notebooks. Applies when a page is reopened.</string>
     <string name="settings_driver_ink_hint">Turn off to always draw ink in software (for troubleshooting). Applies when a notebook is reopened.</string>
     <string name="settings_page_layout">Page layout</string>
     <string name="settings_continuous">Continuous scroll</string>

@@ -54,6 +54,21 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
     fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
 
+    /** True while the zoom writing window is open in this pane. */
+    val zoomWindowOpen: Boolean get() = false
+
+    /** Why the zoom window cannot be opened now (e.g. the page is a whiteboard), or null when it can. */
+    fun zoomUnavailableReason(): String? = null
+
+    /** Opens or closes the zoom writing window; false when it cannot be opened. */
+    fun setZoomWindowOpen(open: Boolean): Boolean = false
+
+    /** The ruler or protractor this pane shows, or null. */
+    val guideKind: app.notate.core.ink.guide.GuideKind? get() = null
+
+    /** Shows ([kind]) or hides (null) a ruler or protractor on the page in view. Panes without pages ignore it. */
+    fun setGuide(kind: app.notate.core.ink.guide.GuideKind?) {}
+
     /** Imports a picked image (a content Uri) and places it on the page in view; panes without images ignore it. */
     fun importImage(uri: android.net.Uri) {}
 
@@ -93,6 +108,9 @@ interface PaneHost {
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** The zoom window of the pane opened or closed (the toolbar's Zoom button follows). */
+    fun onZoomWindowChanged(open: Boolean) {}
 
     /** A link in the pane points at [page] of another document: open it (a tab) and show that page. */
     fun openDocumentAt(doc: app.notate.core.model.DocId, page: PageId) {}

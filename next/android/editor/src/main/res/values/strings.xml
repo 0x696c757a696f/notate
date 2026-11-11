@@ -8,7 +8,15 @@
     <string name="tool_text">Text</string>
     <string name="tool_image">Image</string>
     <string name="tool_ruler">Ruler</string>
+    <string name="tool_protractor">Protractor</string>
     <string name="tool_zoom">Zoom window</string>
+    <string name="zoom_back">Move left</string>
+    <string name="zoom_forward">Move right</string>
+    <string name="zoom_new_line">New line</string>
+    <string name="zoom_smaller">Smaller magnification</string>
+    <string name="zoom_larger">Larger magnification</string>
+    <string name="zoom_close">Close zoom window</string>
+    <string name="unavailable_whiteboard">Not available on whiteboards</string>
     <string name="tool_hand">Hand</string>
 
     <string name="action_undo">Undo</string>

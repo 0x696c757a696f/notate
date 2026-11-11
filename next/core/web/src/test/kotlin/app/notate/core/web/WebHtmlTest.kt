@@ -39,3 +39,36 @@ class WebHtmlTest {
         assertThat(WebHtml.injectViewport(bytes, 800)).isEqualTo(bytes)
     }
 }
+
+class WebHtmlStreamTest {
+    private fun stream(html: ByteArray, w: Int = 800): ByteArray {
+        val (input, len) = WebHtml.injectViewportStream(html.inputStream(), html.size.toLong(), w)!!
+        val out = input.readBytes()
+        assertThat(out.size.toLong()).isEqualTo(len)
+        return out
+    }
+
+    @Test fun aSmallPageIsRewrittenAsAWhole() {
+        val html = "<html><head></head><body>x</body></html>".toByteArray()
+        assertThat(String(stream(html))).isEqualTo(String(WebHtml.injectViewport(html, 800)))
+    }
+
+    @Test fun aLargePageGetsItsHeadRewrittenAndTheRestStreamed() {
+        val body = "<p>" + "é".repeat(200_000) + "</p>"
+        val html = ("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width\"></head><body>$body</body></html>").toByteArray()
+        val out = String(stream(html), Charsets.UTF_8)
+        assertThat(out).contains("<head><meta name=\"viewport\" content=\"width=800")
+        assertThat(out).doesNotContain("device-width")
+        assertThat(out).endsWith("$body</body></html>")
+    }
+
+    @Test fun aLargePageWithoutHeadOrHtmlInItsStartIsLeftAlone() {
+        val html = ("x".repeat(WebHtml.HEAD_BYTES + 10) + "<!doctype html><html><head></head></html>").toByteArray()
+        assertThat(stream(html)).isEqualTo(html)
+    }
+
+    @Test fun aLargeFixedLayoutPageIsLeftAlone() {
+        val html = ("<head><meta name=\"viewport\" content=\"width=1200\"></head>" + "y".repeat(WebHtml.HEAD_BYTES * 2)).toByteArray()
+        assertThat(stream(html)).isEqualTo(html)
+    }
+}
