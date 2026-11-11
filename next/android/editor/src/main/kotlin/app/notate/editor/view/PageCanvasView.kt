@@ -3,20 +3,39 @@ package app.notate.editor.view
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.Paint
 import android.graphics.RectF
-import android.view.View
+import android.view.SurfaceView
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import app.notate.core.doc.layout.DocumentLayout
 import app.notate.core.doc.layout.Viewport
 import app.notate.render.view.TileCompositor
 
 /** The page surface: tiles first, then the live ink layer. Draws what [NotebookPane] hands it; owns no state. */
-class PageCanvasView(context: Context) : View(context) {
+class PageCanvasView(context: Context) : FrameLayout(context) {
+    /**
+     * Transparent surface over the whole page that only the Onyx pen driver uses (its TouchHelper session lives on this
+     * SurfaceView, exactly as in the legacy canvas, which was itself a SurfaceView). It draws nothing; it must be on top,
+     * or its hole would punch the tiles out of the window.
+     */
+    val penSurface: SurfaceView = SurfaceView(context).apply {
+        setZOrderOnTop(true)
+        holder.setFormat(PixelFormat.TRANSPARENT)
+        isFocusable = false
+    }
+
     var viewport: Viewport = Viewport(0f, 0f, 1f, 1f, 0, 0)
     var layout: DocumentLayout? = null
     var compositor: TileCompositor? = null
     var live: LiveInkLayer? = null
+    /** Draws the selection box and the ruler / protractor above everything else. */
+    var overlay: ((Canvas) -> Unit)? = null
     var sizeListener: ((Int, Int) -> Unit)? = null
+
+    /** The zoom writing window drawn over the lower third while it is open. */
+    var zoom: app.notate.editor.zoom.ZoomWindowView? = null
 
     /** Label of the "Add page" button below the last page (continuous mode); null = no button. */
     var addButtonLabel: String? = null
@@ -34,8 +53,25 @@ class PageCanvasView(context: Context) : View(context) {
     private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF5F5F5F.toInt(); textSize = 14 * density; textAlign = Paint.Align.CENTER }
 
     init {
+        // The legacy canvas always drew into its surface; a surface that never received a buffer may not be recognised by the
+        // Onyx driver. Post one fully transparent frame whenever the surface is (re)created or resized.
+        penSurface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) = postClearFrame(holder)
+            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) = postClearFrame(holder)
+            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+        })
+        addView(penSurface, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         isFocusable = false
         setWillNotDraw(false)
+    }
+
+    private fun postClearFrame(holder: android.view.SurfaceHolder) {
+        val c = runCatching { holder.lockCanvas() }.getOrNull() ?: return
+        try {
+            c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        } finally {
+            runCatching { holder.unlockCanvasAndPost(c) }
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -78,6 +114,8 @@ class PageCanvasView(context: Context) : View(context) {
             canvas.drawText(addButtonLabel.orEmpty(), r.centerX(), r.centerY() + label.textSize / 3f, label)
         }
         live?.draw(canvas, viewport, l)
+        overlay?.invoke(canvas)
+        zoom?.takeIf { it.isOpen }?.draw(canvas)
     }
 
     companion object {

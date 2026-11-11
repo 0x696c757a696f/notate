@@ -20,5 +20,10 @@ data class ToolPreset(
     val eraseHighlighterOnly: Boolean = false,
     val shapeKind: ShapeKind? = null,
     val snapToGrid: Boolean = false,
+    /** Side count of a POLYGON shape, 3..8. */
+    val polygonSides: Int = 5,
     val lassoMode: LassoMode = LassoMode.FREEFORM,
+    /** TEXT tool: bold and alignment of new text boxes (colour and size are [color] / [widthPt]). */
+    val bold: Boolean = false,
+    val align: TextAlign = TextAlign.LEFT,
 )

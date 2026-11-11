@@ -21,6 +21,12 @@ interface ConfigurableDriverPort : DriverPort {
 
     /** Area the driver reacts in plus areas it ignores (toolbars, popups), in view-local pixels. */
     fun setLimits(limit: Rect, exclude: List<Rect>)
+
+    /** Tears the raw-drawing session down and builds it again (what switching "low-latency pen" off and on does). */
+    fun reopen() {}
+
+    /** One line for the debug HUD: session state and how many callbacks the SDK has made. */
+    fun debugStatus(): String = "-"
 }
 
 /** For devices without the Onyx driver: every call does nothing, so panels always use software ink. */

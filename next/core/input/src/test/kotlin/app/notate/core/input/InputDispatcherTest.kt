@@ -30,6 +30,14 @@ class InputDispatcherTest {
             log += "${id.value}:pen"
             pens += ev
         }
+
+        var constraintTool = false
+        val constraints = ArrayList<Boolean>()
+        override val takesConstraintFinger: Boolean get() = constraintTool
+
+        override fun onConstraint(on: Boolean) {
+            constraints += on
+        }
     }
 
     private val log = ArrayList<String>()
@@ -143,5 +151,68 @@ class InputDispatcherTest {
         assertEquals(FingerGesture.Cancel, a.gestures.last())
         d.onSample(finger(PointerAction.MOVE, 0, 250f, 100f, 10_050), panes)
         assertEquals(1, a.gestures.count { it == FingerGesture.Cancel })
+    }
+
+    @Test
+    fun `second hand finger becomes the constraint while the shape tool draws`() {
+        a.constraintTool = true
+        d.onSample(pen(PointerAction.DOWN, 100f, 100f, 100), panes)
+        d.onSample(pen(PointerAction.MOVE, 120f, 100f, 110), panes)
+        assertTrue(d.onSample(finger(PointerAction.POINTER_DOWN, 1, 900f, 100f, 120), panes))   // 7.8 cm away
+        assertEquals(listOf(true), a.constraints)
+        d.onSample(finger(PointerAction.MOVE, 1, 905f, 100f, 130), panes)
+        d.onSample(finger(PointerAction.POINTER_UP, 1, 905f, 100f, 140), panes)
+        assertEquals(listOf(true, false), a.constraints)
+        assertTrue(a.gestures.isEmpty() && b.gestures.isEmpty())
+        d.onSample(pen(PointerAction.UP, 120f, 100f, 150), panes)
+    }
+
+    @Test
+    fun `without the shape tool a finger during pen contact is rejected as before`() {
+        d.onSample(pen(PointerAction.DOWN, 100f, 100f, 100), panes)
+        assertTrue(d.onSample(finger(PointerAction.POINTER_DOWN, 1, 900f, 100f, 120), panes))
+        assertTrue(a.constraints.isEmpty())
+        d.onSample(finger(PointerAction.POINTER_UP, 1, 900f, 100f, 130), panes)
+        d.onSample(pen(PointerAction.UP, 120f, 100f, 150), panes)
+    }
+
+    @Test
+    fun `constraint is released when the pen lifts first`() {
+        a.constraintTool = true
+        d.onSample(pen(PointerAction.DOWN, 100f, 100f, 100), panes)
+        d.onSample(finger(PointerAction.POINTER_DOWN, 1, 900f, 100f, 120), panes)
+        d.onSample(pen(PointerAction.UP, 110f, 100f, 130), panes)
+        assertEquals(listOf(true, false), a.constraints)
+    }
+
+    @Test
+    fun `finger mode off leaves fingers to the views`() {
+        d.fingersEnabled = false
+        assertFalse(d.onSample(finger(PointerAction.DOWN, 0, 100f, 100f, 10_000), panes))
+        assertFalse(d.onSample(finger(PointerAction.UP, 0, 100f, 100f, 10_050), panes))
+        assertTrue(a.gestures.isEmpty())
+        d.fingersEnabled = true
+        assertTrue(d.onSample(finger(PointerAction.DOWN, 0, 100f, 100f, 11_000), panes))
+        d.onSample(finger(PointerAction.UP, 0, 100f, 100f, 11_050), panes)
+    }
+
+    @Test
+    fun `pen button follows the setting`() {
+        fun down(button: Boolean): PenEvent.Down {
+            val before = a.pens.size
+            d.onSample(pen(PointerAction.DOWN, 100f, 10f, 100, buttons = if (button) PointerSample.BUTTON_STYLUS_PRIMARY else 0), panes)
+            d.onSample(pen(PointerAction.UP, 100f, 10f, 110), panes)
+            return a.pens[before] as PenEvent.Down
+        }
+        assertTrue(down(button = true).eraser)                        // default: eraser
+        d.penButton = PenButtonAction.LASSO
+        val lasso = down(button = true)
+        assertFalse(lasso.eraser)
+        assertTrue(lasso.lasso)
+        d.penButton = PenButtonAction.NONE
+        val none = down(button = true)
+        assertFalse(none.eraser)
+        assertFalse(none.lasso)
+        assertFalse(down(button = false).lasso)
     }
 }

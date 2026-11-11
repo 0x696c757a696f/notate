@@ -1,1 +1,4 @@
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only used when a book's "Network access" option is on; every other request is refused by SandboxClient. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

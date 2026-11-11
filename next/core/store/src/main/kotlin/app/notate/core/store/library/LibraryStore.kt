@@ -12,6 +12,8 @@ interface LibraryStore {
     /** Inserts or updates the document row. [DocumentEntry.tagIds] is ignored; use [setTags]. */
     suspend fun upsert(entry: DocumentEntry)
     suspend fun get(id: DocId): DocumentEntry?
+    /** Sets the cover revision and page count of one row without touching its other columns (no-op for unknown ids). */
+    suspend fun updateCover(id: DocId, coverRev: Long, pageCount: Int)
     suspend fun markOpened(id: DocId, at: Long)
     suspend fun trash(ids: List<DocId>, at: Long)
     suspend fun restore(ids: List<DocId>)

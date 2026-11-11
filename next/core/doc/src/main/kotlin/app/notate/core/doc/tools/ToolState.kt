@@ -5,6 +5,7 @@ import app.notate.core.model.EraserMode
 import app.notate.core.model.LassoMode
 import app.notate.core.model.PenType
 import app.notate.core.model.ShapeKind
+import app.notate.core.model.TextAlign
 import app.notate.core.model.ToolKind
 import app.notate.core.model.ToolPreset
 import app.notate.core.model.Units
@@ -22,8 +23,11 @@ data class ToolState(
     val eraserMode: EraserMode = EraserMode.PARTIAL, val eraserSizesDp: List<Float>, val eraserSize: Int = 1,
     val eraseHighlighterOnly: Boolean = false,
     val shapeKind: ShapeKind = ShapeKind.LINE, val snapToGrid: Boolean = false,
+    /** Side count of the POLYGON shape (3..8). */
+    val polygonSides: Int = 5,
     val lassoMode: LassoMode = LassoMode.FREEFORM,
     val textSizePt: Float = 14f, val textBold: Boolean = false, val textColor: Int = 0xFF000000.toInt(),
+    val textAlign: TextAlign = TextAlign.LEFT,
 ) {
     /** The tool currently in effect, with colour, width and eraser size resolved from the selected slots. */
     fun preset(): ToolPreset = when (active) {
@@ -33,9 +37,9 @@ data class ToolState(
             ToolKind.ERASER, eraserMode = eraserMode, eraserRadiusDp = pick(eraserSizesDp, eraserSize) / 2f,
             eraseHighlighterOnly = eraseHighlighterOnly,
         )
-        ToolKind.SHAPE -> penPreset(ToolKind.SHAPE, pen).copy(shapeKind = shapeKind, snapToGrid = snapToGrid)
+        ToolKind.SHAPE -> penPreset(ToolKind.SHAPE, pen).copy(shapeKind = shapeKind, snapToGrid = snapToGrid, polygonSides = polygonSides.coerceIn(3, 8))
         ToolKind.LASSO -> ToolPreset(ToolKind.LASSO, lassoMode = lassoMode)
-        ToolKind.TEXT -> ToolPreset(ToolKind.TEXT, color = textColor, widthPt = textSizePt)
+        ToolKind.TEXT -> ToolPreset(ToolKind.TEXT, color = textColor, widthPt = textSizePt, bold = textBold, align = textAlign)
         else -> ToolPreset(active)
     }
 

@@ -74,4 +74,10 @@ class LegacyNotateReaderTest {
             assertThat(LegacyNotateReader.read(it).assets).hasSize(1)
         }
     }
+
+    @Test fun peekReadsUuidWithoutTheRestOfTheContainer() {
+        val bytes = kotlinx.serialization.protobuf.ProtoBuf.encodeToByteArray(LegacyCanvasData.serializer(), LegacyCanvasData(uuid = "u-9"))
+        assertThat(LegacyNotateReader.peek(bytes).uuid).isEqualTo("u-9")
+        assertThrows(LegacyFormatException::class.java) { LegacyNotateReader.peek(byteArrayOf(0x0A, 0x7F, 0x01)) }
+    }
 }

@@ -53,6 +53,9 @@ class PalmRejector(
 
         /** The wrist zone ends this far from the pen tip. */
         const val WRIST_RADIUS_CM = 12f
+
+        /** With the shape tool, a finger at least this far from the drawing pen is the constraint finger, not a palm. */
+        const val CONSTRAINT_MIN_CM = 5f
     }
 
     @Volatile
@@ -110,6 +113,21 @@ class PalmRejector(
         // A finger gesture already being rejected stays rejected until it ends.
     }
 
+    @Volatile
+    private var penX = 0f
+
+    @Volatile
+    private var penY = 0f
+
+    /** The pen on the screen is at ([x], [y]) (called for every pen move so that [onTouch] knows where the hand is). */
+    fun onPenMove(
+        x: Float,
+        y: Float,
+    ) {
+        penX = x
+        penY = y
+    }
+
     /** The pen is on the screen, or left it moments ago. */
     fun isPenContact(now: Long): Boolean {
         val down = penDownAt
@@ -151,6 +169,10 @@ class PalmRejector(
     var palmSizedGesture = false
         private set
 
+    /** The current finger gesture is the constraint finger of the shape tool (see [onTouch]). */
+    var constraintGesture = false
+        private set
+
     /** What to do with a finger touch event. */
     enum class Decision {
         /** Let the pane handle it. */
@@ -175,7 +197,19 @@ class PalmRejector(
         s: TouchSample,
         forceReject: Boolean = false,
         canReject: Boolean = true,
+        shapeTool: Boolean = false,
     ): Decision {
+        val starts = s.action == TouchAction.DOWN || s.action == TouchAction.POINTER_DOWN
+        if (constraintGesture) {
+            if (s.action == TouchAction.UP || s.action == TouchAction.CANCEL || s.action == TouchAction.POINTER_UP) constraintGesture = false
+            return Decision.ACCEPT
+        }
+        // The shape tool's second hand: a finger that lands away from the drawing pen. The pen is a pointer of the same
+        // gesture, so this finger arrives as POINTER_DOWN.
+        if (starts && shapeTool && penDownAt >= 0 && !isPalmSized(s.majorsPx) && isFarFromPen(s.x, s.y)) {
+            constraintGesture = true
+            return Decision.ACCEPT
+        }
         if (s.action == TouchAction.DOWN) {
             rejecting = false
             palmSizedGesture = false
@@ -194,6 +228,16 @@ class PalmRejector(
         if (!rejecting) return Decision.ACCEPT
         if (s.action == TouchAction.UP || s.action == TouchAction.CANCEL) rejecting = false
         return if (started) Decision.CANCEL_ONGOING else Decision.REJECT
+    }
+
+    private fun isFarFromPen(
+        x: Float,
+        y: Float,
+    ): Boolean {
+        val d = CONSTRAINT_MIN_CM * pxPerCm
+        val dx = x - penX
+        val dy = y - penY
+        return dx * dx + dy * dy > d * d
     }
 
     /** A single-finger DOWN: lets the calibrator learn what a fingertip looks like on this panel. */

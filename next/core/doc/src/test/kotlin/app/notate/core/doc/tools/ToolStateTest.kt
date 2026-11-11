@@ -62,6 +62,17 @@ class ToolStateTest {
         assertThat(c.state.value.active).isEqualTo(ToolKind.HIGHLIGHTER)
     }
 
+    @Test fun temporaryLassoIsNotPersistedAndKeepsBaseTool() {
+        val kv = InMemoryKeyValueStore()
+        val c = ToolController(Settings(kv))
+        c.select(ToolKind.PEN)
+        c.temporaryTool(ToolKind.LASSO)
+        assertThat(c.state.value.active).isEqualTo(ToolKind.LASSO)
+        assertThat(c.baseState().active).isEqualTo(ToolKind.PEN)
+        c.temporaryTool(null)
+        assertThat(c.state.value.active).isEqualTo(ToolKind.PEN)
+    }
+
     @Test fun pressureDefaultsAndOldJsonStillLoads() {
         assertThat(ToolState.defaults().pen.pressure).isEqualTo(0.7f)
         assertThat(ToolState.defaults().preset().pressure).isEqualTo(0.7f)
@@ -71,5 +82,11 @@ class ToolStateTest {
         val s = ToolController(Settings(kv)).state.value
         assertThat(s.pen.pen).isEqualTo(PenType.FOUNTAIN)
         assertThat(s.pen.pressure).isEqualTo(0.7f)
+    }
+
+    @Test fun aSavedZoomWindowToolFallsBackToThePen() {
+        val kv = InMemoryKeyValueStore()
+        ToolController(Settings(kv)).select(ToolKind.ZOOM_WINDOW)
+        assertThat(ToolController(Settings(kv)).state.value.active).isEqualTo(ToolKind.PEN)
     }
 }

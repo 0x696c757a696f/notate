@@ -149,4 +149,26 @@ class PalmRejectorTest {
         rejector.onPenDown(10_100L)
         assertEquals(PalmRejector.Decision.ACCEPT, rejector.onTouch(touch(TouchAction.DOWN, 10_120L), canReject = false))
     }
+
+    @Test
+    fun `shape tool accepts a far finger as the constraint while the pen draws`() {
+        rejector.onPenDown(10_000L)
+        rejector.onPenMove(1_000f, 1_000f)
+        // 8 cm away (100 px per cm).
+        assertEquals(PalmRejector.Decision.ACCEPT, rejector.onTouch(touch(TouchAction.POINTER_DOWN, 10_050L, x = 1_800f, y = 1_000f), shapeTool = true))
+        assertTrue(rejector.constraintGesture)
+        assertEquals(PalmRejector.Decision.ACCEPT, rejector.onTouch(touch(TouchAction.MOVE, 10_080L, x = 1_810f, y = 1_000f), shapeTool = true))
+        rejector.onTouch(touch(TouchAction.POINTER_UP, 10_100L, x = 1_810f, y = 1_000f), shapeTool = true)
+        assertFalse(rejector.constraintGesture)
+    }
+
+    @Test
+    fun `shape tool still rejects a finger near the pen or any finger with another tool`() {
+        rejector.onPenDown(10_000L)
+        rejector.onPenMove(1_000f, 1_000f)
+        assertEquals(PalmRejector.Decision.REJECT, rejector.onTouch(touch(TouchAction.DOWN, 10_050L, x = 1_300f, y = 1_100f), shapeTool = true))
+        rejector.onTouch(touch(TouchAction.UP, 10_060L, x = 1_300f, y = 1_100f), shapeTool = true)
+        assertEquals(PalmRejector.Decision.REJECT, rejector.onTouch(touch(TouchAction.DOWN, 10_070L, x = 1_800f, y = 1_000f), shapeTool = false))
+        assertFalse(rejector.constraintGesture)
+    }
 }

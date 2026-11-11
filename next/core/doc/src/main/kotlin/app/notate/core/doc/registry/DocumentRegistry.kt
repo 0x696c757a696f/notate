@@ -3,14 +3,12 @@ package app.notate.core.doc.registry
 import app.notate.core.doc.edit.IdAllocator
 import app.notate.core.doc.editor.DocumentEditor
 import app.notate.core.doc.save.SaveQueue
-import app.notate.core.model.AssetId
 import app.notate.core.model.Clock
 import app.notate.core.model.DocId
 import app.notate.core.model.DocumentMeta
 import app.notate.core.model.PageInfo
 import app.notate.core.store.DocStore
 import app.notate.core.store.MaxIds
-import app.notate.core.store.OutlineEntry
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -32,11 +30,17 @@ class DocumentHandle internal constructor(
     val save: SaveQueue,
     internal val store: DocStore,
 ) {
-    /** File of the asset [id] (a PDF, for example), or null if the document has no such asset. */
-    fun assetFile(id: AssetId): java.io.File? = store.assetFile(id)
+    /** The document's directory on disk (web documents keep their files in `assets/web`). */
+    val dir: java.io.File get() = store.dir
 
-    /** The document's outline rows (PDF table of contents, book contents); runs on the document's IO lane. */
-    suspend fun readOutline(): List<OutlineEntry> = store.readOutline()
+    /** Copies [source] into the document's assets (deduplicated by content) and returns its id. Call off the main thread. */
+    suspend fun putAsset(kind: app.notate.core.store.AssetKind, mime: String, source: java.io.File, ext: String): app.notate.core.model.AssetId =
+        store.putAsset(kind, mime, source, ext)
+
+    /** The file of an asset, or null when unknown. */
+    fun assetFile(id: app.notate.core.model.AssetId): java.io.File? = store.assetFile(id)
+
+    suspend fun readOutline(): List<app.notate.core.store.OutlineEntry> = store.readOutline()
 }
 
 class FlushFailure(val id: DocId, val error: Throwable)

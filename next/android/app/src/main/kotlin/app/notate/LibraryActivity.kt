@@ -1,136 +1,120 @@
 package app.notate
 
-import android.app.Activity
-import android.graphics.Color
 import android.os.Bundle
-import android.text.format.DateFormat
-import android.util.TypedValue
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.widget.BaseAdapter
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ListView
-import android.widget.TextView
-import android.widget.Toast
-import app.notate.core.store.library.DocumentEntry
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import app.notate.core.model.DocId
 import app.notate.editor.EditorActivity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import app.notate.library.LibraryViewModel
+import app.notate.library.NotateTheme
+import app.notate.library.ui.CoverLoader
+import app.notate.library.ui.LibraryScreen
+import app.notate.library.ui.DialogButton
+import app.notate.library.ui.NotateDialog
+import app.notate.platform.log.CrashHandler
+import app.notate.platform.log.ShareLogs
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import java.util.Date
+import kotlinx.coroutines.withContext
 
 /**
- * Temporary bookshelf (R2-1 replaces it): lists every document and creates new notebooks.
- * Long-pressing the title toggles the debug HUD.
+ * The bookshelf (R2-1). Opens `library.db` off the main thread, then shows the Compose [LibraryScreen]. Long-pressing the
+ * sidebar button toggles the debug HUD; with the HUD on the ＋ menu offers a 50-page test notebook.
  */
-class LibraryActivity : Activity() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+class LibraryActivity : ComponentActivity() {
     private val graph get() = NotateApp.graph
-    private var entries: List<DocumentEntry> = emptyList()
-    private lateinit var testButton: Button
 
-    private val listAdapter = object : BaseAdapter() {
-        override fun getCount() = entries.size
-        override fun getItem(position: Int) = entries[position]
-        override fun getItemId(position: Int) = position.toLong()
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val row = (convertView as? LinearLayout) ?: row()
-            val e = entries[position]
-            (row.getChildAt(0) as TextView).text = e.title
-            (row.getChildAt(1) as TextView).text =
-                "${DateFormat.format("yyyy-MM-dd HH:mm", Date(e.modified))} · ${resources.getQuantityString(R.plurals.pages, e.pageCount, e.pageCount)}"
-            return row
-        }
-    }
+    /** Title of the tab that had the focus when the editor last ran; null when no tabs are stored. */
+    private val continueTitle = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val d = resources.displayMetrics.density
-        fun dp(v: Int) = (v * d).toInt()
-        val title = TextView(this).apply {
-            text = getString(R.string.app_name)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
-            setTextColor(Color.BLACK)
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setOnLongClickListener {
-                val s = graph.settings.debugHud
-                s.set(!s.value)
-                true
+        lifecycleScope.launch {
+            withContext(graph.dispatchers.io) { graph.libraryStore }
+            val vm = ViewModelProvider(this@LibraryActivity, LibraryViewModel.Factory(graph.libraryDeps()))[LibraryViewModel::class.java]
+            setContent {
+                NotateTheme {
+                    val covers = remember { CoverLoader(graph.paths::coverFile) }
+                    val hud by graph.settings.debugHud.collectAsStateWithLifecycle()
+                    CrashPrompt()
+                    LibraryScreen(
+                        vm = vm,
+                        covers = covers,
+                        onOpenDocument = { id -> open(vm, id) },
+                        onSettings = { startActivity(SettingsActivity.intent(this@LibraryActivity)) },
+                        onSidebarLongClick = { graph.settings.debugHud.let { it.set(!it.value) } },
+                        extraAdd = listOfNotNull(
+                            continueTitle.value?.let { t -> getString(R.string.continue_with, t) to { startActivity(EditorActivity.continueIntent(this@LibraryActivity)) } },
+                        ) + listOf(
+                            getString(R.string.import_pdf) to { startActivity(ImportActivity.pickPdfIntent(this@LibraryActivity)) },
+                            getString(R.string.import_book) to { startActivity(ImportActivity.pickBookIntent(this@LibraryActivity)) },
+                            getString(R.string.import_folder) to { startActivity(ImportActivity.pickFolderIntent(this@LibraryActivity)) },
+                        ) + if (hud) listOf(getString(R.string.create_test_notebook) to { createTestNotebook(vm) }) else emptyList(),
+                    )
+                }
             }
-        }
-        val newButton = Button(this).apply {
-            text = getString(R.string.new_notebook)
-            setOnClickListener { createNotebook(1) }
-        }
-        val importPdfButton = Button(this).apply {
-            text = getString(R.string.import_pdf)
-            setOnClickListener { startActivity(ImportActivity.pickPdfIntent(this@LibraryActivity)) }
-        }
-        testButton = Button(this).apply {
-            text = getString(R.string.create_test_notebook)
-            visibility = View.GONE
-            setOnClickListener { createNotebook(TEST_PAGES) }
-        }
-        val list = ListView(this).apply {
-            adapter = listAdapter
-            setOnItemClickListener { _, _, position, _ -> startActivity(EditorActivity.intent(this@LibraryActivity, entries[position].id)) }
-        }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
-            addView(title)
-            addView(newButton)
-            addView(importPdfButton)
-            addView(testButton)
-            addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        }
-        setContentView(root)
-        scope.launch {
-            graph.documents.listDocuments().collect {
-                entries = it
-                listAdapter.notifyDataSetChanged()
-            }
-        }
-        scope.launch { graph.settings.debugHud.collect { testButton.visibility = if (it) View.VISIBLE else View.GONE } }
-    }
-
-    private fun row(): LinearLayout {
-        val d = resources.displayMetrics.density
-        fun dp(v: Int) = (v * d).toInt()
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            addView(TextView(context).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f); setTextColor(Color.BLACK) })
-            addView(TextView(context).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); setTextColor(0xFF555555.toInt()) })
         }
     }
 
-    private fun createNotebook(pages: Int) {
-        scope.launch {
+    /** After a crash: offers the reports once; they are filed under `crash/sent/` whatever the answer. */
+    @Composable
+    private fun CrashPrompt() {
+        var reports by remember { mutableStateOf(CrashHandler.pendingCrashReports(graph.paths)) }
+        if (reports.isEmpty()) return
+        val done = { CrashHandler.markSent(graph.paths, reports); reports = emptyList() }
+        NotateDialog(
+            title = stringResource(R.string.crash_dialog_title), onDismiss = done,
+            buttons = {
+                DialogButton(stringResource(R.string.crash_not_now), onClick = done)
+                DialogButton(stringResource(R.string.crash_share), filled = true) {
+                    val intent = ShareLogs.crashIntent(this, graph.paths, graph.logger, reports, getString(R.string.share_crash_subject))
+                    done()
+                    startActivity(intent)
+                }
+            },
+        ) { Text(stringResource(R.string.crash_dialog_message), fontSize = 16.sp) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Offers to go back to the tabs the editor had open (04 §6), labelled with the tab that had the focus.
+        lifecycleScope.launch {
+            continueTitle.value = withContext(graph.dispatchers.io) {
+                try {
+                    graph.workspaceStore.load().focusedTab?.title
+                } catch (e: Exception) {
+                    graph.logger.e("LibraryActivity", "Reading the workspace failed", e)
+                    null
+                }
+            }
+        }
+    }
+
+    private fun open(vm: LibraryViewModel, id: DocId) {
+        vm.markOpened(id)
+        startActivity(EditorActivity.intent(this, id))
+    }
+
+    private fun createTestNotebook(vm: LibraryViewModel) {
+        lifecycleScope.launch {
             try {
-                val n = entries.count { it.title.startsWith(UNTITLED) } + 1
-                val title = if (pages == 1) "$UNTITLED $n" else "Test notebook ($pages pages)"
-                val id = graph.documents.createNotebook(title, pageCount = pages)
-                startActivity(EditorActivity.intent(this@LibraryActivity, id))
+                val id = graph.documents.createNotebook("Test notebook ($TEST_PAGES pages)", pageCount = TEST_PAGES)
+                open(vm, id)
             } catch (e: Exception) {
-                graph.logger.e("LibraryActivity", "Creating a notebook failed", e)
-                Toast.makeText(this@LibraryActivity, R.string.create_failed, Toast.LENGTH_LONG).show()
+                graph.logger.e("LibraryActivity", "Creating the test notebook failed", e)
             }
         }
     }
 
-    override fun onDestroy() {
-        scope.cancel()
-        super.onDestroy()
-    }
-
-    private companion object {
-        const val UNTITLED = "Untitled Note"
-        const val TEST_PAGES = 50
-    }
+    private companion object { const val TEST_PAGES = 50 }
 }

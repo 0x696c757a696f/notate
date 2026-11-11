@@ -29,6 +29,13 @@ object LegacyNotateReader {
     /** Reads from an already unpacked session directory. */
     fun read(dir: File): LegacyCanvas = read(DirSource(dir))
 
+    /** Decodes just a `manifest.bin` (for the uuid and title-less metadata) without reading the rest of the container. */
+    fun peek(manifest: ByteArray): LegacyCanvasData = try {
+        proto.decodeFromByteArray(LegacyCanvasData.serializer(), manifest)
+    } catch (e: Exception) {
+        throw LegacyFormatException("Unreadable $MANIFEST: ${e.message}", e)
+    }
+
     private fun read(src: Source): LegacyCanvas {
         val warnings = ArrayList<String>()
         val manifest = src.read(MANIFEST) ?: throw LegacyFormatException("Missing $MANIFEST")

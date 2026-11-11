@@ -39,13 +39,58 @@ interface DocumentPane : PaneTarget, InkSurface {
     /** Switches between continuous scroll and single-page mode, staying on the current page, and remembers it in the view state. */
     fun setLayoutMode(mode: PageLayoutMode) {}
 
+    /** Called by the window when the save queue went idle after a change (debug timings). */
+    fun onSaveIdle(nowUptime: Long) {}
+
+    /** Lines for the debug HUD. */
+    fun debugLines(): List<String> = emptyList()
+
+    /** Extra rows of the More menu that only this kind of pane has. */
+    fun moreEntries(): List<app.notate.editor.popup.MenuEntry> = emptyList()
+
+    /** Where the reader should start when the pane is first laid out (a restored split pane); null keeps the document's own position. */
+    fun setInitialView(s: ViewState?) {}
+
+    /** True when the pane draws its own 32 dp bar (a web page); otherwise a split window puts a bar with title and page above it. */
+    val ownsPaneBar: Boolean get() = false
+
+    /** A split window asks the pane to show maximize / close buttons ([ownsPaneBar] panes only); both null removes them. */
+    fun setSplitControls(maximize: (() -> Unit)?, close: (() -> Unit)?) {}
+
+    /** True while the zoom writing window is open in this pane. */
+    val zoomWindowOpen: Boolean get() = false
+
+    /** Why the zoom window cannot be opened now (e.g. the page is a whiteboard), or null when it can. */
+    fun zoomUnavailableReason(): String? = null
+
+    /** Opens or closes the zoom writing window; false when it cannot be opened. */
+    fun setZoomWindowOpen(open: Boolean): Boolean = false
+
+    /** The ruler or protractor this pane shows, or null. */
+    val guideKind: app.notate.core.ink.guide.GuideKind? get() = null
+
+    /** Shows ([kind]) or hides (null) a ruler or protractor on the page in view. Panes without pages ignore it. */
+    fun setGuide(kind: app.notate.core.ink.guide.GuideKind?) {}
+
+    /** Imports a picked image (a content Uri) and places it on the page in view; panes without images ignore it. */
+    fun importImage(uri: android.net.Uri) {}
+
+    /** True when ([x], [y]) in window coordinates is on a view of the pane that takes touches itself (the text editor). */
+    fun hitsOwnUi(x: Float, y: Float): Boolean = false
+
     /** The host's exclusion rectangles changed (floating button, popup): hand them to the pen driver again. */
     fun refreshExcludes() {}
+
+    /** Drops the selection, if any (tab switch, page grid). */
+    fun clearSelection() {}
 }
 
 /** What a pane needs from the window that hosts it. */
 interface PaneHost {
     val arbiter: InkArbiter
+
+    /** Popup host of the window (selection bar, long-press menu); null in hosts without one. */
+    val popups: app.notate.editor.popup.PopupHost? get() = null
 
     /** Areas of the pane's view (view-local px) where the pen must be ignored, e.g. floating toolbars. */
     fun excludeRects(): List<android.graphics.Rect>
@@ -53,9 +98,26 @@ interface PaneHost {
     /** The e-ink driver reported a stroke start/end; feeds palm rejection. [timeMs] is `SystemClock.uptimeMillis()`. */
     fun onDriverStroke(begin: Boolean, timeMs: Long)
 
+    /** Shows [content] as the window's popup near [anchor] (the pen is kept off the page while it is up); null if unsupported. */
+    fun showPopup(anchor: View?, content: View, placement: app.notate.editor.popup.Placement = app.notate.editor.popup.Placement.BELOW_ANCHOR): app.notate.editor.popup.PopupHandle? = null
+
+    /** The pane has a size and is attached to the arbiter: take the pen if this pane has the focus (default: always). */
+    fun claimPen(pane: DocumentPane) { arbiter.setOwner(pane) }
+
+    /** Closes the window's popup, if any. */
+    fun dismissPopup() {}
     /** The page in view changed: [index] (0-based) of [count]. Drives the page indicator. */
     fun onPageChanged(index: Int, count: Int) {}
 
     /** A pane gesture (three-finger tap with that setting) asks to toggle focus mode. */
     fun onFocusModeRequested() {}
+
+    /** The zoom window of the pane opened or closed (the toolbar's Zoom button follows). */
+    fun onZoomWindowChanged(open: Boolean) {}
+
+    /** A link in the pane points at [page] of another document: open it (a tab) and show that page. */
+    fun openDocumentAt(doc: app.notate.core.model.DocId, page: PageId) {}
+
+    /** The page in the middle of the pane changed; [hasGrid] tells whether its paper has a grid to snap to. */
+    fun onPageGrid(hasGrid: Boolean) {}
 }

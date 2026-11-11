@@ -52,23 +52,107 @@ class OnyxDriverPort(
     @Volatile
     private var lastTimestamp = -1L
 
+    private val callbacks = java.util.concurrent.atomic.AtomicInteger()
+    private val pointCount = java.util.concurrent.atomic.AtomicInteger()
+
+    @Volatile
+    private var lastCallback = "-"
+    private var openTries = 0
+    private var openNote = "never opened"
+
+    override fun debugStatus(): String =
+        "helper=${if (helper != null) "ok" else "null"} sf=$sfRender active=$active opens=$openTries " +
+            "cb=${callbacks.get()} pts=${pointCount.get()} last=$lastCallback [$openNote] now:${regionNote()}" +
+            "\ntiming: ${timing()}" + sdkState()
+
+    // --- timing (HUD) -----------------------------------------------------------------------------------
+    // How late points reach the app and how often the session is switched off/on. All plain counters: cheap enough to
+    // keep on in every build, read only by the HUD.
+    @Volatile private var lagLastStroke = 0L      // max (callback time - point time) in the last stroke, ms
+    @Volatile private var lagMax = 0L
+    @Volatile private var lagStroke = 0L
+    @Volatile private var gapStroke = 0L          // max time between two SDK callbacks within a stroke, ms
+    @Volatile private var gapLastStroke = 0L
+    @Volatile private var lastCbAt = 0L
+    @Volatile private var lastDelta = 0L          // raw (now - point timestamp): shows whether the SDK's clock is uptime
+    private var drainLagLast = 0L                 // max enqueue -> main-thread drain delay in the last stroke, ms
+    private var drainLagStroke = 0L
+    private var drainLagMax = 0L
+    @Volatile private var firstEnqueuedAt = 0L
+    private var offCount = 0
+    private var onCount = 0
+    private var restarts = 0
+    private var lastOffAt = 0L
+
+    private fun timing(): String {
+        val now = android.os.SystemClock.uptimeMillis()
+        val off = if (lastOffAt == 0L) "-" else "${(now - lastOffAt) / 1000}s ago"
+        return "lag last=${lagLastStroke}ms max=${lagMax}ms gap=${gapLastStroke}ms main=${drainLagLast}ms(max $drainLagMax) " +
+            "on=$onCount off=$offCount restart=$restarts lastOff=$off dts=$lastDelta"
+    }
+
+    private fun noteCallback(p: TouchPoint?) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val prev = lastCbAt
+        lastCbAt = now
+        if (prev != 0L && now - prev > gapStroke) gapStroke = now - prev
+        if (p != null) {
+            val lag = now - p.timestamp
+            lastDelta = lag
+            if (lag in 0..60_000 && lag > lagStroke) lagStroke = lag
+        }
+    }
+
+    private fun strokeTimingStart() { lagStroke = 0L; gapStroke = 0L; lastCbAt = 0L; drainLagStroke = 0L }
+
+    private fun strokeTimingEnd() {
+        lagLastStroke = lagStroke
+        if (lagStroke > lagMax) lagMax = lagStroke
+        gapLastStroke = gapStroke
+        lastCbAt = 0L
+    }
+
+    private var sdkDumpAt = 0L
+    private var sdkDump = ""
+
+    /** Reflection dump of the TouchHelper, refreshed every 2 s, for the HUD. */
+    private fun sdkState(): String {
+        val now = System.currentTimeMillis()
+        if (now - sdkDumpAt > 2000) {
+            sdkDumpAt = now
+            sdkDump = "\nsdk: " + SdkIntrospect.dump(helper)
+        }
+        return sdkDump
+    }
+
+    /** Every SDK callback goes through here first, so `cb=0` means none of the eight methods was ever called. */
+    private fun seen(name: String) {
+        callbacks.incrementAndGet()
+        lastCallback = "$name@${Thread.currentThread().name}"
+    }
+
     private val callback = object : RawInputCallback() {
-        override fun onBeginRawDrawing(sideButton: Boolean, p: TouchPoint) = begin(p, sideButton)
-        override fun onEndRawDrawing(sideButton: Boolean, p: TouchPoint) = end(p, sideButton)
-        override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) = move(p)
-        override fun onRawDrawingTouchPointListReceived(list: TouchPointList) = moveAll(list)
-        override fun onBeginRawErasing(sideButton: Boolean, p: TouchPoint) = begin(p, true)
-        override fun onEndRawErasing(sideButton: Boolean, p: TouchPoint) = end(p, true)
-        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) = move(p)
-        override fun onRawErasingTouchPointListReceived(list: TouchPointList) = moveAll(list)
+        override fun onBeginRawDrawing(sideButton: Boolean, p: TouchPoint) { seen("beginDraw"); begin(p, sideButton) }
+        override fun onEndRawDrawing(sideButton: Boolean, p: TouchPoint) { seen("endDraw"); end(p, sideButton) }
+        override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) { seen("moveDraw"); move(p) }
+        override fun onRawDrawingTouchPointListReceived(list: TouchPointList) { seen("listDraw"); moveAll(list) }
+        override fun onBeginRawErasing(sideButton: Boolean, p: TouchPoint) { seen("beginErase"); begin(p, true) }
+        override fun onEndRawErasing(sideButton: Boolean, p: TouchPoint) { seen("endErase"); end(p, true) }
+        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) { seen("moveErase"); move(p) }
+        override fun onRawErasingTouchPointListReceived(list: TouchPointList) { seen("listErase"); moveAll(list) }
     }
 
     private fun begin(p: TouchPoint, eraser: Boolean) {
+        strokeTimingStart()
+        noteCallback(p)
+        pointCount.incrementAndGet()
         lastTimestamp = p.timestamp
         enqueue(Op.Begin(point(p), eraser))
     }
 
     private fun move(p: TouchPoint) {
+        noteCallback(p)
+        pointCount.incrementAndGet()
         if (p.timestamp <= lastTimestamp) return
         lastTimestamp = p.timestamp
         enqueue(Op.Move(point(p)))
@@ -80,6 +164,7 @@ class OnyxDriverPort(
 
     private fun end(p: TouchPoint, eraser: Boolean) {
         move(p)
+        strokeTimingEnd()
         enqueue(Op.End(point(p), eraser))
     }
 
@@ -93,6 +178,7 @@ class OnyxDriverPort(
         val post: Boolean
         synchronized(lock) {
             queue.add(op)
+            if (!drainPosted) firstEnqueuedAt = android.os.SystemClock.uptimeMillis()
             post = !drainPosted
             drainPosted = true
         }
@@ -105,6 +191,13 @@ class OnyxDriverPort(
             ops = queue
             queue = ArrayList()
             drainPosted = false
+        }
+        val waited = android.os.SystemClock.uptimeMillis() - firstEnqueuedAt
+        if (waited > drainLagStroke) drainLagStroke = waited
+        if (ops.any { it is Op.End }) {
+            drainLagLast = drainLagStroke
+            if (drainLagStroke > drainLagMax) drainLagMax = drainLagStroke
+            drainLagStroke = 0L
         }
         var batch = ArrayList<RawPoint>()
         fun flushMoves() {
@@ -137,18 +230,39 @@ class OnyxDriverPort(
 
     // --- DriverPort -------------------------------------------------------------------------------------
     override fun open() {
-        if (helper != null) return
+        // Like the legacy canvas: no session while there is no surface; the pane re-opens when it is created.
+        if (view is android.view.SurfaceView && !view.holder.surface.isValid) { openNote = "no surface yet"; return }
+        openTries++
+        val existing = helper
+        if (existing != null) {
+            // Legacy openDriverSession: an existing helper gets its rect and raw drawing re-applied (the surface may be new).
+            try {
+                OnyxSystemHelper.ignoreSystemSideButton(view)
+                existing.setLimitRect(currentLimit(), sdkExclude())
+                existing.openRawDrawing()
+                if (sfRender) existing.setSingleRegionMode()
+                if (sfRender) EpdController.enterScribbleMode(view)
+                openNote = "re-open ok ${view.width}x${view.height} ${regionNote()}"
+            } catch (t: Throwable) {
+                Log.w(TAG, "re-open failed", t)
+                openNote = "re-open failed: ${t.javaClass.simpleName} ${t.message}".take(80)
+            }
+            return
+        }
         try {
-            // Mode 2 (SFTouchRender), as the legacy note canvas: better ink quality and panning support.
-            val h = TouchHelper.create(view, true, callback)
+            // Same form as the legacy canvas (SFTouchRender on a SurfaceView).
+            val h = if (sfRender) TouchHelper.create(view, true, callback) else TouchHelper.create(view, callback)
             helper = h
             OnyxSystemHelper.ignoreSystemSideButton(view)
-            h.setLimitRect(currentLimit(), exclude)
+            h.setLimitRect(currentLimit(), sdkExclude())
             h.openRawDrawing()
-            h.setSingleRegionMode()
-            EpdController.enterScribbleMode(view)
+            // The legacy canvas (SFTouchRender mode) needs this for fast stroke capture.
+            if (sfRender) h.setSingleRegionMode()
+            if (sfRender) EpdController.enterScribbleMode(view)
+            openNote = "open ok ${view.width}x${view.height} ${regionNote()}"
         } catch (t: Throwable) {
             Log.e(TAG, "open failed", t)
+            openNote = "open failed: ${t.javaClass.simpleName} ${t.message}".take(80)
             helper = null
         }
     }
@@ -170,16 +284,37 @@ class OnyxDriverPort(
         synchronized(lock) { queue.clear() }
     }
 
+    /** The TouchHelper form: the legacy canvas's SFTouchRender mode, fixed so every test run is comparable. */
+    // Legacy forms: the note canvas (a SurfaceView) uses SFTouchRender + single-region mode; the web overlay (a plain View)
+    // uses TouchHelper.create(view, callback) with neither, and no scribble call at open.
+    val sfRender = view is android.view.SurfaceView
+
+    override fun reopen() {
+        if (helper == null) return
+        val wasActive = active
+        close()
+        open()
+        if (wasActive) setActive(true)
+    }
+
     override fun setActive(on: Boolean) {
+        if (on && helper == null) open()
         val h = helper ?: return
         active = on
         try {
             if (on) {
+                onCount++
                 h.setRawDrawingEnabled(true)
+                screenPosChanged()      // resume() just re-read the view's screen position: remember it for setLimits
                 h.setRawDrawingRenderEnabled(ink != null && !erasing)
+                // Legacy WebDriverPort does this on every switch-on: another pane may have left the pen out of scribble
+                // mode, and the call made in open() can come before the view is attached.
+                runCatching { EpdController.enterScribbleMode(view) }
                 EpdController.setScreenHandWritingPenState(view, EpdPenManager.PEN_DRAWING)
                 applyInk()
             } else {
+                offCount++
+                lastOffAt = android.os.SystemClock.uptimeMillis()
                 h.setRawDrawingRenderEnabled(false)
                 h.setRawDrawingEnabled(false)
                 EpdController.setScreenHandWritingPenState(view, EpdPenManager.PEN_PAUSE)
@@ -200,14 +335,15 @@ class OnyxDriverPort(
         this.exclude = exclude.map { Rect(it) }
         val h = helper ?: return
         try {
-            // The driver only picks up a new limit/exclude set when raw drawing restarts.
+            // The SDK applies a new limit/exclude set at once (RawInputReader.setLimitRect passes it straight to the native
+            // reader and to the panel). What it only re-reads on resume() is the view's position on screen, used to turn
+            // digitizer points into view coordinates. So switch raw drawing off and on only when the view moved (split
+            // divider, rotation): the switch pauses the driver's ink and leaves scribble mode for a moment.
+            val moved = screenPosChanged()
             val wasActive = active
-            if (wasActive) h.setRawDrawingEnabled(false)
-            h.closeRawDrawing()
-            h.setLimitRect(currentLimit(), this.exclude)
-            h.openRawDrawing()
-            h.setSingleRegionMode()
-            if (wasActive) {
+            if (wasActive && moved) { restarts++; h.setRawDrawingEnabled(false) }
+            h.setLimitRect(currentLimit(), sdkExclude())
+            if (wasActive && moved) {
                 h.setRawDrawingEnabled(true)
                 applyInk()
             }
@@ -216,7 +352,52 @@ class OnyxDriverPort(
         }
     }
 
-    private fun currentLimit(): Rect = limit ?: Rect().also { view.getLocalVisibleRect(it) }
+    private val screenPos = IntArray(2)
+    private val lastScreenPos = intArrayOf(Int.MIN_VALUE, Int.MIN_VALUE)
+
+    /** True if the view's position on screen differs from the last time this was asked. */
+    private fun screenPosChanged(): Boolean {
+        view.getLocationOnScreen(screenPos)
+        val changed = screenPos[0] != lastScreenPos[0] || screenPos[1] != lastScreenPos[1]
+        lastScreenPos[0] = screenPos[0]
+        lastScreenPos[1] = screenPos[1]
+        return changed
+    }
+
+    /**
+     * The exclusion list as handed to the SDK. `RawInputReader.setExcludeRect` ignores an empty list and keeps the previous
+     * one, so "no exclusion" is sent as a single zero-size rect (it contains no pen point).
+     */
+    private fun sdkExclude(): List<Rect> = currentExclude().ifEmpty { listOf(Rect()) }
+
+    /** Never an empty rect: the SDK logs "Empty region detected when mapping" and drops every point for one. */
+    private fun currentLimit(): Rect {
+        val l = limit?.takeUnless { it.isEmpty } ?: Rect().also { view.getLocalVisibleRect(it) }
+        return if (l.isEmpty) Rect(0, 0, view.width, view.height) else l
+    }
+
+    /** Exclusion rects that are non-empty, inside the limit, and do not swallow it whole. */
+    private fun currentExclude(): List<Rect> {
+        val l = currentLimit()
+        return exclude.mapNotNull { r ->
+            val c = Rect(r)
+            if (c.intersect(l) && !c.isEmpty && !(c.contains(l))) c else null
+        }
+    }
+
+    private fun regionNote(): String =
+        "limit=${currentLimit().flattenToString()} excl=${currentExclude().size}/${exclude.size} raw=${rawNote()}"
+
+    /**
+     * The limit as the SDK hands it to the native reader (digitizer units), and whether the raw-to-screen matrix exists.
+     * A raw rect equal to the screen rect, or no matrix, means the SDK's hidden-method lookups failed: the reader then
+     * drops every point as outside the region.
+     */
+    private fun rawNote(): String = runCatching {
+        val r = EpdController.mapToRawTouchPoint(view, android.graphics.RectF(currentLimit()))
+        val m = EpdController.getRawTouchPointToScreenMatrix()
+        "${r?.let { "${it.left.toInt()},${it.top.toInt()},${it.right.toInt()},${it.bottom.toInt()}" } ?: "null"} mx=${if (m != null) "ok" else "null"}"
+    }.getOrElse { "!${it.javaClass.simpleName}" }
 
     private fun applyInk() {
         val h = helper ?: return

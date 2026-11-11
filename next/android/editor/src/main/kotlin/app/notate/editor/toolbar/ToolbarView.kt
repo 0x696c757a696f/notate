@@ -10,9 +10,11 @@ import android.view.Gravity
 import android.view.View
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.doc.tools.ToolState
+import app.notate.core.ink.guide.GuideKind
 import app.notate.core.model.Capability
 import app.notate.core.model.EraserMode
 import app.notate.core.model.LassoMode
@@ -26,6 +28,7 @@ import app.notate.editor.popup.PenSettingsPopup
 import app.notate.editor.popup.PopupHost
 import app.notate.editor.popup.WidthPopup
 import app.notate.editor.ui.Ink
+import app.notate.editor.ui.Tooltip
 import app.notate.editor.ui.dp
 
 /** What the toolbar asks of its window. */
@@ -33,9 +36,17 @@ interface ToolbarActions {
     fun onUndo()
     fun onRedo()
     fun onPages()
-    fun onSplit()
+    fun onSplit(anchor: android.view.View)
     fun onMore(anchor: View)
-    fun onRulerToggled(on: Boolean) {}
+
+    /** The ruler / protractor button changed what the focused pane shows: [kind] null = hidden. */
+    fun onGuideChanged(kind: GuideKind?) {}
+
+    /** The Zoom button was pressed: open ([on]) or close the zoom window of the focused pane. Returns why it cannot be opened, or null. */
+    fun onZoomToggled(on: Boolean): String? = null
+
+    /** The Image button was tapped: pick a picture and place it on the page. */
+    fun onInsertImage() {}
 
     /** The toolbar's picture changed (tool switch, selection): the window may refresh its area. */
     fun onToolbarChanged() {}
@@ -56,31 +67,54 @@ class ToolbarView(
 
     private val tools = ArrayList<Def>()
     private val middle = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+    private val leftGroup: LinearLayout
+    private val rightGroup: LinearLayout
+    private val hScroll: HorizontalScrollView
+    private val vScroll: ScrollView
+    private val vBox = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+
+    /** Left-side vertical layout (landscape, Settings → Toolbar position); a 64 dp wide column instead of the 52 dp top row. */
+    var vertical: Boolean = false
+        set(v) {
+            if (field == v && childCount > 0) return
+            field = v
+            applyOrientation()
+        }
     private val undo: ToolButton
     private val redo: ToolButton
     private val pages: ToolButton
     private val split: ToolButton
     private val more: ToolButton
     private val rulerDef: Def
-    private var rulerOn = false
+    private val zoomDef: Def
+    private var zoomOn = false
+    private var zoomReason: String? = null
+    private var guide: GuideKind? = null
+    private var lastGuide = GuideKind.RULER
     private var caps: Set<Capability> = Capability.entries.toSet()
+
+    /** Whether the page in view has a grid that Snap to grid can use (plain paper greys the button). */
+    var gridAvailable: Boolean = true
+        set(v) {
+            if (field == v) return
+            field = v
+            render(controller.baseState(), force = true)
+        }
     private var capReason: String = context.getString(R.string.unavailable_here)
     private var last: ToolState? = null
 
     init {
-        orientation = HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        background = LayerDrawable(arrayOf(ColorDrawable(Color.WHITE), GradientDrawable().apply { setColor(Color.BLACK) })).also {
-            it.setLayerInset(1, 0, dp(51), 0, 0)
-        }
         val left = LinearLayout(context).apply { orientation = HORIZONTAL }
-        fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int): Def {
+        leftGroup = left
+        fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int, toggle: (() -> Unit)? = null): Def {
             val name = context.getString(label)
             val b = ToolButton(context, icon, name).onClick {
-                if (kind == null) {
-                    rulerOn = !rulerOn
-                    actions.onRulerToggled(rulerOn)
-                    last?.let { render(it, force = true) }
+                if (toggle != null) {
+                    toggle()
+                } else if (kind == null) {
+                    setGuide(if (guide == null) lastGuide else null, notify = true)
+                } else if (kind == ToolKind.IMAGE) {
+                    actions.onInsertImage()          // a one-shot action, not a mode
                 } else {
                     controller.select(kind)
                 }
@@ -95,33 +129,75 @@ class ToolbarView(
         tool(ToolKind.TEXT, Capability.TEXT, R.drawable.ic_text_fields, R.string.tool_text)
         tool(ToolKind.IMAGE, Capability.IMAGE, R.drawable.ic_image, R.string.tool_image)
         rulerDef = tool(null, Capability.RULER, R.drawable.ic_straighten, R.string.tool_ruler)
-        tool(ToolKind.ZOOM_WINDOW, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom)
+        rulerDef.button.onLongClick {
+            MoreMenu(
+                popups, rulerDef.button,
+                listOf(
+                    MenuEntry(context.getString(R.string.tool_ruler)) { setGuide(GuideKind.RULER, notify = true) },
+                    MenuEntry(context.getString(R.string.tool_protractor)) { setGuide(GuideKind.PROTRACTOR, notify = true) },
+                ),
+            ).show()
+        }
+        zoomDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom) { toggleZoom() }
         tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand)
-        addView(left)
-
-        val scroll = HorizontalScrollView(context).apply {
+        hScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = OVER_SCROLL_NEVER
-            addView(middle)
         }
-        addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+        vScroll = ScrollView(context).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = OVER_SCROLL_NEVER
+        }
 
         val right = LinearLayout(context).apply { orientation = HORIZONTAL }
+        rightGroup = right
         undo = ToolButton(context, R.drawable.ic_undo, context.getString(R.string.action_undo)).onClick { actions.onUndo() }
         redo = ToolButton(context, R.drawable.ic_redo, context.getString(R.string.action_redo)).onClick { actions.onRedo() }
         pages = ToolButton(context, R.drawable.ic_grid_view, context.getString(R.string.action_pages)).onClick { actions.onPages() }
-        split = ToolButton(context, R.drawable.ic_view_column, context.getString(R.string.action_split)).onClick { actions.onSplit() }
+        split = ToolButton(context, R.drawable.ic_view_column, context.getString(R.string.action_split)).onClick { actions.onSplit(split) }
         more = ToolButton(context, R.drawable.ic_more_horiz, context.getString(R.string.action_more)).onClick { actions.onMore(more) }
-        split.reason = context.getString(R.string.coming_soon)
         undo.reason = context.getString(R.string.nothing_to_undo)
         redo.reason = context.getString(R.string.nothing_to_redo)
         listOf(undo, redo, pages, split, more).forEach { right.addView(it) }
-        addView(right)
+        applyOrientation()
         render(controller.baseState())
     }
 
+    private fun applyOrientation() {
+        val v = vertical
+        removeAllViews()
+        vBox.removeAllViews()
+        hScroll.removeAllViews()
+        vScroll.removeAllViews()
+        (middle.parent as? android.view.ViewGroup)?.removeView(middle)
+        orientation = if (v) VERTICAL else HORIZONTAL
+        gravity = if (v) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+        leftGroup.orientation = if (v) VERTICAL else HORIZONTAL
+        rightGroup.orientation = if (v) VERTICAL else HORIZONTAL
+        middle.orientation = if (v) VERTICAL else HORIZONTAL
+        middle.gravity = if (v) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+        background = LayerDrawable(arrayOf(ColorDrawable(Color.WHITE), GradientDrawable().apply { setColor(Color.BLACK) })).also {
+            if (v) it.setLayerInset(1, dp(WIDTH_DP - 1), 0, 0, 0) else it.setLayerInset(1, 0, dp(HEIGHT_DP - 1), 0, 0)
+        }
+        if (v) {
+            // One scrolling column: tools, options of the active tool, actions.
+            vBox.addView(leftGroup)
+            vBox.addView(middle, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            vBox.addView(rightGroup)
+            vScroll.addView(vBox)
+            addView(vScroll, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        } else {
+            addView(leftGroup)
+            hScroll.addView(middle)
+            addView(hScroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+            addView(rightGroup)
+        }
+        if (last != null) render(last!!, force = true)
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(dp(HEIGHT_DP), MeasureSpec.EXACTLY))
+        if (vertical) super.onMeasure(MeasureSpec.makeMeasureSpec(dp(WIDTH_DP), MeasureSpec.EXACTLY), heightMeasureSpec)
+        else super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(dp(HEIGHT_DP), MeasureSpec.EXACTLY))
     }
 
     /** Greys out what the focused pane cannot do; if the active tool became unavailable the pen is selected. */
@@ -133,11 +209,49 @@ class ToolbarView(
         val active = controller.baseState().active
         val def = tools.firstOrNull { it.kind == active }
         if (def != null && def.cap !in caps && Capability.PEN in caps) controller.select(ToolKind.PEN)
-        if (rulerOn && Capability.RULER !in caps) {
-            rulerOn = false
-            actions.onRulerToggled(false)
-        }
+        if (zoomOn && Capability.ZOOM_WINDOW !in caps) zoomOn = false
+        applyZoomReason()
         render(controller.baseState(), force = true)
+    }
+
+    private fun toggleZoom() {
+        val want = !zoomOn
+        val why = actions.onZoomToggled(want)
+        if (why != null) {
+            Tooltip.show(zoomDef.button, why)
+            return
+        }
+        setZoomOn(want)
+    }
+
+    /** The focused pane's zoom window is open (or not): the Zoom button shows it. */
+    fun setZoomOn(on: Boolean) {
+        if (zoomOn == on) return
+        zoomOn = on
+        last?.let { render(it, force = true) }
+    }
+
+    /** Greys the Zoom button with [reason] (e.g. the page in view is a whiteboard); null makes it available again. */
+    fun setZoomBlocked(reason: String?) {
+        zoomReason = reason
+        applyZoomReason()
+    }
+
+    private fun applyZoomReason() {
+        zoomDef.button.reason = if (zoomDef.cap !in caps) capReason else zoomReason
+    }
+
+    /** Shows which guide the focused pane has up ([kind] null = none) without telling the window. */
+    fun showGuide(kind: GuideKind?) = setGuide(kind, notify = false)
+
+    private fun setGuide(kind: GuideKind?, notify: Boolean) {
+        if (kind != null) lastGuide = kind
+        val changed = guide != kind
+        guide = kind
+        rulerDef.button.setImageResource(if (lastGuide == GuideKind.PROTRACTOR) R.drawable.ic_protractor else R.drawable.ic_straighten)
+        rulerDef.button.contentDescription = context.getString(if (lastGuide == GuideKind.PROTRACTOR) R.string.tool_protractor else R.string.tool_ruler)
+        if (notify && changed) actions.onGuideChanged(kind)
+        last?.let { render(it, force = true) }
     }
 
     /** Undo / Redo follow the focused pane's history. */
@@ -152,9 +266,9 @@ class ToolbarView(
     fun render(state: ToolState, force: Boolean = false) {
         if (!force && state == last) return
         last = state
-        for (d in tools) d.button.isSelected = if (d.kind == null) rulerOn else d.kind == state.active
+        for (d in tools) d.button.isSelected = if (d === zoomDef) zoomOn else if (d.kind == null) guide != null else d.kind == state.active
         middle.removeAllViews()
-        val o = ToolbarOptions(context, middle, controller, popups, xdpi)
+        val o = ToolbarOptions(context, middle, controller, popups, xdpi, gridAvailable)
         when (state.active) {
             ToolKind.PEN -> o.penOptions(state, ToolKind.PEN)
             ToolKind.HIGHLIGHTER -> o.penOptions(state, ToolKind.HIGHLIGHTER)
@@ -169,6 +283,7 @@ class ToolbarView(
 
     companion object {
         const val HEIGHT_DP = 52
+        const val WIDTH_DP = 64
     }
 }
 
@@ -179,10 +294,12 @@ internal class ToolbarOptions(
     private val controller: ToolController,
     private val popups: PopupHost,
     private val xdpi: Float,
+    private val gridAvailable: Boolean = true,
 ) {
     private fun divider() {
-        row.addView(View(context).apply { setBackgroundColor(Ink.GRAY) }, LinearLayout.LayoutParams(context.dp(1), context.dp(24)).apply {
-            leftMargin = context.dp(4); rightMargin = context.dp(4)
+        val v = row.orientation == LinearLayout.VERTICAL
+        row.addView(View(context).apply { setBackgroundColor(Ink.GRAY) }, LinearLayout.LayoutParams(context.dp(if (v) 24 else 1), context.dp(if (v) 1 else 24)).apply {
+            if (v) { topMargin = context.dp(4); bottomMargin = context.dp(4) } else { leftMargin = context.dp(4); rightMargin = context.dp(4) }
         })
     }
 
@@ -252,7 +369,18 @@ internal class ToolbarOptions(
         kind(ShapeKind.ARROW, R.drawable.ic_north_east, R.string.shape_arrow, s.shapeKind == ShapeKind.ARROW)
         kind(ShapeKind.RECT, R.drawable.ic_crop_square, R.string.shape_rect, s.shapeKind == ShapeKind.RECT)
         kind(ShapeKind.ELLIPSE, R.drawable.ic_radio_button_unchecked, R.string.shape_ellipse, s.shapeKind == ShapeKind.ELLIPSE)
-        kind(ShapeKind.POLYGON, R.drawable.ic_pentagon, R.string.shape_polygon, s.shapeKind == ShapeKind.POLYGON)
+        lateinit var pb: ToolButton
+        pb = kind(ShapeKind.POLYGON, R.drawable.ic_pentagon, R.string.shape_polygon, s.shapeKind == ShapeKind.POLYGON)
+        pb.onLongClick {
+            MoreMenu(
+                popups, pb,
+                (3..8).map { n ->
+                    MenuEntry(context.getString(R.string.polygon_sides, n)) {
+                        controller.update { it.copy(shapeKind = ShapeKind.POLYGON, polygonSides = n) }
+                    }
+                },
+            ).show()
+        }
         val axes = s.shapeKind == ShapeKind.AXES_2D || s.shapeKind == ShapeKind.AXES_Q1
         lateinit var ab: ToolButton
         ab = ToolButton(context, R.drawable.ic_show_chart, context.getString(R.string.shape_axes)).onClick {
@@ -272,7 +400,10 @@ internal class ToolbarOptions(
         row.addView(
             ToolButton(context, R.drawable.ic_grid_on, context.getString(R.string.snap_to_grid)).onClick {
                 controller.update { it.copy(snapToGrid = !it.snapToGrid) }
-            }.also { it.isSelected = s.snapToGrid },
+            }.also {
+                it.isSelected = s.snapToGrid && gridAvailable
+                it.reason = if (gridAvailable) null else context.getString(R.string.snap_unavailable)
+            },
         )
     }
 
@@ -302,6 +433,12 @@ internal class ToolbarOptions(
         row.addView(ToolButton(context, R.drawable.ic_format_bold, context.getString(R.string.text_bold)).onClick {
             controller.update { it.copy(textBold = !it.textBold) }
         }.also { it.isSelected = s.textBold })
+        fun align(a: app.notate.core.model.TextAlign, icon: Int, label: Int) {
+            row.addView(ToolButton(context, icon, context.getString(label)).onClick { controller.update { it.copy(textAlign = a) } }.also { it.isSelected = s.textAlign == a })
+        }
+        align(app.notate.core.model.TextAlign.LEFT, R.drawable.ic_format_align_left, R.string.text_align_left)
+        align(app.notate.core.model.TextAlign.CENTER, R.drawable.ic_format_align_center, R.string.text_align_center)
+        align(app.notate.core.model.TextAlign.RIGHT, R.drawable.ic_format_align_right, R.string.text_align_right)
         divider()
         lateinit var v: ColorSlot
         v = ColorSlot(context, s.textColor, true, context.getString(R.string.text_color), {}) {
