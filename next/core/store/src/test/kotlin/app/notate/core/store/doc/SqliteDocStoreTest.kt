@@ -127,6 +127,16 @@ class SqliteDocStoreTest {
         s.close()
     }
 
+    @Test fun pageBoundsIsUnionOfStoredItems() = runBlocking<Unit> {
+        val s = newStore()
+        assertThat(s.pageBounds(PageId(1))).isNull()
+        val a = stroke(1, points = floatArrayOf(10f, 10f, 20f, 20f))
+        val b = stroke(2, points = floatArrayOf(500f, -300f, 520f, 520f))
+        s.write(listOf(Edit.Items(PageId(1), emptyList(), listOf(a, b))))
+        assertThat(s.pageBounds(PageId(1))).isEqualTo(a.bounds.union(b.bounds))
+        s.close()
+    }
+
     @Test fun itemsAreOrderedByLayerThenOrder() = runBlocking<Unit> {
         val s = newStore()
         val img = ImageItem(ItemId(10), 1, AssetId("a"), r, 0f, 1f, false, r)

@@ -1134,6 +1134,33 @@ class NotebookPane(
         scheduleEndFinger(PAGE_TURN_SETTLE_MS)
     }
 
+    override fun fitContent(): Boolean {
+        val page = currentPage ?: return false
+        if (released || viewport.widthPx == 0) return false
+        val info = editor.pages.value.firstOrNull { it.id == page } ?: return false
+        if (info.height != null) {
+            goToFit { viewport.fitWidth(layout, page, FIT_MARGIN_DP * density) }
+            return true
+        }
+        scope.launch {
+            val f = layout.frameOf(page)
+            val bounds = editor.contentBounds(page)
+            if (released) return@launch
+            goToFit {
+                if (bounds == null) viewport.copy(zoom = 1f, scrollX = f.l, scrollY = f.t)
+                else viewport.fitRect(bounds.offset(f.l, f.t), FIT_MARGIN_DP * density * 2f)
+            }
+        }
+        return true
+    }
+
+    private fun goToFit(target: () -> Viewport) {
+        addCard = false
+        beginFinger()
+        setViewport(target(), delayTiles = false)
+        scheduleEndFinger(PAGE_TURN_SETTLE_MS)
+    }
+
     /** Settings → Full refresh every N page turns (single-page mode): every Nth turn ends with a full refresh. */
     private fun countPageTurn() {
         val n = deps.settings.gcEvery.value

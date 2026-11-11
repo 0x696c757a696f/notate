@@ -26,6 +26,9 @@ interface DocStore : java.io.Closeable {
     suspend fun readPages(): List<PageInfo>
     /** Items of [page] ordered by layer then order; with [region] only items whose bounds intersect it. */
     suspend fun readItems(page: PageId, region: Rect? = null): List<Item>
+    /** Bounding box of every stored item of [page]; null when the page has none. */
+    suspend fun pageBounds(page: PageId): Rect? =
+        readItems(page).map { it.bounds }.reduceOrNull { a, b -> a.union(b) }?.takeIf { !it.isEmpty }
     suspend fun maxIds(): MaxIds
     /** Applies [edits] in one transaction. */
     suspend fun write(edits: List<Edit>)

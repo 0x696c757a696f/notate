@@ -69,8 +69,9 @@ class CoverService(
                 if (entry.pageCount != pages.size) store.updateCover(id, entry.coverRev, pages.size)
                 return
             }
-            val content = handle.editor.ensureLoaded(first.id)
-            val bitmap = renderer.render(first, content, COVER_WIDTH_PX)
+            val view = if (first.height == null) ThumbnailRenderer.whiteboardView(handle.editor.contentBounds(first.id), first.width) else null
+            val content = handle.editor.ensureLoaded(first.id, view)
+            val bitmap = renderer.render(first, content, COVER_WIDTH_PX, view)
             try {
                 withContext(dispatchers.io) { renderer.saveWebp(bitmap, file) }
             } finally {

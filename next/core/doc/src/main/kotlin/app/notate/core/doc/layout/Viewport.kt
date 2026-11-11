@@ -83,6 +83,18 @@ data class Viewport(
         return copy(zoom = newZoom, scrollX = f.l - (widthPx - f.width * newScale) / 2f / newScale, scrollY = f.t - marginPx / newScale)
     }
 
+    /**
+     * Zoom and scroll so [r] (document plane) is centered and fully visible with [marginPx] around it. Zoom is clamped to
+     * [MIN_ZOOM]..[maxZoom] so a tiny drawing is not blown up. An empty [r] leaves the viewport unchanged.
+     */
+    fun fitRect(r: Rect, marginPx: Float, maxZoom: Float = 2f): Viewport {
+        if (r.isEmpty) return this
+        val z = min((widthPx - 2 * marginPx) / (r.width * pxPerPt), (heightPx - 2 * marginPx) / (r.height * pxPerPt)).coerceIn(MIN_ZOOM, maxZoom)
+        val s = z * pxPerPt
+        val c = r.center
+        return copy(zoom = z, scrollX = c.x - widthPx / s / 2f, scrollY = c.y - heightPx / s / 2f)
+    }
+
     companion object {
         const val MIN_ZOOM = 0.25f
         const val MAX_ZOOM = 6f

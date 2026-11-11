@@ -81,7 +81,7 @@
     <string name="paper_letter">Letter</string>
     <string name="paper_b5">B5</string>
     <string name="paper_screen">Screen</string>
-    <string name="paper_whiteboard">Whiteboard</string>
+    <string name="paper_whiteboard">Infinite canvas</string>
 
     <string name="template_blank">Blank</string>
     <string name="template_lined">Lined</string>

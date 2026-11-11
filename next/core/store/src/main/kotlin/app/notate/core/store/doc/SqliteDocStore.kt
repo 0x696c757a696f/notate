@@ -62,6 +62,12 @@ class SqliteDocStore(
         else driver.query("$base AND t < ? AND b > ? AND l < ? AND r > ?$order", page.value, region.b, region.t, region.r, region.l, map = map)
     }
 
+    override suspend fun pageBounds(page: PageId): Rect? = withContext(io) {
+        driver.query("SELECT MIN(l), MIN(t), MAX(r), MAX(b) FROM item WHERE page_id = ?", page.value) { r ->
+            if (r.isNull(0)) null else Rect(r.double(0).toFloat(), r.double(1).toFloat(), r.double(2).toFloat(), r.double(3).toFloat())
+        }.single()?.takeIf { !it.isEmpty }
+    }
+
     override suspend fun maxIds(): MaxIds = withContext(io) {
         val page = driver.query("SELECT MAX(id) FROM page") { if (it.isNull(0)) 0L else it.long(0) }.single()
         val item = driver.query("SELECT MAX(id) FROM item") { if (it.isNull(0)) 0L else it.long(0) }.single()
