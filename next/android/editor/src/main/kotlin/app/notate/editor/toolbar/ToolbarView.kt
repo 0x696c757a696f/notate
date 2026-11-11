@@ -144,6 +144,7 @@ class ToolbarView(
         tool(ToolKind.SHAPE, Capability.SHAPES, R.drawable.ic_category, R.string.tool_shapes, ToolbarTool.SHAPE)
         tool(ToolKind.TEXT, Capability.TEXT, R.drawable.ic_text_fields, R.string.tool_text, ToolbarTool.TEXT)
         tool(ToolKind.IMAGE, Capability.IMAGE, R.drawable.ic_image, R.string.tool_image, ToolbarTool.IMAGE)
+        tool(ToolKind.INSERT_SPACE, Capability.INSERT_SPACE, R.drawable.ic_vertical_align_center, R.string.tool_insert_space, ToolbarTool.INSERT_SPACE)
         rulerDef = tool(null, Capability.RULER, R.drawable.ic_straighten, R.string.tool_ruler, ToolbarTool.RULER)
         rulerDef.button.onLongClick {
             MoreMenu(

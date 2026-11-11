@@ -16,6 +16,7 @@ class ToolSessionFactory {
         ToolKind.LASSO -> ctx.selection?.let { LassoSelectSession(tool, ctx, it) } ?: NoopSession
         ToolKind.SHAPE -> ShapeDragSession(tool, ctx)
         ToolKind.TEXT -> TextPlaceSession(tool, ctx)
+        ToolKind.INSERT_SPACE -> InsertSpaceSession(ctx)
         else -> NoopSession
     }
 }

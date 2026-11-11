@@ -17,6 +17,7 @@
     <string name="zoom_larger">Larger magnification</string>
     <string name="zoom_close">Close zoom window</string>
     <string name="unavailable_whiteboard">Not available on whiteboards</string>
+    <string name="tool_insert_space">Insert space</string>
     <string name="tool_hand">Hand</string>
 
     <string name="action_undo">Undo</string>

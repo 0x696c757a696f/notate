@@ -161,6 +161,7 @@
     <string name="settings_show_shape">Toolbar: Shapes</string>
     <string name="settings_show_text">Toolbar: Text</string>
     <string name="settings_show_image">Toolbar: Image</string>
+    <string name="settings_show_insert_space">Toolbar: Insert space</string>
     <string name="settings_show_ruler">Toolbar: Ruler</string>
     <string name="settings_show_zoom">Toolbar: Zoom</string>
     <string name="settings_show_hand">Toolbar: Hand</string>

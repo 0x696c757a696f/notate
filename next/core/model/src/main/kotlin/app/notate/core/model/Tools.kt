@@ -2,7 +2,7 @@ package app.notate.core.model
 
 import kotlinx.serialization.Serializable
 
-@Serializable enum class ToolKind { PEN, HIGHLIGHTER, ERASER, LASSO, SHAPE, TEXT, IMAGE, LINK, ZOOM_WINDOW, HAND }
+@Serializable enum class ToolKind { PEN, HIGHLIGHTER, ERASER, LASSO, SHAPE, TEXT, IMAGE, LINK, ZOOM_WINDOW, HAND, INSERT_SPACE }
 @Serializable enum class EraserMode { PARTIAL, STROKE, LASSO }
 @Serializable enum class LassoMode { FREEFORM, RECTANGLE }
 

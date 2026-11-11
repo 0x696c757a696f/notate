@@ -33,7 +33,7 @@ enum class ToolbarSize(val buttonDp: Int, val barDp: Int) {
 }
 
 /** Toolbar tools the user may hide. Pen and Eraser are not listed: the bar must always be able to write and erase. */
-enum class ToolbarTool(val id: String) { LASSO("lasso"), HIGHLIGHTER("highlighter"), SHAPE("shape"), TEXT("text"), IMAGE("image"), RULER("ruler"), ZOOM("zoom"), HAND("hand") }
+enum class ToolbarTool(val id: String) { LASSO("lasso"), HIGHLIGHTER("highlighter"), SHAPE("shape"), TEXT("text"), IMAGE("image"), INSERT_SPACE("insert_space"), RULER("ruler"), ZOOM("zoom"), HAND("hand") }
 enum class BackupFreq { OFF, DAILY, WEEKLY }
 
 /** One setting: a [StateFlow] whose [set] persists the new value. */
