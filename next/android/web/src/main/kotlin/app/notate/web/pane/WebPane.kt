@@ -885,7 +885,7 @@ class WebPane(
             pageBounds = null,
             pxPerPt = vp.scale,
             preview = live,
-            settings = ToolSettings(holdMs, (preset.eraserRadiusDp ?: 0f) * density),
+            settings = ToolSettings(holdMs, (preset.eraserRadiusDp ?: 0f) * density, scribbleErase = deps.settings.scribbleErase.value),
             clock = deps.clock,
         )
         live.page = page.id

@@ -167,6 +167,7 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
             0 to stringResource(R.string.settings_off), 400 to stringResource(R.string.settings_ms, 400),
             600 to stringResource(R.string.settings_ms, 600), 900 to stringResource(R.string.settings_ms, 900),
         ))
+        Toggle(R.string.settings_scribble_erase, settings.scribbleErase, R.string.settings_scribble_erase_hint)
         Toggle(R.string.settings_driver_ink, settings.driverInk, R.string.settings_driver_ink_hint)
         Toggle(R.string.settings_web_pen_surface, settings.webPenSurface, R.string.settings_web_pen_surface_hint)
 

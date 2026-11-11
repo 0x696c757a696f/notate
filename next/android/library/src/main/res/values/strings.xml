@@ -139,6 +139,8 @@
     <string name="settings_none">None</string>
     <string name="settings_hold_shape">Hold to draw shapes</string>
     <string name="settings_ms">%1$d ms</string>
+    <string name="settings_scribble_erase">Scribble to erase</string>
+    <string name="settings_scribble_erase_hint">Scribbling back and forth over ink with the pen erases it.</string>
     <string name="settings_driver_ink">Low-latency pen (Boox)</string>
     <string name="settings_web_pen_surface">Pen surface on web pages</string>
     <string name="settings_web_pen_surface_hint">Experimental: web pages use the same pen surface as notebooks. Applies when a page is reopened.</string>

@@ -54,6 +54,8 @@ class Settings(private val kv: KeyValueStore) {
     val penButton = enumPref("pen_button", PenButton.ERASER)
     /** 0 = off. */
     val holdShapeMs = intPref("hold_shape_ms", 600, setOf(0, 400, 600, 900))
+    /** A pen stroke that scribbles out existing ink erases it. */
+    val scribbleErase = boolPref("scribble_erase", true)
     val driverInk = boolPref("driver_ink", true)
     /**
      * Web pages run the pen driver on a transparent SurfaceView, like notebooks; false = on the ink overlay view. Off by
