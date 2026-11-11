@@ -66,7 +66,6 @@
     <string name="import_exists">This notebook is already in your library.</string>
     <string name="import_replace">Replace</string>
     <string name="import_keep_both">Keep both</string>
-    <string name="import_cancel">Cancel</string>
     <string name="import_not_notate">This file isn\'t a Notate file. To bring in notes from the old Notate app, use Settings → Import from old Notate.</string>
     <string name="import_newer">This file was made by a newer version of Notate.</string>
     <string name="import_failed">Couldn\'t import this file.</string>
