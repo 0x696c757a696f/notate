@@ -85,7 +85,9 @@ class PenSession(private val preset: ToolPreset, private val ctx: ToolContext) :
         val shape = recognised
         if (shape != null) {
             adjust(p)
-            commit(ghost ?: shape)
+            val done = ghost ?: shape
+            commit(done)
+            ctx.selection?.selectQuick(ctx.page, done.id)
         } else {
             feed(p)
             val g = snap

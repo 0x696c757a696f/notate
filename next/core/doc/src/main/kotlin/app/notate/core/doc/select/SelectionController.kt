@@ -49,6 +49,13 @@ class SelectionController(
     }
     private var active: Active? = null
 
+    /**
+     * True for the selection made automatically after a shape was drawn ([selectQuick]): the pen grabs only its handles and its
+     * outline, so writing inside the shape still works. Any other way of selecting, or clearing, turns it off.
+     */
+    var quick = false
+        private set
+
     val isTransforming: Boolean get() = active != null
 
     // ---- selecting ----
@@ -56,6 +63,7 @@ class SelectionController(
     /** Selects items on [page] with at least 50 % of their points inside [polygon] (x,y pairs); locked images are skipped. */
     fun selectByLasso(page: PageId, polygon: FloatArray) {
         cancelTransform()
+        quick = false
         val content = editor.content(page) ?: return clear()
         if (polygon.size < 6) return clear()
         val hits = content.query(LassoHit.polygonBounds(polygon)).filter {
@@ -69,12 +77,35 @@ class SelectionController(
     /** Selects exactly [ids] on [page] (used after paste and duplicate). */
     fun selectIds(page: PageId, ids: Collection<ItemId>) {
         cancelTransform()
+        quick = false
         val content = editor.content(page) ?: return clear()
         setSelection(page, ids.mapNotNull { content[it] })
     }
 
+    /** Selects the just-drawn shape [id] so it can be moved, scaled and rotated right away. */
+    fun selectQuick(page: PageId, id: ItemId) {
+        selectIds(page, listOf(id))
+        quick = _selection.value != null
+    }
+
+    /** True when ([x], [y]) on the selection's page is within [tol] pt of the outline of a selected shape. */
+    fun nearShapeOutline(x: Float, y: Float, tol: Float): Boolean {
+        for (item in items()) {
+            if (item !is app.notate.core.model.Shape) continue
+            val reach = tol + item.style.widthPt / 2f
+            for (poly in app.notate.core.ink.shape.ShapeOutline.of(item.kind, item.params, item.style.widthPt)) {
+                val xy = poly.points
+                for (i in 0 until xy.size / 2 - 1) {
+                    if (app.notate.core.geometry.Geo.distPointSegment(x, y, xy[2 * i], xy[2 * i + 1], xy[2 * i + 2], xy[2 * i + 3]) <= reach) return true
+                }
+            }
+        }
+        return false
+    }
+
     fun clear() {
         cancelTransform()
+        quick = false
         _selection.value = null
     }
 

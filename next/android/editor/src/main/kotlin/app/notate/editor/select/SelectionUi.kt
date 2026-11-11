@@ -7,6 +7,7 @@ import android.view.View
 import app.notate.core.doc.editor.DocumentEditor
 import app.notate.core.doc.layout.DocumentLayout
 import app.notate.core.doc.layout.Viewport
+import app.notate.core.doc.select.Handle
 import app.notate.core.doc.select.InkClipboard
 import app.notate.core.doc.select.Selection
 import app.notate.core.doc.select.SelectionController
@@ -56,7 +57,15 @@ class SelectionUi(
     /** True when the point (layer-local px) is on the box or a handle of the selection on [page]. */
     fun hits(page: PageId, sx: Float, sy: Float): Boolean {
         val sel = selection ?: return false
-        return sel.page == page && layer.hit(sel, viewport(), layout(), sx, sy) != null
+        if (sel.page != page) return false
+        val h = layer.hit(sel, viewport(), layout(), sx, sy) ?: return false
+        if (h != Handle.MOVE || !controller.quick) return true
+        // A just-drawn shape is grabbed by its handles or its outline; its inside stays free for writing.
+        val vp = viewport()
+        val f = layout().frameOf(page)
+        val x = sx / vp.scale + vp.scrollX - f.l
+        val y = sy / vp.scale + vp.scrollY - f.t
+        return controller.nearShapeOutline(x, y, layer.hitHalfPx() / vp.scale)
     }
 
     /**
