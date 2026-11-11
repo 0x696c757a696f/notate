@@ -151,8 +151,12 @@ internal class InkPdfWriter(
         if (t.text.isEmpty()) return
         val layout = TextLayouts.build(t.text, t.fontSizePt, t.bold, t.frame.width, t.align, t.color)
         val font = if (t.bold) PDType1Font.HELVETICA_BOLD else PDType1Font.HELVETICA
-        val lines = if (isLatin(t.text)) (0 until layout.lineCount).map { i ->
-            layout.text.subSequence(layout.getLineStart(i), layout.getLineEnd(i)).toString().trimEnd('\n', '\r')
+        // Without a usable layout (no line information) the text is split at newlines only.
+        val measured = layout.lineCount > 0
+        val lines = if (isLatin(t.text)) {
+            if (measured) (0 until layout.lineCount).map { i ->
+                layout.text.subSequence(layout.getLineStart(i), layout.getLineEnd(i)).toString().trimEnd('\n', '\r')
+            } else t.text.split('\n')
         } else null
         if (lines == null || lines.any { runCatching { font.encode(it) }.isFailure }) return textAsPicture(cs, t, layout)
 
@@ -167,7 +171,7 @@ internal class InkPdfWriter(
             val w = font.getStringWidth(line) / 1000f * t.fontSizePt
             val dx = when (t.align) { TextAlign.LEFT -> 0f; TextAlign.CENTER -> (t.frame.width - w) / 2f; TextAlign.RIGHT -> t.frame.width - w }
             // The page space is y-down; the text matrix flips the glyphs upright again.
-            cs.setTextMatrix(Matrix(1f, 0f, 0f, -1f, t.frame.l + dx, t.frame.t + layout.getLineBaseline(i)))
+            cs.setTextMatrix(Matrix(1f, 0f, 0f, -1f, t.frame.l + dx, t.frame.t + if (measured) layout.getLineBaseline(i).toFloat() else t.fontSizePt * (1f + 1.2f * i)))
             cs.showText(line)
         }
         cs.endText()
