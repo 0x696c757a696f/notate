@@ -27,7 +27,7 @@ import kotlin.math.hypot
  * Pen and highlighter. Hold the pen still for `holdShapeMs` and a recognised shape replaces the stroke; further movement then
  * resizes it until pen-up. Hosts without a stationary-pen event should call [poll] from a timer. Main thread only.
  */
-class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession {
+class PenSession(private val preset: ToolPreset, private val ctx: ToolContext) : ToolSession {
     private val editor = ctx.editor
     private val style = InkStyle(
         if (preset.kind == ToolKind.HIGHLIGHTER) PenType.HIGHLIGHTER else preset.pen ?: PenType.BALLPOINT,
@@ -48,6 +48,7 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     // Ruler / protractor: the geometry the whole stroke follows, and the raw pen positions it is built from.
     private var snap: GuideSnap? = null
     private var raw = FloatArray(64)
+    private var rawT = IntArray(32)
     private var rawN = 0
     private var pressureSum = 0f
     private var lastT = 0
@@ -89,7 +90,9 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
             feed(p)
             val g = snap
             val pts = if (g != null) guided(g) else sampler.finish()
-            if (pts.size >= 1) {
+            if (pts.size >= 1 && g == null && scribbleErased()) {
+                // A scribble-out: the covered items go in one undoable edit and the scribble itself is not kept.
+            } else if (pts.size >= 1) {
                 commit(Stroke(editor.newItemId(), editor.nextOrder(ctx.page), style, pts, ItemBounds.strokeBounds(pts, style)))
                 if (g is GuideSnap.Ray && rawN > 0) ctx.guides.onRay(Guides.rayAngleDeg(g, raw[2 * rawN - 2], raw[2 * rawN - 1]))
             }
@@ -117,14 +120,15 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     }
 
     private fun feed(p: InkPoint) {
-        if (snap != null) {
-            if (rawN == 0) firstT = p.tMs
-            if (2 * rawN + 2 > raw.size) raw = raw.copyOf(raw.size * 2)
-            raw[2 * rawN] = p.x; raw[2 * rawN + 1] = p.y
-            rawN++
-            pressureSum += p.pressure.coerceIn(0f, 1f)
-            lastT = (p.tMs - firstT).toInt().coerceAtLeast(0)
-        }
+        // Raw pen positions: the ruler/protractor build from them, and scribble detection needs them unsmoothed.
+        if (rawN == 0) firstT = p.tMs
+        if (2 * rawN + 2 > raw.size) raw = raw.copyOf(raw.size * 2)
+        if (2 * rawN + 2 > rawT.size * 2) rawT = rawT.copyOf(rawT.size * 2)
+        raw[2 * rawN] = p.x; raw[2 * rawN + 1] = p.y
+        rawT[rawN] = (p.tMs - firstT).toInt().coerceAtLeast(0)
+        rawN++
+        pressureSum += p.pressure.coerceIn(0f, 1f)
+        lastT = (p.tMs - firstT).toInt().coerceAtLeast(0)
         sampler.add(if (pressureGain == 1f) p else p.copy(pressure = (0.5f + (p.pressure - 0.5f) * pressureGain).coerceIn(0f, 1f)))
         dwell.onPoint(p.x, p.y, ctx.clock.now())
     }
@@ -181,6 +185,16 @@ class PenSession(preset: ToolPreset, private val ctx: ToolContext) : ToolSession
     private fun usesVertexAnchor(k: ShapeKind) = k == ShapeKind.RECT || k == ShapeKind.TRIANGLE || k == ShapeKind.POLYGON || k == ShapeKind.POLYLINE
 
     private fun isLineKind(k: ShapeKind) = k == ShapeKind.LINE || k == ShapeKind.ARROW || k == ShapeKind.DOUBLE_ARROW
+
+    /** Erases what the raw stroke scribbles out (pen only, not the highlighter); true when it did. */
+    private fun scribbleErased(): Boolean {
+        if (!ctx.settings.scribbleErase || style.pen == PenType.HIGHLIGHTER) return false
+        val content = editor.content(ctx.page) ?: return false
+        val hit = ScribbleEraser.targets(raw.copyOf(2 * rawN), rawT.copyOf(rawN), content::query, preset, ctx.pxPerPt)
+        if (hit.isEmpty()) return false
+        editor.apply(Edit.Items(ctx.page, hit, emptyList()))
+        return true
+    }
 
     private fun commit(item: Item) {
         if (editor.content(ctx.page) == null) return

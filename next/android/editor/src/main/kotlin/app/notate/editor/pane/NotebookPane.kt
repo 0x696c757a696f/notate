@@ -767,6 +767,7 @@ class NotebookPane(
             settings = ToolSettings(
                 holdMs, (preset.eraserRadiusDp ?: 0f) * density,
                 handleHitPx = selectionUi.layer.hitHalfPx(), rotateOffsetPx = SelectionLayer.ROTATE_DP * density,
+                scribbleErase = deps.settings.scribbleErase.value,
             ),
             clock = deps.clock,
             background = info.background,

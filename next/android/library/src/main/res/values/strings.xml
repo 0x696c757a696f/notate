@@ -139,6 +139,8 @@
     <string name="settings_none">None</string>
     <string name="settings_hold_shape">Hold to draw shapes</string>
     <string name="settings_ms">%1$d ms</string>
+    <string name="settings_scribble_erase">Scribble to erase</string>
+    <string name="settings_scribble_erase_hint">Scribbling back and forth over ink with the pen erases it.</string>
     <string name="settings_driver_ink">Low-latency pen (Boox)</string>
     <string name="settings_web_pen_surface">Pen surface on web pages</string>
     <string name="settings_web_pen_surface_hint">Experimental: web pages use the same pen surface as notebooks. Applies when a page is reopened.</string>
@@ -150,6 +152,18 @@
     <string name="settings_page_turns">%1$d page turns</string>
     <string name="settings_toolbar_pos">Toolbar position</string>
     <string name="settings_top">Top</string>
+    <string name="settings_toolbar_size">Toolbar size</string>
+    <string name="settings_toolbar_size_hint">Large makes the tool and action buttons bigger.</string>
+    <string name="settings_size_regular">Regular</string>
+    <string name="settings_size_large">Large</string>
+    <string name="settings_show_lasso">Toolbar: Lasso</string>
+    <string name="settings_show_highlighter">Toolbar: Highlighter</string>
+    <string name="settings_show_shape">Toolbar: Shapes</string>
+    <string name="settings_show_text">Toolbar: Text</string>
+    <string name="settings_show_image">Toolbar: Image</string>
+    <string name="settings_show_ruler">Toolbar: Ruler</string>
+    <string name="settings_show_zoom">Toolbar: Zoom</string>
+    <string name="settings_show_hand">Toolbar: Hand</string>
     <string name="settings_toolbar_hint">Left applies in landscape.</string>
     <string name="settings_default_template">Default template</string>
     <string name="settings_web_network">Network access for new books</string>

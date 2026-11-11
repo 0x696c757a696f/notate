@@ -20,6 +20,20 @@ enum class Tap2Action { UNDO, REDO, OFF }
 enum class Tap3Action { REDO, FOCUS_MODE, REFRESH, OFF }
 enum class PenButton { ERASER, LASSO, NONE }
 enum class ToolbarPos { TOP, LEFT }
+
+/**
+ * Toolbar button size: [buttonDp] is the touch target of the main tool and action buttons, [barDp] the thickness of the bar. The
+ * option buttons in the middle stay 48 dp, so there is no size below REGULAR. Size presets idea from xnotes-android.
+ */
+enum class ToolbarSize(val buttonDp: Int, val barDp: Int) {
+    REGULAR(48, 52), LARGE(60, 64);
+
+    /** Width of the vertical (left) bar: the bar thickness plus the 12 dp the 48 dp button leaves beside it. */
+    val verticalBarDp: Int get() = barDp + 12
+}
+
+/** Toolbar tools the user may hide. Pen and Eraser are not listed: the bar must always be able to write and erase. */
+enum class ToolbarTool(val id: String) { LASSO("lasso"), HIGHLIGHTER("highlighter"), SHAPE("shape"), TEXT("text"), IMAGE("image"), RULER("ruler"), ZOOM("zoom"), HAND("hand") }
 enum class BackupFreq { OFF, DAILY, WEEKLY }
 
 /** One setting: a [StateFlow] whose [set] persists the new value. */
@@ -54,6 +68,12 @@ class Settings(private val kv: KeyValueStore) {
     val penButton = enumPref("pen_button", PenButton.ERASER)
     /** 0 = off. */
     val holdShapeMs = intPref("hold_shape_ms", 600, setOf(0, 400, 600, 900))
+    /** A pen stroke that scribbles out existing ink erases it. */
+    val scribbleErase = boolPref("scribble_erase", true)
+    val toolbarSize = enumPref("toolbar_size", ToolbarSize.REGULAR)
+
+    /** Whether each hidable tool shows on the toolbar (all do by default). */
+    val toolbarShow: Map<ToolbarTool, Pref<Boolean>> = ToolbarTool.entries.associateWith { boolPref("toolbar_show_${it.id}", true) }
     val driverInk = boolPref("driver_ink", true)
     /**
      * Web pages run the pen driver on a transparent SurfaceView, like notebooks; false = on the ink overlay view. Off by

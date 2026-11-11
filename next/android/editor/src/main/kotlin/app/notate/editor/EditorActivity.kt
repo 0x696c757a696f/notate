@@ -35,6 +35,7 @@ import app.notate.editor.workspace.WorkspaceController
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import app.notate.core.input.EpdMode
 import app.notate.core.input.EpdTiming
 import app.notate.core.model.Capability
@@ -325,6 +326,13 @@ class EditorActivity : Activity(), PaneHost, ToolbarActions {
         scope.launch {
             val landscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
             d.settings.toolbarPos.collect { chrome.toolbarLeft = landscape && it == app.notate.core.doc.settings.ToolbarPos.LEFT }
+        }
+        scope.launch {
+            // The toolbar's button size and hidden tools follow Settings → Toolbar live.
+            val s = d.settings
+            val flows = app.notate.core.doc.settings.ToolbarTool.entries.map { t -> s.toolbarShow.getValue(t).map { t to it } }
+            kotlinx.coroutines.flow.combine(s.toolbarSize, kotlinx.coroutines.flow.combine(flows) { it.toList() }) { size, shown -> size to shown }
+                .collect { (size, shown) -> chrome.toolbar.applyLook(size, shown.filter { it.second }.map { it.first }.toSet()) }
         }
         scope.launch { d.settings.debugHud.collect { hud.setShown(it) } }
         scope.launch {

@@ -48,6 +48,8 @@ import app.notate.core.doc.settings.Settings
 import app.notate.core.doc.settings.Tap2Action
 import app.notate.core.doc.settings.Tap3Action
 import app.notate.core.doc.settings.ToolbarPos
+import app.notate.core.doc.settings.ToolbarSize
+import app.notate.core.doc.settings.ToolbarTool
 import app.notate.core.model.PageLayoutMode
 import app.notate.library.R
 import app.notate.library.ui.DefaultTemplateDialog
@@ -167,6 +169,7 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
             0 to stringResource(R.string.settings_off), 400 to stringResource(R.string.settings_ms, 400),
             600 to stringResource(R.string.settings_ms, 600), 900 to stringResource(R.string.settings_ms, 900),
         ))
+        Toggle(R.string.settings_scribble_erase, settings.scribbleErase, R.string.settings_scribble_erase_hint)
         Toggle(R.string.settings_driver_ink, settings.driverInk, R.string.settings_driver_ink_hint)
         Toggle(R.string.settings_web_pen_surface, settings.webPenSurface, R.string.settings_web_pen_surface_hint)
 
@@ -181,6 +184,21 @@ private fun Main(settings: Settings, host: SettingsHost, onLicenses: () -> Unit,
         Choice(R.string.settings_toolbar_pos, settings.toolbarPos, listOf(
             ToolbarPos.TOP to stringResource(R.string.settings_top), ToolbarPos.LEFT to stringResource(R.string.settings_left),
         ), hint = R.string.settings_toolbar_hint)
+        Choice(R.string.settings_toolbar_size, settings.toolbarSize, listOf(
+            ToolbarSize.REGULAR to stringResource(R.string.settings_size_regular), ToolbarSize.LARGE to stringResource(R.string.settings_size_large),
+        ), hint = R.string.settings_toolbar_size_hint)
+        for ((tool, pref) in settings.toolbarShow) {
+            Toggle(when (tool) {
+                ToolbarTool.LASSO -> R.string.settings_show_lasso
+                ToolbarTool.HIGHLIGHTER -> R.string.settings_show_highlighter
+                ToolbarTool.SHAPE -> R.string.settings_show_shape
+                ToolbarTool.TEXT -> R.string.settings_show_text
+                ToolbarTool.IMAGE -> R.string.settings_show_image
+                ToolbarTool.RULER -> R.string.settings_show_ruler
+                ToolbarTool.ZOOM -> R.string.settings_show_zoom
+                ToolbarTool.HAND -> R.string.settings_show_hand
+            }, pref)
+        }
 
         Group(R.string.settings_group_notebooks)
         val template by settings.defaultTemplate.collectAsStateWithLifecycle()

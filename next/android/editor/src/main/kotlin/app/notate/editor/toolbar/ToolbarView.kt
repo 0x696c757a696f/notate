@@ -12,6 +12,8 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import app.notate.core.doc.settings.ToolbarSize
+import app.notate.core.doc.settings.ToolbarTool
 import app.notate.core.doc.tools.ToolController
 import app.notate.core.doc.tools.ToolState
 import app.notate.core.ink.guide.GuideKind
@@ -63,7 +65,7 @@ class ToolbarView(
     private val xdpi: Float,
     private val actions: ToolbarActions,
 ) : LinearLayout(context) {
-    private class Def(val kind: ToolKind?, val cap: Capability, val button: ToolButton)
+    private class Def(val kind: ToolKind?, val cap: Capability, val button: ToolButton, val hidable: ToolbarTool? = null)
 
     private val tools = ArrayList<Def>()
     private val middle = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -100,13 +102,27 @@ class ToolbarView(
             field = v
             render(controller.baseState(), force = true)
         }
+    private var size = ToolbarSize.REGULAR
+
+    /** The bar's button size and which hidable tools show (Settings → Toolbar); a hidden tool is gone, not greyed. */
+    fun applyLook(size: ToolbarSize, shown: Set<ToolbarTool>) {
+        this.size = size
+        for (d in tools) {
+            d.hidable?.let { d.button.visibility = if (it in shown) VISIBLE else GONE }
+            d.button.resize(size.buttonDp)
+        }
+        listOf(undo, redo, pages, split, more).forEach { it.resize(size.buttonDp) }
+        applyOrientation()
+        requestLayout()
+    }
+
     private var capReason: String = context.getString(R.string.unavailable_here)
     private var last: ToolState? = null
 
     init {
         val left = LinearLayout(context).apply { orientation = HORIZONTAL }
         leftGroup = left
-        fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int, toggle: (() -> Unit)? = null): Def {
+        fun tool(kind: ToolKind?, cap: Capability, icon: Int, label: Int, hidable: ToolbarTool? = null, toggle: (() -> Unit)? = null): Def {
             val name = context.getString(label)
             val b = ToolButton(context, icon, name).onClick {
                 if (toggle != null) {
@@ -119,16 +135,16 @@ class ToolbarView(
                     controller.select(kind)
                 }
             }
-            return Def(kind, cap, b).also { tools.add(it); left.addView(b) }
+            return Def(kind, cap, b, hidable).also { tools.add(it); left.addView(b) }
         }
-        tool(ToolKind.LASSO, Capability.LASSO, R.drawable.ic_highlight_alt, R.string.tool_lasso)
+        tool(ToolKind.LASSO, Capability.LASSO, R.drawable.ic_highlight_alt, R.string.tool_lasso, ToolbarTool.LASSO)
         tool(ToolKind.PEN, Capability.PEN, R.drawable.ic_pen, R.string.tool_pen)
-        tool(ToolKind.HIGHLIGHTER, Capability.HIGHLIGHTER, R.drawable.ic_border_color, R.string.tool_highlighter)
+        tool(ToolKind.HIGHLIGHTER, Capability.HIGHLIGHTER, R.drawable.ic_border_color, R.string.tool_highlighter, ToolbarTool.HIGHLIGHTER)
         tool(ToolKind.ERASER, Capability.ERASER, R.drawable.ic_eraser, R.string.tool_eraser)
-        tool(ToolKind.SHAPE, Capability.SHAPES, R.drawable.ic_category, R.string.tool_shapes)
-        tool(ToolKind.TEXT, Capability.TEXT, R.drawable.ic_text_fields, R.string.tool_text)
-        tool(ToolKind.IMAGE, Capability.IMAGE, R.drawable.ic_image, R.string.tool_image)
-        rulerDef = tool(null, Capability.RULER, R.drawable.ic_straighten, R.string.tool_ruler)
+        tool(ToolKind.SHAPE, Capability.SHAPES, R.drawable.ic_category, R.string.tool_shapes, ToolbarTool.SHAPE)
+        tool(ToolKind.TEXT, Capability.TEXT, R.drawable.ic_text_fields, R.string.tool_text, ToolbarTool.TEXT)
+        tool(ToolKind.IMAGE, Capability.IMAGE, R.drawable.ic_image, R.string.tool_image, ToolbarTool.IMAGE)
+        rulerDef = tool(null, Capability.RULER, R.drawable.ic_straighten, R.string.tool_ruler, ToolbarTool.RULER)
         rulerDef.button.onLongClick {
             MoreMenu(
                 popups, rulerDef.button,
@@ -138,8 +154,8 @@ class ToolbarView(
                 ),
             ).show()
         }
-        zoomDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom) { toggleZoom() }
-        tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand)
+        zoomDef = tool(null, Capability.ZOOM_WINDOW, R.drawable.ic_search, R.string.tool_zoom, ToolbarTool.ZOOM) { toggleZoom() }
+        tool(ToolKind.HAND, Capability.HAND, R.drawable.ic_pan_tool, R.string.tool_hand, ToolbarTool.HAND)
         hScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = OVER_SCROLL_NEVER
@@ -177,7 +193,7 @@ class ToolbarView(
         middle.orientation = if (v) VERTICAL else HORIZONTAL
         middle.gravity = if (v) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
         background = LayerDrawable(arrayOf(ColorDrawable(Color.WHITE), GradientDrawable().apply { setColor(Color.BLACK) })).also {
-            if (v) it.setLayerInset(1, dp(WIDTH_DP - 1), 0, 0, 0) else it.setLayerInset(1, 0, dp(HEIGHT_DP - 1), 0, 0)
+            if (v) it.setLayerInset(1, dp(size.verticalBarDp - 1), 0, 0, 0) else it.setLayerInset(1, 0, dp(size.barDp - 1), 0, 0)
         }
         if (v) {
             // One scrolling column: tools, options of the active tool, actions.
@@ -196,8 +212,8 @@ class ToolbarView(
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        if (vertical) super.onMeasure(MeasureSpec.makeMeasureSpec(dp(WIDTH_DP), MeasureSpec.EXACTLY), heightMeasureSpec)
-        else super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(dp(HEIGHT_DP), MeasureSpec.EXACTLY))
+        if (vertical) super.onMeasure(MeasureSpec.makeMeasureSpec(dp(size.verticalBarDp), MeasureSpec.EXACTLY), heightMeasureSpec)
+        else super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(dp(size.barDp), MeasureSpec.EXACTLY))
     }
 
     /** Greys out what the focused pane cannot do; if the active tool became unavailable the pen is selected. */

@@ -19,6 +19,8 @@ data class ToolSettings(
     val handleHitPx: Float = 20f,
     /** Distance of the rotation handle above the selection box in screen px (24 dp). */
     val rotateOffsetPx: Float = 34f,
+    /** Pen strokes that scribble out existing ink erase it instead of being drawn. */
+    val scribbleErase: Boolean = false,
 )
 
 /** Ruler / protractor on the page of the gesture (page coordinates), as far as the pane shows one. Main thread only. */

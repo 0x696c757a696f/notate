@@ -18,6 +18,7 @@ import app.notate.editor.popup.PopupHost
 import app.notate.editor.toolbar.ToolButton
 import app.notate.editor.toolbar.ToolbarActions
 import app.notate.editor.toolbar.ToolbarView
+import app.notate.editor.ui.dp
 import app.notate.platform.epd.NoEpdPort
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
@@ -58,6 +59,16 @@ class ToolbarViewTest {
     private fun select(kind: ToolKind) {
         controller.select(kind)
         toolbar.render(controller.baseState())
+    }
+
+    @Test fun hiddenToolsAreGoneAndSizeResizesTheButtons() {
+        val shown = app.notate.core.doc.settings.ToolbarTool.entries.toSet() - app.notate.core.doc.settings.ToolbarTool.HAND
+        toolbar.applyLook(app.notate.core.doc.settings.ToolbarSize.LARGE, shown)
+        assertThat(button("Hand").visibility).isEqualTo(View.GONE)
+        assertThat(button("Highlighter").visibility).isEqualTo(View.VISIBLE)
+        assertThat(button("Pen").layoutParams.height).isEqualTo(button("Pen").dp(60))
+        toolbar.applyLook(app.notate.core.doc.settings.ToolbarSize.REGULAR, app.notate.core.doc.settings.ToolbarTool.entries.toSet())
+        assertThat(button("Hand").visibility).isEqualTo(View.VISIBLE)
     }
 
     @Test fun optionsFollowTheActiveTool() {
