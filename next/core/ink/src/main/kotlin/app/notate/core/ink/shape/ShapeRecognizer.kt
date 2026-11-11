@@ -13,9 +13,9 @@ import kotlin.math.*
  * 1. Line: path linearity ratio > 92%; near-axis/15° lines are snapped.
  * 2. Open polyline: open strokes made of 2-4 straight runs are straightened.
  * 3. Closure: start/end distance < 30% of path length.
- * 4. Round metrics: circle (deviation from mean radius) or, for elongated input, a principal-axis ellipse.
- * 5. Polygon metrics: Douglas-Peucker vertices; polygons are regularized only when close to regular.
- * 6. Lowest error wins.
+ * 4. Closed strokes: circle/ellipse (best-fit centre), triangle, 4-corner and regular 5/6-gon candidates are scored on one
+ *    scale (mean distance to the outline / radius). Corners are re-derived from least-squares lines through each side, so
+ *    rounded or wobbly corners don't add vertices, and corner rounding is forgiven. Lowest error wins; no match = freehand.
  *
  * Pure function of the input, any thread. Units are whatever the caller uses (page pt); the thresholds that
  * contain absolute lengths (20 and 6) were tuned for legacy pixels and are intentionally unchanged.
@@ -77,8 +77,10 @@ object ShapeRecognizer {
         closedPoints[closedPoints.size - 1] = Vec2(closeX, closeY)
 
         // --- Metrics Calculation ---
+        // Every candidate is scored as (mean distance from the stroke to the ideal shape's outline) / avgRadius,
+        // so round, rectangular and triangular fits compete on the same scale. The lowest error wins and the
+        // output is always the *regular* version (circle, upright rectangle, clean triangle), never a wobbly polygon.
 
-        // 1. Circle Metrics
         var cx = 0f
         var cy = 0f
         for (p in closedPoints) {
@@ -89,84 +91,215 @@ object ShapeRecognizer {
         cy /= closedPoints.size
 
         val radii = closedPoints.map { hypot(it.x - cx, it.y - cy) }
-        val avgRadius = radii.average().toFloat()
+        var avgRadius = radii.average().toFloat()
+        if (avgRadius < EPSILON) return null
+        var circleError = radii.map { abs(it - avgRadius) }.average().toFloat()
+        // The centroid is biased when the loop overshoots or is sampled unevenly: try the algebraic best-fit centre too.
+        fitCircleCentre(closedPoints)?.let { (kx, ky) ->
+            val kr = closedPoints.map { hypot(it.x - kx, it.y - ky) }
+            val kAvg = kr.average().toFloat()
+            val kErr = kr.map { abs(it - kAvg) }.average().toFloat()
+            if (kErr < circleError) {
+                circleError = kErr
+                cx = kx
+                cy = ky
+                avgRadius = kAvg
+            }
+        }
 
-        // Mean Absolute Deviation (Circle Error)
-        val circleError = radii.map { abs(it - avgRadius) }.average().toFloat()
-
-        // 1b. Ellipse Metrics: elongated round shapes are ellipses, not circles
         val ellipse = fitEllipse(closedPoints)
         val isElongated = ellipse != null && ellipse.b < ellipse.a * 0.85f
-        val roundError = if (isElongated) ellipse!!.error else circleError
-        val roundScale = if (isElongated) (ellipse!!.a + ellipse.b) / 2f else avgRadius
+        val roundError = (if (isElongated) ellipse!!.error else circleError) / avgRadius
 
-        fun roundResult(): Recognition =
-            if (isElongated) {
-                createEllipseResult(ellipse!!)
-            } else {
-                createCircleResult(cx, cy, avgRadius)
-            }
 
-        // 2. Polygon Metrics (Douglas-Peucker)
-        // Use 18% of radius as tolerance (tunable)
-        val tolerance = avgRadius * 0.18f
-        val simplified = douglasPeucker(closedPoints, tolerance)
-
-        // Calculate true vertex count (remove duplicate end point)
-        var vertexCount = simplified.size
-        if (simplified.size > 1 &&
-            hypot(simplified.first().x - simplified.last().x, simplified.first().y - simplified.last().y) < EPSILON
-        ) {
-            vertexCount--
-        }
-
-        // Polygon Error: Average distance from original points to simplified edges
-        val polyError = calculatePolygonError(closedPoints, simplified)
-
-        // --- Decision Logic ---
-
-        val fitScore = (1f - min(polyError, roundError) / (avgRadius * 0.2f + EPSILON)).coerceIn(0f, 1f)
-        fun fin(r: Recognition) = Recognition(r.kind, r.params, fitScore)
-        val polyScore = polyError
-        val roundScore = roundError
-
-        if (vertexCount == 3) {
-            // It's a triangle candidate.
-            if (polyScore < roundScore) {
-                return fin(createPolygonResult(RecognizedShape.TRIANGLE, ShapeBeautifier.triangle(uniqueVertices(simplified))))
-            }
-        } else if (vertexCount == 4) {
-            // Quadrilateral vs Round.
-            if (polyScore < roundScore) {
-                return if (isNearlyRectangular(simplified)) {
-                    fin(createRectangleResult(simplified))
-                } else {
-                    fin(createPolygonResult(RecognizedShape.POLYGON, ShapeBeautifier.quadrilateral(uniqueVertices(simplified))))
+        // Polygon candidates: Douglas-Peucker at growing tolerance, so rounded corners and wobble don't add vertices.
+        var triangle: List<Vec2>? = null
+        var quad: List<Vec2>? = null
+        var regular: Recognition? = null
+        var regularError = Float.MAX_VALUE
+        for (k in DP_TOLERANCES) {
+            val simplified = douglasPeucker(closedPoints, avgRadius * k)
+            val verts = uniqueVertices(simplified)
+            val err = calculatePolygonError(closedPoints, simplified) / avgRadius
+            when (verts.size) {
+                3 -> if (triangle == null) triangle = refineCorners(closedPoints, verts, avgRadius) ?: verts
+                4 -> if (quad == null) quad = refineCorners(closedPoints, verts, avgRadius) ?: verts
+                5, 6 -> if (regular == null && isNearlyRegular(verts)) {
+                    val fit = fitRegularPolygon(closedPoints, cx, cy, avgRadius, verts.size)
+                    regular = fit.first
+                    regularError = fit.second / avgRadius
                 }
-            } else {
-                return fin(roundResult())
-            }
-        } else if (vertexCount == 5 || vertexCount == 6) {
-            // Pentagon/Hexagon vs Round
-            if (polyScore < roundScore) {
-                val type = if (vertexCount == 5) RecognizedShape.PENTAGON else RecognizedShape.HEXAGON
-                return if (isNearlyRegular(simplified)) {
-                    fin(createRegularPolygonResult(type, simplified))
-                } else {
-                    fin(createPolygonResult(RecognizedShape.POLYGON, ShapeBeautifier.level(uniqueVertices(simplified))))
-                }
-            } else {
-                return fin(roundResult())
-            }
-        } else {
-            // Many vertices -> Likely a Circle/Ellipse or complex shape
-            if (roundError < roundScale * 0.20) {
-                return fin(roundResult())
             }
         }
 
-        return null
+        data class Candidate(val error: Float, val build: () -> Recognition)
+        val candidates = ArrayList<Candidate>()
+        candidates.add(Candidate(roundError) { if (isElongated) createEllipseResult(ellipse!!) else createCircleResult(cx, cy, avgRadius) })
+        triangle?.let { t ->
+            val tri = ShapeBeautifier.triangle(t)
+            candidates.add(Candidate(polygonFitError(closedPoints, tri) / avgRadius) { createPolygonResult(RecognizedShape.TRIANGLE, tri) })
+        }
+        quad?.let { q ->
+            // A 4-corner shape with (nearly) right angles is a rectangle, otherwise a parallelogram/trapezoid/quad.
+            val err = polygonFitError(closedPoints, q) / avgRadius
+            if (isNearlyRectangular(q)) {
+                candidates.add(Candidate(err) { createRectangleResult(q) })
+            } else {
+                candidates.add(Candidate(err) { createPolygonResult(RecognizedShape.POLYGON, ShapeBeautifier.quadrilateral(q)) })
+            }
+        }
+        if (regular != null && regularError < roundError) candidates.add(Candidate(regularError) { regular })
+
+        val best = candidates.minByOrNull { it.error } ?: return null
+        if (best.error > ACCEPT_ERROR) return null
+        val r = best.build()
+        return Recognition(r.kind, r.params, (1f - best.error / ACCEPT_ERROR).coerceIn(0f, 1f))
     }
+
+    private val DP_TOLERANCES = floatArrayOf(0.18f, 0.24f, 0.30f, 0.38f)
+    private const val ACCEPT_ERROR = 0.15f
+
+    /**
+     * Distance from the stroke to a closed polygon's outline. Hands round corners off, so the middle of each
+     * side counts 80% and the full stroke (corners included) only 20%.
+     */
+    private fun polygonFitError(
+        points: List<Vec2>,
+        verts: List<Vec2>,
+    ): Float {
+        val n = verts.size
+        var mid = 0.0
+        var midN = 0
+        var all = 0.0
+        for (p in points) {
+            var bestD = Float.MAX_VALUE
+            var bi = 0
+            for (i in 0 until n) {
+                val d = pointSegmentDist(p, verts[i], verts[(i + 1) % n])
+                if (d < bestD) { bestD = d; bi = i }
+            }
+            all += bestD
+            val a = verts[bi]
+            val b = verts[(bi + 1) % n]
+            val l2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)
+            val t = if (l2 > 0f) ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2 else 0.5f
+            if (t in 0.25f..0.75f) { mid += bestD; midN++ }
+        }
+        val full = (all / points.size).toFloat()
+        val middle = if (midN > 0) (mid / midN).toFloat() else full
+        return 0.8f * middle + 0.2f * full
+    }
+
+    /**
+     * Re-derives polygon corners by fitting a line through each side's points and intersecting neighbours. This
+     * puts a corner where the *sides* meet even when the hand rounded it off. Null if any side is degenerate.
+     */
+    private fun refineCorners(
+        points: List<Vec2>,
+        verts: List<Vec2>,
+        scale: Float,
+    ): List<Vec2>? {
+        val n = verts.size
+        val sx = DoubleArray(n)
+        val sy = DoubleArray(n)
+        val cnt = IntArray(n)
+        val owner = IntArray(points.size)
+        val frac = FloatArray(points.size)
+        for ((pi, p) in points.withIndex()) {
+            var bestD = Float.MAX_VALUE
+            var bi = 0
+            for (i in 0 until n) {
+                val d = pointSegmentDist(p, verts[i], verts[(i + 1) % n])
+                if (d < bestD) { bestD = d; bi = i }
+            }
+            val a = verts[bi]
+            val b = verts[(bi + 1) % n]
+            val l2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)
+            owner[pi] = bi
+            frac[pi] = if (l2 > 0f) ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2 else 0.5f
+        }
+        // Total-least-squares line per side, using only the middle of each side (corners are where the hand rounds off).
+        val lx = FloatArray(n)
+        val ly = FloatArray(n)
+        val dx = FloatArray(n)
+        val dy = FloatArray(n)
+        for (i in 0 until n) {
+            var mx = 0.0
+            var my = 0.0
+            var c = 0
+            for (pi in points.indices) if (owner[pi] == i && frac[pi] in 0.2f..0.8f) { mx += points[pi].x; my += points[pi].y; c++ }
+            if (c < 3) return null
+            mx /= c; my /= c
+            var xx = 0.0
+            var yy = 0.0
+            var xy = 0.0
+            for (pi in points.indices) if (owner[pi] == i && frac[pi] in 0.2f..0.8f) {
+                val ex = points[pi].x - mx
+                val ey = points[pi].y - my
+                xx += ex * ex; yy += ey * ey; xy += ex * ey
+            }
+            val th = 0.5 * atan2(2 * xy, xx - yy)
+            lx[i] = mx.toFloat(); ly[i] = my.toFloat()
+            dx[i] = cos(th).toFloat(); dy[i] = sin(th).toFloat()
+        }
+        val out = ArrayList<Vec2>(n)
+        for (i in 0 until n) {
+            val j = (i + n - 1) % n // side j ends at vertex i, side i starts there
+            val cr = dx[j] * dy[i] - dy[j] * dx[i]
+            if (abs(cr) < 0.25f) return null
+            val t = ((lx[i] - lx[j]) * dy[i] - (ly[i] - ly[j]) * dx[i]) / cr
+            val v = Vec2(lx[j] + dx[j] * t, ly[j] + dy[j] * t)
+            if (hypot(v.x - verts[i].x, v.y - verts[i].y) > scale * 0.8f) return null
+            out.add(v)
+        }
+        return out
+    }
+
+    /** Regular n-gon centred on (cx, cy): sweeps the rotation and keeps the one closest to the stroke. */
+    private fun fitRegularPolygon(
+        points: List<Vec2>,
+        cx: Float,
+        cy: Float,
+        avgRadius: Float,
+        n: Int,
+    ): Pair<Recognition, Float> {
+        val r = avgRadius * 2f / (1f + cos(PI / n).toFloat())
+        var bestErr = Float.MAX_VALUE
+        var bestVerts: List<Vec2> = emptyList()
+        val steps = 72
+        for (k in 0 until steps) {
+            val rot = 2 * PI / n * k / steps
+            val v = (0 until n).map { Vec2((cx + r * cos(rot + 2 * PI * it / n)).toFloat(), (cy + r * sin(rot + 2 * PI * it / n)).toFloat()) }
+            val e = polygonFitError(points, v)
+            if (e < bestErr) { bestErr = e; bestVerts = v }
+        }
+        return Recognition(ShapeKind.POLYGON, flat(ShapeBeautifier.level(bestVerts)), 1f) to bestErr
+    }
+
+    /** Kasa algebraic circle fit (centre only). Null for degenerate input. */
+    private fun fitCircleCentre(points: List<Vec2>): Pair<Float, Float>? {
+        val n = points.size
+        var mx = 0.0
+        var my = 0.0
+        for (p in points) { mx += p.x; my += p.y }
+        mx /= n; my /= n
+        var suu = 0.0; var svv = 0.0; var suv = 0.0; var suuu = 0.0; var svvv = 0.0; var suvv = 0.0; var svuu = 0.0
+        for (p in points) {
+            val u = p.x - mx
+            val v = p.y - my
+            suu += u * u; svv += v * v; suv += u * v
+            suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u
+        }
+        val det = suu * svv - suv * suv
+        if (abs(det) < 1e-9) return null
+        val b1 = 0.5 * (suuu + suvv)
+        val b2 = 0.5 * (svvv + svuu)
+        val uc = (b1 * svv - b2 * suv) / det
+        val vc = (b2 * suu - b1 * suv) / det
+        return (mx + uc).toFloat() to (my + vc).toFloat()
+    }
+
+    private fun flatToVerts(f: FloatArray): List<Vec2> = (0 until f.size / 2).map { Vec2(f[2 * it], f[2 * it + 1]) }
 
     // --- Open polylines ---
 
