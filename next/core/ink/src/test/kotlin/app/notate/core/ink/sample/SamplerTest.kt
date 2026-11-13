@@ -20,10 +20,9 @@ class StrokeSamplerTest {
     @Test fun finishKeepsFirstAndLast() {
         val s = StrokeSampler()
         for (i in 0..30) s.add(pt(i * 2f, (i % 3) * 0.01f, t = i * 8L))
-        val raw = s.points()
         val fin = s.finish()
-        assertThat(fin.xy[0]).isEqualTo(raw.xy[0])
-        assertThat(fin.xy[fin.xy.size - 2]).isEqualTo(raw.xy[raw.xy.size - 2])
+        assertThat(fin.xy[0]).isEqualTo(0f)
+        assertThat(fin.xy[fin.xy.size - 2]).isEqualTo(60f)
         assertThat(fin.tMs!![0]).isEqualTo(0)
     }
 
@@ -41,6 +40,29 @@ class StrokeSamplerTest {
         // first, last and the point where pressure jumps
         assertThat(fin.size).isEqualTo(3)
         assertThat(fin.pressure!![1]).isEqualTo(0.8f)
+    }
+}
+
+class StrokeFidelityTest {
+    @Test fun cornersAndEndStayWithinTenthOfAMillimetre() {
+        val s = StrokeSampler()
+        val pts = ArrayList<Pair<Float, Float>>()
+        val corners = listOf(0f to 0f, 20f to 0f, 20f to 20f, 0f to 20f)
+        for (c in 0 until 3) for (k in 0 until 40) {
+            val (a, b) = corners[c] to corners[c + 1]
+            pts += (a.first + (b.first - a.first) * k / 40) to (a.second + (b.second - a.second) * k / 40)
+        }
+        pts += 0f to 20f
+        pts.forEachIndexed { i, p -> s.add(InkPoint(p.first, p.second, 0.5f, 0f, 0f, i * 5L)) }
+        val fin = s.finish()
+        assertThat(fin.xy[fin.xy.size - 2]).isEqualTo(0f)
+        assertThat(fin.xy[fin.xy.size - 1]).isEqualTo(20f)
+        // every kept point lies on the polygon within 0.4 pt
+        for (i in 0 until fin.size) {
+            val x = fin.xy[2 * i]; val y = fin.xy[2 * i + 1]
+            val d = minOf(abs(y), abs(y - 20f), abs(x), abs(x - 20f))
+            assertThat(d).isLessThan(0.4f)
+        }
     }
 }
 
